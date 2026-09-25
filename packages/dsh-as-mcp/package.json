@@ -31,6 +31,7 @@
   "files": [
     "lib",
     "bin",
+    "scripts",
     "cordis.patch.yml",
     "README.md",
     "README.zh.md",

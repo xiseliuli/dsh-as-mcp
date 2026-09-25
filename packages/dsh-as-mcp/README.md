@@ -131,6 +131,80 @@ an SSH key.
   the harness's own filesystem and shell services, so the sandbox and policy configured for
   this DSH instance still apply.
 
+## Trying it inside a running DSH Desktop (no restart)
+
+Electron reserves the `desktop` profile, so `dsh plugin --profile desktop add` is refused from a
+plain terminal. But `desktop` has `patchReload: live`, and a live profile **watches the user patch
+files and recomposes the plugin tree without restarting** — so it can be mounted into the DSH
+Desktop you already have running.
+
+One caveat up front: **the watcher recomposes config only; it does not replace loaded modules.**
+Inserting a new row genuinely loads the module for the first time, but once you edit `lib/` you
+must restart DSH Desktop — clearing and rewriting the patch file will not help, because the ESM
+module cache still hands back the old module.
+
+### 1. Pack it and install into the desktop profile
+
+```bash
+cd /path/to/dsh-plugins/packages/dsh-as-mcp && pnpm pack --pack-destination /tmp
+
+# raw pnpm, bypassing the CLI's reserved-profile guard
+cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
+```
+
+### 2. Put the plugin row in the profile's own patch layer
+
+Edit `~/.dsh/profiles/desktop/cordis.patch.yml` (replace the `[]`):
+
+```yaml
+- insert:
+    - id: dsh-as-mcp
+      name: dsh-as-mcp
+      config:
+        http:
+          enabled: true
+          host: 127.0.0.1
+          port: 8790
+          path: /mcp
+        tools:
+          workspace: true
+          session: true
+          files: true
+          shell: true
+```
+
+Saving is enough — DSH Desktop recomposes and loads the plugin with **no restart**. A bad edit
+cannot brick the app: a rejected edit leaves the last good app running and reports the error in
+the log.
+
+> ⚠️ **Do not also add `dsh-as-mcp` to `dsh.profile.bundles`.** The bundle contributes its own
+> row, so the composed result carries **two rows sharing one id** (`dsh --profile <name>
+> --dump-config` shows both). Use the patch layer or the bundle list, never both. Switch to the
+> bundle route via `dsh plugin add` when you want it to persist across restarts.
+
+### 3. Smoke-test it
+
+```bash
+node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs
+```
+
+It reads `<DSH_HOME>/dsh-as-mcp/token`, shakes hands, lists tools, calls `dsh_info` to report which
+harness services this profile actually mounted, then calls `workspace_list`. The last line is `OK`
+on success and the exit status is non-zero on failure.
+
+For one real round trip (temp workspace → session → hand the DSH agent a task → print the reply and
+tool calls):
+
+```bash
+node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
+  --prompt "In the current workspace create hello.txt containing hi, then read it back to confirm"
+```
+
+### 4. Uninstall
+
+Reset `~/.dsh/profiles/desktop/cordis.patch.yml` to `[]` and the plugin unloads immediately,
+releasing its port. To remove it entirely: `cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp`.
+
 ## Configuration
 
 Defaults ship in `cordis.patch.yml`. A profile's own `cordis.patch.yml` overrides the row by

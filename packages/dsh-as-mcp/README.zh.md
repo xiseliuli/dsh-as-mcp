@@ -123,6 +123,74 @@ workspace_create { path: "/Users/me/project" }
 - `file_write` 和 `shell_run` 是**调用方**的动作，不是 agent 的。它们走 harness 自己的文件
   系统与 shell 服务，所以这个 DSH 实例配置的沙箱和策略照样生效。
 
+## 在正在运行的 DSH Desktop 里试装（免重启）
+
+`desktop` profile 由 Electron 保留，`dsh plugin --profile desktop add` 在普通终端会被拒绝。
+但 desktop 的 `patchReload` 是 `live`，而 live 的 profile 会**监视用户 patch 文件并在不重启的
+情况下重组插件树**，所以可以直接把它挂进正在运行的 DSH Desktop。
+
+前提先说清楚：**watcher 只重组配置，不替换已加载的模块。** 首次插入新插件行会真正加载该模块，
+但之后你改了 `lib/` 就必须重启 DSH Desktop——把 patch 文件清空再写回也没用，ESM 模块缓存仍然
+返回旧模块。
+
+### 1. 打包并装进 desktop profile
+
+```bash
+cd /path/to/dsh-plugins/packages/dsh-as-mcp && pnpm pack --pack-destination /tmp
+
+# raw pnpm，绕过 CLI 对保留 profile 名的限制
+cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
+```
+
+### 2. 把插件行写进 profile 自己的 patch 层
+
+编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`（把其中的 `[]` 替换为）：
+
+```yaml
+- insert:
+    - id: dsh-as-mcp
+      name: dsh-as-mcp
+      config:
+        http:
+          enabled: true
+          host: 127.0.0.1
+          port: 8790
+          path: /mcp
+        tools:
+          workspace: true
+          session: true
+          files: true
+          shell: true
+```
+
+保存后 DSH Desktop 就会重组并加载插件——**无需重启**。配置写错了也不会把应用弄坏：被拒绝的
+编辑会让最后一个可用的应用继续运行，日志里会有报错。
+
+> ⚠️ **不要同时把 `dsh-as-mcp` 加进 `dsh.profile.bundles`。** bundle 会贡献它自己的行，于是最终
+> 组合里会出现**两行同 id**（`dsh --profile <name> --dump-config` 会直接显示出 2 行）。用 patch
+> 层就只走 patch 层。反过来说，想让它跨重启常驻时，才改用 `dsh plugin add` 走 bundle 路线。
+
+### 3. 冒烟验证
+
+```bash
+node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs
+```
+
+它会读 `<DSH_HOME>/dsh-as-mcp/token`、握手、列出工具、调 `dsh_info` 报出该 profile 实际挂载了
+哪些 harness 服务，再调 `workspace_list`。通过时最后一行是 `OK`，失败则退出码非 0。
+
+要跑一次真实链路（建临时工作区 → 建会话 → 交给 DSH agent 干活 → 打印回复与工具调用）：
+
+```bash
+node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
+  --prompt "在当前工作区创建 hello.txt，内容为 hi，然后读回来确认"
+```
+
+### 4. 卸载
+
+把 `~/.dsh/profiles/desktop/cordis.patch.yml` 清回 `[]` —— 插件立即卸载，监听端口随之释放。
+要彻底移除：`cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp`。
+
 ## 配置
 
 默认值随 `cordis.patch.yml` 一起提供。profile 自己的 `cordis.patch.yml` 按 `id` 覆盖该行，
