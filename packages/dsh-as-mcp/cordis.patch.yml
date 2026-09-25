@@ -1,0 +1,55 @@
+# dsh-as-mcp — bundle patch layer.
+#
+# Adding `dsh-as-mcp` to a profile's `dsh.profile.bundles` applies this layer
+# automatically; nothing here has to be hand-written by the user.
+#
+# `name` is the BARE package name on purpose: pnpm resolves it from the profile
+# directory, and any subpath would have to exist as a real file in the profile's
+# node_modules.
+#
+# Every key below is optional. The defaults shipped here are the ones the
+# plugin's own schema would apply anyway; they are spelled out so users can see
+# what is tunable at a glance. A profile's own `cordis.patch.yml` overrides this
+# row by `id`, and a patch replaces a row's entire `config` object rather than
+# deep-merging it — restate every key you still want.
+- insert:
+    - id: dsh-as-mcp
+      name: dsh-as-mcp
+      config:
+        http:
+          # Serve the Streamable HTTP endpoint from a listener this plugin owns.
+          # This works in every surface, including profiles with no web server.
+          enabled: true
+          host: 127.0.0.1
+          port: 8790
+          path: /mcp
+          # Also mount the same endpoint on DSH's own web server, so it is
+          # reachable at http://127.0.0.1:<dsh port>/mcp. Off by default because
+          # that server is part of the browser-facing composition.
+          mountOnWebServer: false
+        auth:
+          # Empty means: read $DSH_HOME/dsh-as-mcp/token, and generate + persist
+          # a fresh token when that file does not exist yet.
+          token: ''
+        tools:
+          workspace: true
+          session: true
+          files: true
+          shell: true
+        session:
+          # Empty values fall back to the harness default model and preset.
+          agentPreset: ''
+          provider: ''
+          model: ''
+          # Upper bound for a single `session_prompt` call that waits for the turn.
+          promptTimeoutMs: 900000
+        limits:
+          # Bytes `file_read` returns before truncating.
+          maxReadBytes: 1048576
+          # Default timeout for `shell_run`, in milliseconds.
+          shellTimeoutMs: 120000
+        approval:
+          # 'inherit' leaves the harness approval policy alone. 'allow' installs
+          # an answerer that approves every request made by sessions this plugin
+          # drives — only use it when you understand what the agent may run.
+          policy: inherit

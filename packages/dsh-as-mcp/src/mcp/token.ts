@@ -1,0 +1,78 @@
+import { randomBytes } from 'node:crypto'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+
+/** Where the token came from, so the operator can tell a fresh secret from a configured one. */
+export type TokenSource = 'config' | 'file' | 'generated'
+
+/** A resolved bearer token and its provenance. */
+export interface ResolvedToken {
+  readonly token: string
+  readonly source: TokenSource
+  /** The file the token is read from and persisted to. */
+  readonly file: string
+}
+
+/**
+ * Resolve `$DSH_HOME`.
+ *
+ * Mirrors the harness's own `resolveDshHome()`: an explicit environment value
+ * wins, otherwise `~/.dsh`. Reading the environment keeps this plugin free of a
+ * dependency on `@deepseek-ai/dsh-home-paths`.
+ */
+export function resolveDshHome(): string {
+  const fromEnv = process.env.DSH_HOME?.trim()
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv
+  return join(homedir(), '.dsh')
+}
+
+/**
+ * Resolve the endpoint's bearer token.
+ *
+ * A configured token always wins. Otherwise the token is read from
+ * `<DSH_HOME>/dsh-as-mcp/token`, and generated (mode 0600) on first run so that
+ * the endpoint is never accidentally unauthenticated.
+ */
+export function resolveToken(configured: string): ResolvedToken {
+  const file = join(resolveDshHome(), 'dsh-as-mcp', 'token')
+
+  const fromConfig = configured.trim()
+  if (fromConfig !== '') return { token: fromConfig, source: 'config', file }
+
+  try {
+    const existing = readFileSync(file, 'utf8').trim()
+    if (existing !== '') return { token: existing, source: 'file', file }
+  } catch {
+    // First run, or an unreadable file: fall through and mint one.
+  }
+
+  const token = randomBytes(32).toString('base64url')
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, `${token}\n`, { mode: 0o600 })
+  return { token, source: 'generated', file }
+}
+
+/** Constant-time-ish comparison so a wrong token does not leak its prefix length. */
+export function tokenMatches(expected: string, presented: string | undefined): boolean {
+  if (presented === undefined) return false
+  if (presented.length !== expected.length) return false
+  let mismatch = 0
+  for (let index = 0; index < expected.length; index += 1) {
+    mismatch |= expected.charCodeAt(index) ^ presented.charCodeAt(index)
+  }
+  return mismatch === 0
+}
+
+/** Extract a bearer token from an `Authorization` header or a `?token=` query value. */
+export function presentedToken(
+  authorization: string | string[] | undefined,
+  queryToken: string | null,
+): string | undefined {
+  const header = Array.isArray(authorization) ? authorization[0] : authorization
+  if (header !== undefined) {
+    const match = /^Bearer\s+(.+)$/i.exec(header.trim())
+    if (match?.[1] !== undefined) return match[1].trim()
+  }
+  return queryToken ?? undefined
+}
