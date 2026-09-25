@@ -1,0 +1,195 @@
+/**
+ * The section's dictionaries.
+ *
+ * Registered through the single-locale untyped overload, so no
+ * `LocaleNamespaceMap` augmentation and no build-time dependency on an internal
+ * type map are needed. The same store backs both the nav label and the `t` prop,
+ * so registering once serves both.
+ *
+ * @module dsh-as-mcp/client/locales
+ */
+
+/** Locale namespace this section owns. */
+export const NS = 'dsh-as-mcp'
+
+/** Simplified Chinese dictionary. */
+export const zh: Record<string, string> = {
+  nav: 'MCP 服务',
+  intro: '把当前 DSH 实例作为 MCP 服务释放出去，供其他 agent 创建工作区、新建会话、读写文件与执行命令。修改即时生效，无需重启。',
+
+  'group.endpoint.title': '端点',
+  'group.endpoint.description': '其他 agent 连接这个地址来调用 DSH。',
+  'group.tools.title': '工具开关',
+  'group.tools.description': '关闭的组不会出现在 tools/list 中，调用它会得到“未知工具”，而不是执行后被拒绝。',
+  'group.session.title': '会话默认值',
+  'group.session.description': '通过 MCP 新建会话时使用的默认预设与模型。',
+  'group.limits.title': '上限',
+  'group.limits.description': '单次请求可以消耗的最大资源。',
+  'group.approval.title': '审批',
+  'group.approval.description': '控制 MCP 创建的会话在需要授权时如何处理。',
+  'group.auth.title': '访问令牌',
+  'group.auth.description': '所有请求都必须携带这个令牌。',
+
+  'field.http.enabled': '启用 HTTP 端点',
+  'field.http.enabled.hint': '关闭后不再监听端口；若同时挂载在 DSH Web 服务器上，仍可通过该路径访问。',
+  'field.http.host': '监听地址',
+  'field.http.host.hint': '127.0.0.1 只允许本机访问。0.0.0.0 会把端点暴露到局域网，请确保已设置令牌。',
+  'field.http.port': '端口',
+  'field.http.port.hint': '被占用时端点无法启动，错误会显示在下方状态里。',
+  'field.http.path': '路径',
+  'field.http.path.hint': 'MCP 客户端应访问的路径，默认 /mcp。',
+  'field.http.mountOnWebServer': '同时挂载到 DSH Web 服务器',
+  'field.http.mountOnWebServer.hint': '通过 DSH 自己的服务器同源提供，浏览器客户端因此不受跨域限制。',
+
+  'field.tools.workspace': '工作区',
+  'field.tools.workspace.hint': 'workspace_create / workspace_list',
+  'field.tools.session': '会话',
+  'field.tools.session.hint': 'session_create / session_prompt / session_cancel 等',
+  'field.tools.files': '文件',
+  'field.tools.files.hint': 'file_read / file_write / file_list',
+  'field.tools.shell': '命令',
+  'field.tools.shell.hint': 'shell_run',
+
+  'field.session.agentPreset': 'Agent 预设',
+  'field.session.agentPreset.hint': '留空表示使用 DSH 的默认预设。',
+  'field.session.provider': '提供方',
+  'field.session.provider.hint': '留空表示使用 DSH 的默认提供方。',
+  'field.session.model': '模型',
+  'field.session.model.hint': '留空表示使用 DSH 的默认模型。',
+  'field.session.promptTimeoutMs': '等待回复超时（毫秒）',
+  'field.session.promptTimeoutMs.hint': 'session_prompt 等待一轮结束的最长时间，超时不代表会话被取消。',
+
+  'field.limits.maxReadBytes': '单次读取上限（字节）',
+  'field.limits.maxReadBytes.hint': '超过上限的内容会被截断。',
+  'field.limits.shellTimeoutMs': '命令超时（毫秒）',
+  'field.limits.shellTimeoutMs.hint': 'shell_run 的默认超时，单次调用可以覆盖。',
+
+  'field.approval.policy': '审批策略',
+  'field.approval.policy.hint': '默认只对本插件创建的会话生效，不影响 DSH 里的其他会话。',
+  'field.approval.policy.inherit': '继承 DSH 权限设置',
+  'field.approval.policy.allow': '自动批准本插件创建的会话',
+  'field.approval.policy.allow.hint': '危险：这些会话不再询问，会直接执行需要授权的操作。',
+
+  'field.auth.token': '令牌',
+  'field.auth.token.hint': '留空表示继承配置层；配置层也为空时使用 DSH 生成的令牌文件。',
+  'field.auth.token.set': '已设置',
+  'field.auth.token.unset': '未设置（使用生成的令牌）',
+  'field.auth.token.replace': '替换令牌',
+  'field.auth.token.clear': '清除',
+  'field.auth.token.placeholder': '粘贴一个令牌以固定它',
+
+  'client.title': '客户端配置',
+  'client.description': '把下面这段粘贴到 MCP 客户端配置里即可连接。令牌为敏感信息，请勿提交到版本库。',
+  'client.copy': '复制',
+  'client.copied': '已复制',
+  'client.copyFailed': '复制失败，请手动选择',
+  'client.tokenHidden': '令牌已隐藏',
+  'client.tokenSource.settings': '来自本面板',
+  'client.tokenSource.config': '来自插件配置',
+  'client.tokenSource.file': '来自令牌文件',
+  'client.tokenSource.generated': '由 DSH 生成',
+  'client.tokenSource.ephemeral': '临时令牌（无法写入磁盘）',
+  'client.tokenSourceLabel': '令牌来源：',
+  'client.toolsLabel': '已启用的工具组：',
+  'client.statusLabel': '状态：',
+  'client.listening': '监听中',
+  'client.notListening': '未监听',
+  'client.mounted': '已挂载到 Web 服务器',
+  'client.errorLabel': '绑定失败：',
+
+  'state.loading': '正在读取配置…',
+  'state.unavailable': '设置服务不可用，无法从面板修改配置。',
+  'state.readonly': '当前页面无法写入设置（非本机访问）。',
+  'state.writeFailed': '写入失败，已重新读取。请重试。',
+}
+
+/** English dictionary. */
+export const en: Record<string, string> = {
+  nav: 'MCP server',
+  intro: 'Expose this DSH instance as an MCP server, so other agents can create workspaces, start sessions, read and write files, and run commands. Changes apply immediately; no restart.',
+
+  'group.endpoint.title': 'Endpoint',
+  'group.endpoint.description': 'Where other agents connect to reach DSH.',
+  'group.tools.title': 'Tool groups',
+  'group.tools.description': 'A disabled group is absent from tools/list, so calling it reports an unknown tool rather than running and being refused.',
+  'group.session.title': 'Session defaults',
+  'group.session.description': 'The preset and model used when a session is created over MCP.',
+  'group.limits.title': 'Limits',
+  'group.limits.description': 'The most a single request may consume.',
+  'group.approval.title': 'Approval',
+  'group.approval.description': 'How sessions created over MCP handle authorization.',
+  'group.auth.title': 'Access token',
+  'group.auth.description': 'Every request must carry this token.',
+
+  'field.http.enabled': 'Serve the HTTP endpoint',
+  'field.http.enabled.hint': 'When off, nothing is listening on the port. A mount on the DSH web server, if enabled, stays reachable.',
+  'field.http.host': 'Bind address',
+  'field.http.host.hint': '127.0.0.1 admits only this machine. 0.0.0.0 exposes the endpoint to your network — make sure a token is set.',
+  'field.http.port': 'Port',
+  'field.http.port.hint': 'If the port is taken the endpoint cannot start; the error appears in the status below.',
+  'field.http.path': 'Path',
+  'field.http.path.hint': 'The path an MCP client should POST to. Default /mcp.',
+  'field.http.mountOnWebServer': 'Also mount on the DSH web server',
+  'field.http.mountOnWebServer.hint': 'Served same-origin through DSH’s own server, so a browser client is not blocked by cross-origin rules.',
+
+  'field.tools.workspace': 'Workspaces',
+  'field.tools.workspace.hint': 'workspace_create / workspace_list',
+  'field.tools.session': 'Sessions',
+  'field.tools.session.hint': 'session_create / session_prompt / session_cancel and friends',
+  'field.tools.files': 'Files',
+  'field.tools.files.hint': 'file_read / file_write / file_list',
+  'field.tools.shell': 'Shell',
+  'field.tools.shell.hint': 'shell_run',
+
+  'field.session.agentPreset': 'Agent preset',
+  'field.session.agentPreset.hint': 'Empty uses DSH’s default preset.',
+  'field.session.provider': 'Provider',
+  'field.session.provider.hint': 'Empty uses DSH’s default provider.',
+  'field.session.model': 'Model',
+  'field.session.model.hint': 'Empty uses DSH’s default model.',
+  'field.session.promptTimeoutMs': 'Reply timeout (ms)',
+  'field.session.promptTimeoutMs.hint': 'How long session_prompt waits for a turn to settle. A timeout does not cancel the session.',
+
+  'field.limits.maxReadBytes': 'Read limit (bytes)',
+  'field.limits.maxReadBytes.hint': 'Content past the limit is truncated.',
+  'field.limits.shellTimeoutMs': 'Command timeout (ms)',
+  'field.limits.shellTimeoutMs.hint': 'The default shell_run timeout; a single call may override it.',
+
+  'field.approval.policy': 'Approval policy',
+  'field.approval.policy.hint': 'Either way this only affects sessions this plugin created, never the rest of DSH.',
+  'field.approval.policy.inherit': 'Inherit DSH permissions',
+  'field.approval.policy.allow': 'Auto-approve this plugin’s sessions',
+  'field.approval.policy.allow.hint': 'Dangerous: those sessions stop asking and will perform operations that need authorization.',
+
+  'field.auth.token': 'Token',
+  'field.auth.token.hint': 'Empty inherits the composition value; if that is empty too, the generated token file is used.',
+  'field.auth.token.set': 'Set',
+  'field.auth.token.unset': 'Not set (using the generated token)',
+  'field.auth.token.replace': 'Replace token',
+  'field.auth.token.clear': 'Clear',
+  'field.auth.token.placeholder': 'Paste a token to pin it',
+
+  'client.title': 'Client configuration',
+  'client.description': 'Paste this into your MCP client configuration. The token is a secret — do not commit it.',
+  'client.copy': 'Copy',
+  'client.copied': 'Copied',
+  'client.copyFailed': 'Copy failed; select it manually',
+  'client.tokenHidden': 'token hidden',
+  'client.tokenSource.settings': 'this panel',
+  'client.tokenSource.config': 'plugin configuration',
+  'client.tokenSource.file': 'the token file',
+  'client.tokenSource.generated': 'generated by DSH',
+  'client.tokenSource.ephemeral': 'ephemeral (could not write to disk)',
+  'client.tokenSourceLabel': 'Token source: ',
+  'client.toolsLabel': 'Enabled tool groups: ',
+  'client.statusLabel': 'Status: ',
+  'client.listening': 'listening',
+  'client.notListening': 'not listening',
+  'client.mounted': 'mounted on the web server',
+  'client.errorLabel': 'Bind failed: ',
+
+  'state.loading': 'Reading configuration…',
+  'state.unavailable': 'The settings service is unavailable, so this panel cannot change the configuration.',
+  'state.readonly': 'This page cannot write settings (it is not a loopback page).',
+  'state.writeFailed': 'Write failed; the host state was re-read. Please retry.',
+}

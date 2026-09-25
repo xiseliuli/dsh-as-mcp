@@ -30,6 +30,8 @@ async function mountMutable(initial: Config, driver = stubDriver()): Promise<{
     error: null,
     tokenSource: 'test',
     settingsRegistered: true,
+    tokenFile: '/tmp/dsh-as-mcp/token',
+    enabledToolGroups: ['workspace', 'session', 'files'],
   })
   const handler = createRequestHandler({
     deps: { driver, getConfig: () => config, connection, status, log: silentLog },

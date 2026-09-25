@@ -160,6 +160,58 @@ export interface WebServerLike {
 }
 
 /**
+ * The parts of a Node response this route touches.
+ *
+ * Declared structurally so the plugin keeps no type dependency on the harness's
+ * HTTP layer.
+ */
+export interface HttpResponseLike {
+  statusCode?: number
+  setHeader?(name: string, value: string): void
+  end?(body?: string): void
+}
+
+/**
+ * Serve one read-only JSON document on DSH's own web server.
+ *
+ * Registered as an exact route so it lands in front of that server's SPA
+ * fallback, and same-origin so the settings panel can read it without tripping
+ * over cross-origin rules — which is what makes live endpoint state available to
+ * the browser at all.
+ *
+ * The body comes from `build()` on every request, so nothing here is a cached
+ * reading, and a throwing `build()` must not take the web server down with it.
+ */
+export function mountStatusRoute(input: {
+  readonly webServer: WebServerLike
+  readonly path: string
+  readonly build: () => unknown
+  readonly log: DshLogger
+}): () => void {
+  const { webServer, path, build, log } = input
+  const dispose = webServer.register({
+    kind: 'exact',
+    path,
+    handler: (_req, res) => {
+      const response = res as HttpResponseLike
+      let body: string
+      try {
+        body = JSON.stringify(build())
+      } catch (error) {
+        log.warn('[dsh-as-mcp] could not serialize the status payload', error)
+        body = '{}'
+      }
+      response.statusCode = 200
+      response.setHeader?.('content-type', 'application/json; charset=utf-8')
+      response.setHeader?.('cache-control', 'no-store')
+      response.end?.(body)
+    },
+  })
+  log.info(`[dsh-as-mcp] settings panel status route mounted at ${path}`)
+  return dispose
+}
+
+/**
  * Mount the same endpoint on DSH's own web server.
  *
  * Registering an exact route puts us in front of that server's SPA fallback, so

@@ -7,6 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { Config } from '../src/config.js'
+import { STATUS_ROUTE } from '../src/status.js'
 import { apply, inject, name } from '../src/index.js'
 import { TOKEN, callTool, rpc } from './harness.js'
 
@@ -193,20 +194,26 @@ describe('apply() with harness services present', () => {
       return pluginConfig({ port, mountOnWebServer: true })
     })
 
-    // Registration happens inside the effect, so wait for it.
+    // Registration happens inside the effect, so wait for it. Two routes are
+    // expected: the MCP endpoint itself, and the settings panel's status route —
+    // the latter is registered whether or not mountOnWebServer is set.
     const deadline = Date.now() + 5_000
-    while (registered.length === 0 && Date.now() < deadline) {
+    while (registered.length < 2 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
 
-    expect(registered).toHaveLength(1)
-    // An exact route, not a prefix: it must sit in front of the web server's SPA
+    const endpoint = registered.find((route) => route.path === '/mcp')
+    const statusRoute = registered.find((route) => route.path === STATUS_ROUTE)
+    // Exact routes, not prefixes: they must sit in front of the web server's SPA
     // fallback without swallowing the rest of the surface.
-    expect(registered[0]).toMatchObject({ kind: 'exact', path: '/mcp' })
+    expect(endpoint).toMatchObject({ kind: 'exact', path: '/mcp' })
+    expect(statusRoute).toMatchObject({ kind: 'exact', path: STATUS_ROUTE })
+    expect(registered).toHaveLength(2)
 
     // Driving the captured handler directly proves the mount is live and that
-    // the same bearer check applies on this route.
-    const handler = registered[0]?.handler as (req: unknown, res: unknown) => Promise<void>
+    // the same bearer check applies on this route. The status route is a
+    // different route with no bearer check, so this must name the endpoint.
+    const handler = endpoint?.handler as (req: unknown, res: unknown) => Promise<void>
     const response = await driveHandler(handler, {
       jsonrpc: '2.0',
       id: 5,
@@ -217,6 +224,55 @@ describe('apply() with harness services present', () => {
 
     const denied = await driveHandler(handler, { jsonrpc: '2.0', id: 6, method: 'tools/list' }, null)
     expect(denied.status).toBe(401)
+  })
+
+  it('serves the panel a status payload that never carries the token', async () => {
+    const port = await freePort()
+    const registered: { kind: string; path: string; handler: unknown }[] = []
+    await bootWithContext((root) => {
+      root.provide('webServer', {
+        register: (route: { kind: string; path: string; handler: unknown }) => {
+          registered.push(route)
+          return () => undefined
+        },
+      })
+      return pluginConfig({ port })
+    })
+
+    // The status route is registered whether or not mountOnWebServer is set, so
+    // this configuration yields exactly that one route.
+    const deadline = Date.now() + 5_000
+    while (registered.length < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    const statusRoute = registered.find((route) => route.path === STATUS_ROUTE)
+    expect(statusRoute).toBeDefined()
+    expect(registered).toHaveLength(1)
+
+    // No token: the panel reads this from the DSH web shell, same-origin, and
+    // the route is behind DSH's own browser authorization.
+    const answer = await driveHandler(
+      statusRoute?.handler as (req: unknown, res: unknown) => Promise<void>,
+      {},
+      null,
+    )
+    expect(answer.status).toBe(200)
+
+    const payload = JSON.parse(answer.body) as Record<string, unknown>
+    expect(payload).toMatchObject({
+      listening: true,
+      mountedOnWebServer: false,
+      error: null,
+      settingsRegistered: false,
+    })
+    expect(typeof payload.url).toBe('string')
+    expect(typeof payload.tokenSource).toBe('string')
+    expect(typeof payload.tokenFile).toBe('string')
+    expect(payload.enabledToolGroups).toContain('workspace')
+    // The whole point of a redacted view: the literal must not be reachable from
+    // an unauthenticated same-origin read.
+    expect(answer.body).not.toContain(TOKEN)
+    expect(payload).not.toHaveProperty('token')
   })
 })
 

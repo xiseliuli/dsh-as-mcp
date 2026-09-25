@@ -155,6 +155,8 @@ describe('MCP Streamable HTTP endpoint', () => {
           error: null,
           tokenSource: 'test',
           settingsRegistered: false,
+          tokenFile: '/tmp/dsh-as-mcp/token',
+          enabledToolGroups: ['workspace', 'session', 'files'],
         }),
         connection: () => ({ url: first.url, token: 'x', tokenSource: 'test', mountedOnWebServer: false }),
         log: silentLog,

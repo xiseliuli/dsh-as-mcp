@@ -6,6 +6,7 @@ import { eventsOf, loggerOf, serviceOf } from './dsh/types.js'
 import {
   createRequestHandler,
   mountOnWebServer,
+  mountStatusRoute,
   startListener,
   type EndpointHandle,
   type WebServerLike,
@@ -13,7 +14,7 @@ import {
 import { resolveToken } from './mcp/token.js'
 import type { ConnectionInfo, ToolDeps } from './mcp/tools.js'
 import { installSettings, type SettingsProviderLike } from './settings.js'
-import type { EndpointStatus } from './status.js'
+import { STATUS_ROUTE, type EndpointStatus } from './status.js'
 
 /** Cordis plugin name. */
 export const name = 'dsh-as-mcp'
@@ -67,6 +68,7 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
 
   let listener: EndpointHandle | undefined
   let unmountFromWebServer: (() => void) | undefined
+  let unmountStatusRoute: (() => void) | undefined
   let boundSignature = ''
   let listenError: string | null = null
 
@@ -107,6 +109,10 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
       error: listenError,
       tokenSource: effectiveToken().source,
       settingsRegistered: binding.registered(),
+      tokenFile: fallbackToken.file,
+      enabledToolGroups: Object.entries(current.tools)
+        .filter(([, on]) => on)
+        .map(([group]) => group),
     }
   }
 
@@ -196,6 +202,20 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     // The first reconcile is issued here rather than directly, because
     // registration completes asynchronously: by the time it resolves, a
     // user-layer port or path is known and is honoured on the very first bind.
+    // The settings panel reads live endpoint state from here. Registered
+    // unconditionally rather than under http.mountOnWebServer: that option is
+    // about where the MCP endpoint is served, and tying the panel's own status
+    // to it would hide the status exactly when a bind has just failed.
+    const webServer = serviceOf<WebServerLike>(ctx, 'webServer')
+    if (webServer !== undefined) {
+      unmountStatusRoute = mountStatusRoute({
+        webServer,
+        path: STATUS_ROUTE,
+        build: status,
+        log,
+      })
+    }
+
     void reconcile().then(() => {
       if (disposed || listener === undefined) return
       log.info(
@@ -208,6 +228,8 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     return async () => {
       disposed = true
       binding.release()
+      unmountStatusRoute?.()
+      unmountStatusRoute = undefined
       unmountFromWebServer?.()
       unmountFromWebServer = undefined
       const current = listener

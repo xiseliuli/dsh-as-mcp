@@ -78,6 +78,8 @@ export async function boot(driver: McpDriver, config: Config = testConfig()): Pr
     error: null,
     tokenSource: 'test',
     settingsRegistered: false,
+    tokenFile: '/tmp/dsh-as-mcp/token',
+    enabledToolGroups: ['workspace', 'session', 'files'],
   })
   const requestHandler = createRequestHandler({
     deps: { driver, getConfig: () => config, connection, status, log: silentLog },
