@@ -123,15 +123,31 @@ workspace_create { path: "/Users/me/project" }
 - `file_write` 和 `shell_run` 是**调用方**的动作，不是 agent 的。它们走 harness 自己的文件
   系统与 shell 服务，所以这个 DSH 实例配置的沙箱和策略照样生效。
 
-## 在正在运行的 DSH Desktop 里试装（免重启）
+## 装进 DSH Desktop（需要重启）
 
-`desktop` profile 由 Electron 保留，`dsh plugin --profile desktop add` 在普通终端会被拒绝。
-但 desktop 的 `patchReload` 是 `live`，而 live 的 profile 会**监视用户 patch 文件并在不重启的
-情况下重组插件树**，所以可以直接把它挂进正在运行的 DSH Desktop。
+`desktop` profile 由 Electron 保留，`dsh plugin --profile desktop add` 在普通终端会被拒绝，
+所以要手动装。装完**必须重启 DSH Desktop**。
 
-前提先说清楚：**watcher 只重组配置，不替换已加载的模块。** 首次插入新插件行会真正加载该模块，
-但之后你改了 `lib/` 就必须重启 DSH Desktop——把 patch 文件清空再写回也没用，ESM 模块缓存仍然
-返回旧模块。
+### 为什么必须重启
+
+profile manifest 里的 `patchReload: live` 只对 **CLI 启动器**生效。免重启重组由
+`watchUserPatches()` 实现，它位于 CLI 的 `runProfile()`（`apps/cli/src/profile-boot.ts`）里。
+DSH Desktop 走另一条路：它调用 `@deepseek-ai/dsh-app-boot` 的 `boot()`，patch 列表在启动时
+算好一次——应用源码里根本没有这个 watcher：
+
+```bash
+grep -rn watchUserPatches <dsh-desktop>/dsh-plugin-desktop/src/    # 无匹配
+```
+
+实测也一致：改完 profile 的 `cordis.patch.yml` 之后，应用日志一行都没新增，端口也没起来。
+
+所以：**CLI 启动的 profile（`dsh --profile xxx`）改 patch 文件即时生效；DSH Desktop 必须重启。**
+无论哪条路径，watcher 都只重组配置、不替换已加载的模块——改完 `lib/` 之后一样要重启。
+
+### 万一重启后起不来
+
+`~/.dsh/profiles/desktop/cordis.patch.yml` 清回 `[]` 即可，插件不会再参与启动；确认无误后
+再逐项排查。彻底移除：`cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp`。
 
 ### 1. 打包并装进 desktop profile
 
@@ -163,8 +179,7 @@ cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
           shell: true
 ```
 
-保存后 DSH Desktop 就会重组并加载插件——**无需重启**。配置写错了也不会把应用弄坏：被拒绝的
-编辑会让最后一个可用的应用继续运行，日志里会有报错。
+保存后**重启 DSH Desktop**，插件才会挂载。
 
 > ⚠️ **不要同时把 `dsh-as-mcp` 加进 `dsh.profile.bundles`。** bundle 会贡献它自己的行，于是最终
 > 组合里会出现**两行同 id**（`dsh --profile <name> --dump-config` 会直接显示出 2 行）。用 patch
@@ -188,7 +203,7 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 
 ### 4. 卸载
 
-把 `~/.dsh/profiles/desktop/cordis.patch.yml` 清回 `[]` —— 插件立即卸载，监听端口随之释放。
+把 `~/.dsh/profiles/desktop/cordis.patch.yml` 清回 `[]` 并重启，插件就不再挂载。
 要彻底移除：`cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp`。
 
 ## 配置

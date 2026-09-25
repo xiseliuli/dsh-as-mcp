@@ -131,17 +131,34 @@ an SSH key.
   the harness's own filesystem and shell services, so the sandbox and policy configured for
   this DSH instance still apply.
 
-## Trying it inside a running DSH Desktop (no restart)
+## Installing into DSH Desktop (restart required)
 
 Electron reserves the `desktop` profile, so `dsh plugin --profile desktop add` is refused from a
-plain terminal. But `desktop` has `patchReload: live`, and a live profile **watches the user patch
-files and recomposes the plugin tree without restarting** — so it can be mounted into the DSH
-Desktop you already have running.
+plain terminal and the install is manual. DSH Desktop must then be **restarted**.
 
-One caveat up front: **the watcher recomposes config only; it does not replace loaded modules.**
-Inserting a new row genuinely loads the module for the first time, but once you edit `lib/` you
-must restart DSH Desktop — clearing and rewriting the patch file will not help, because the ESM
-module cache still hands back the old module.
+### Why a restart is required
+
+`patchReload: live` in the profile manifest only governs the **CLI launcher**. The no-restart
+recompose is implemented by `watchUserPatches()`, which lives in the CLI's `runProfile()`
+(`apps/cli/src/profile-boot.ts`). DSH Desktop takes a different path: it calls `boot()` from
+`@deepseek-ai/dsh-app-boot` with the patch list computed once at startup, and the shipping app
+contains no such watcher at all:
+
+```bash
+grep -rn watchUserPatches <dsh-desktop>/dsh-plugin-desktop/src/    # no matches
+```
+
+Measured behaviour agrees: after editing the profile's `cordis.patch.yml`, the app log gained not
+one line and the port never opened.
+
+So: **a CLI-launched profile (`dsh --profile xxx`) applies patch edits immediately; DSH Desktop
+must be restarted.** On either path the watcher only recomposes config rather than replacing
+loaded modules, so editing `lib/` needs a restart regardless.
+
+### If the app will not start afterwards
+
+Reset `~/.dsh/profiles/desktop/cordis.patch.yml` to `[]` and the plugin takes no part in startup.
+To remove it entirely: `cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp`.
 
 ### 1. Pack it and install into the desktop profile
 
@@ -173,9 +190,7 @@ Edit `~/.dsh/profiles/desktop/cordis.patch.yml` (replace the `[]`):
           shell: true
 ```
 
-Saving is enough — DSH Desktop recomposes and loads the plugin with **no restart**. A bad edit
-cannot brick the app: a rejected edit leaves the last good app running and reports the error in
-the log.
+Then **restart DSH Desktop** to mount the plugin.
 
 > ⚠️ **Do not also add `dsh-as-mcp` to `dsh.profile.bundles`.** The bundle contributes its own
 > row, so the composed result carries **two rows sharing one id** (`dsh --profile <name>
@@ -202,8 +217,8 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 
 ### 4. Uninstall
 
-Reset `~/.dsh/profiles/desktop/cordis.patch.yml` to `[]` and the plugin unloads immediately,
-releasing its port. To remove it entirely: `cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp`.
+Reset `~/.dsh/profiles/desktop/cordis.patch.yml` to `[]` and restart, and the plugin no longer
+mounts. To remove it entirely: `cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp`.
 
 ## Configuration
 

@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 /** Where the token came from, so the operator can tell a fresh secret from a configured one. */
-export type TokenSource = 'config' | 'file' | 'generated'
+export type TokenSource = 'config' | 'file' | 'generated' | 'ephemeral'
 
 /** A resolved bearer token and its provenance. */
 export interface ResolvedToken {
@@ -33,6 +33,10 @@ export function resolveDshHome(): string {
  * A configured token always wins. Otherwise the token is read from
  * `<DSH_HOME>/dsh-as-mcp/token`, and generated (mode 0600) on first run so that
  * the endpoint is never accidentally unauthenticated.
+ *
+ * Never throws. This runs inside the plugin's `apply()`, so a throw here would
+ * fail DSH's own boot; an unwritable home degrades to a per-process token
+ * (`source: 'ephemeral'`) that the caller reports instead.
  */
 export function resolveToken(configured: string): ResolvedToken {
   const file = join(resolveDshHome(), 'dsh-as-mcp', 'token')
@@ -48,8 +52,15 @@ export function resolveToken(configured: string): ResolvedToken {
   }
 
   const token = randomBytes(32).toString('base64url')
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${token}\n`, { mode: 0o600 })
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `${token}\n`, { mode: 0o600 })
+  } catch {
+    // A read-only or otherwise unwritable DSH home must not stop DSH from
+    // booting. The endpoint stays authenticated, but only for this process:
+    // a client has to be handed this token explicitly.
+    return { token, source: 'ephemeral', file }
+  }
   return { token, source: 'generated', file }
 }
 

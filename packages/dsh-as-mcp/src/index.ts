@@ -69,6 +69,14 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     log,
   })
 
+  if (source === 'ephemeral') {
+    log.warn(
+      '[dsh-as-mcp] could not write %s — using a token that lives only in this process. '
+      + 'Set auth.token in the plugin row to pin a stable value.',
+      file,
+    )
+  }
+
   if (config.http.enabled || config.http.mountOnWebServer) {
     log.info(
       '[dsh-as-mcp] bearer token %s (%s); '
