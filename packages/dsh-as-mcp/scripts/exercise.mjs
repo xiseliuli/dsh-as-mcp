@@ -229,7 +229,7 @@ section('surface')
     .filter((group) => groups[group] !== true)
   check(wanted.length === 0, 'all five tool groups are enabled', Object.keys(groups).join(', '))
   const services = info.harnessServices ?? {}
-  for (const service of ['workspaceRegistry', 'sessionController', 'agents', 'fs', 'shell']) {
+  for (const service of ['workspaceRegistry', 'sessionController', 'agents', 'fs', 'shell', 'tools']) {
     check(services[service] === true, `harness service: ${service}`)
   }
 }

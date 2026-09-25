@@ -220,6 +220,7 @@ export class DshDriver {
       fs: this.fileSystem() !== undefined,
       shell: this.shellExecutor() !== undefined,
       webServer: serviceOf<unknown>(this.ctx, 'webServer') !== undefined,
+      tools: this.toolRegistry() !== undefined,
       events: typeof eventsOf(this.ctx).on === 'function',
     }
   }

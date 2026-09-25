@@ -221,6 +221,26 @@ cd /path/to/dsh-plugins/packages/dsh-as-mcp && pnpm pack --pack-destination /tmp
 cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
 ```
 
+> **Reinstalling over an existing install: change the tarball path.**
+> `pnpm` keys a `file:` dependency on the *path*, and a reinstall from the same path
+> reports `added 0` while leaving the previous content linked — a silently stale
+> build that still boots and still runs the old code. Give each build a unique
+> filename and the spec string changes with it:
+>
+> ```bash
+> TARBALL=/tmp/dsh-as-mcp-$(date +%s).tgz
+> cd /path/to/dsh-plugins/packages/dsh-as-mcp && pnpm pack --pack-destination "$(dirname $TARBALL)"
+> mv /tmp/dsh-as-mcp-0.1.0.tgz "$TARBALL"
+> cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp && pnpm add "$TARBALL"
+> ```
+>
+> Then confirm the bytes actually match, or you are testing the old build:
+>
+> ```bash
+> wc -c ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/lib/index.js \
+>       /path/to/dsh-plugins/packages/dsh-as-mcp/lib/index.js
+> ```
+
 ### 2. Put the plugin row in the profile's own patch layer
 
 Edit `~/.dsh/profiles/desktop/cordis.patch.yml` (replace the `[]`):
