@@ -241,16 +241,46 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
       policy: inherit        # inherit | allow
 ```
 
+## 设置面板
+
+宿主挂载了 settings 服务时（DSH Desktop 与 `dsh web` 都有），插件会在设置面板里贡献一个
+**MCP 服务** 分组。它编辑的就是上面那段配置所在的 `dsh-as-mcp` 命名空间——面板和文件是同一个
+值的两种视图，不是两份副本。
+
+所有改动**即时生效**：
+
+| 改动 | 效果 |
+| --- | --- |
+| 工具开关 | 该组在下一次 `tools/list` 中消失或出现；被关闭的工具是真正不存在，调用它会报“未知工具”，而不是执行后被拒绝 |
+| 上限、会话默认值 | 下一次调用开始时读取 |
+| 令牌 | 下一次请求就要求新值，旧令牌立即失效 |
+| `enabled`、`host`、`port`、`path`、`mountOnWebServer` | 监听器会被搬走 |
+
+最值得说清的是改端口：插件会先停掉旧监听再起新的，所以端点是真的搬了。如果新端口被占用，
+绑定错误会显示在面板和 `dsh_info` 里，而不是被吞掉。
+
+令牌是**只写**的。它的明文从不离开宿主进程，所以面板只能显示“是否已设置”和一个清除按钮；
+可复制的客户端配置用 `<token>` 占位，并指向令牌文件。实时端点状态（是否在监听、绑定错误、
+已启用的工具组）由 DSH connection 层上的一条只读路由提供——它在该层的 Host/Origin 与浏览器
+cookie 围栏**之内**，因此自动继承 DSH 自己的鉴权，绝不会暴露在一个裸端口上。
+
+注册 settings 命名空间需要 `@deepseek-ai/schemastery`，DSH 里没有绕开它的路径。本包把它声明为
+**可选** peer 并用动态导入加载：宿主提供不了时，只失去这个分组，其他能力一个不少——端点继续
+按配置文件运行。`dsh_info` 和冒烟脚本都会告诉你当前是哪种情况。
+
 ## 兼容性
 
 - **Harness** ≥ `0.1.5-rc.1`（开发与验证基于 `dsh-v0.1.5-rc.1`，即 DSH Desktop 2.0.9 内置
   的版本）。
 - **Node** `^22.19.0 || >=24.0.0`。
-- **零 `@deepseek-ai/*` 依赖。** DSH 会把插件声明的每一个 `@deepseek-ai/dsh-*` peer 范围拿去
+- **没有硬 `@deepseek-ai/*` 依赖。** DSH 会把插件声明的每一个 `@deepseek-ai/dsh-*` peer 范围拿去
   和唯一那个运行时版本比对，所以本包一个都不声明：所有能力通过 `ctx.get(name)` 做结构化解析，
   配置 schema 是手写的 [Standard Schema](https://standardschema.dev) 而不是 schemastery
   schema——而 Cordis 的 `resolveConfig` 实际消费的就是 Standard Schema。于是它安装、加载都
   没有版本闸门，也不会因为某个 peer 没装上就在 import 期直接失败。
+  唯一的例外是 `@deepseek-ai/schemastery`，且声明为**可选** peer：DSH 里没有免 schemastery 的
+  settings 注册路径，所以想要设置面板就必须声明它——但声明为可选意味着没装上也只失去面板，
+  核心功能不受影响。这与生态里已有的第三方插件（`dsh-tokenledger`）做法一致。
 
 ## 设计说明
 

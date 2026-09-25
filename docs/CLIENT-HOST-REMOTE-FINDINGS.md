@@ -123,7 +123,7 @@ export interface TypertClientRemote extends TypertRemoteNamespaceMap {
     ```
 
     `:315-340` (`resolveArtifact`): `require.resolve(\`${pkgName}/package.json\`)` →
-    `typertExportOf(...)`; `:350` dynamically imports the path; `:428`
+    `typertExportOf(...)`; `:346` dynamically imports the path; `:428`
     (`for (const entry of ctx.loader.entries()) dirty.add(entry.options.name)`) seeds discovery from
     **Loader entries**, i.e. from the profile row itself. No `dsh.*` manifest field references the
     artifact. **[V]**
@@ -151,7 +151,7 @@ export interface TypertClientRemote extends TypertRemoteNamespaceMap {
   method call is async through `ctx.connection.rpc.call('/api', endpoint, ...)`. **[V]** —
   `packages/api/gateway/src/client/index.ts:201` and the cost-meter client's
   `await a[C](...F??[])`. The resolved value is `RemoteResult<T>` = `{ ok: true; value }` or
-  `{ ok: false; error }` **[V]** — `packages/typert/protocol/src/types.ts:57-66`.
+  `{ ok: false; error }` **[V]** — `packages/typert/protocol/src/types.ts:74-77`.
 * **Is the namespace/type registry closed to the monorepo?** **The runtime registry is not closed;
   the assembly is.** Two distinct facts, and third parties only care about the first:
   * `@deepseek-ai/dsh-api-remotes` mounts a *fixed build-time selection* — "The capability set is
@@ -192,7 +192,7 @@ function parseInput(codec: TypertCodec, value: unknown, endpoint: string, field:
 ```
 
 and the shared registry behind `$mount` (`callerCtx.typert.remotes.register(contribution)`,
-`:243`) requires only a callable `parse`. **[V]** —
+`:244`) requires only a callable `parse`. **[V]** —
 `packages/typert/registry/src/service.ts:697-703`:
 
 ```ts
@@ -331,7 +331,7 @@ it is hand-written, not generated.** Re-read against the artifact:
   third-party mechanism. `typert-loader` has no allow-list and no monorepo path requirement — it
   resolves `<pkg>/package.json` from `ctx.baseUrl` (the config-tree anchor) and imports whatever
   `exports["./typert"]` names **[V]** (`loader/src/index.ts:292`, `:315-340`, `:428`). The only
-  strictness is shape validation: `validateTypertManifest` (`:83-140`) and `requireStrictCodec`
+  strictness is shape validation: `validateTypertManifest` (`:83-141`) and `requireStrictCodec`
   (`:264-275`), the latter requiring `'_zod' in codec.schema` — i.e. **real zod v4 instances on the
   host side**:
 
@@ -459,17 +459,18 @@ Two route registries, with different security postures:
   ```
 
   The doc comment says "below `/api`", but the registered key is the **full pathname**: the lookup
-  is `this.fetchRoutes.get(new URL(request.url).pathname)` **[V]** (`rpc-host.ts:127`), and all four
-  shipped users pass `/api/...` **[V]** —
+  is `this.fetchRoutes.get(new URL(request.url).pathname)` **[V]** (`rpc-host.ts:127`), and all five
+  shipped registration sites pass the full `/api/...` pathname **[V]** —
   `packages/session-query/session-log-export/src/index.ts:42` (`'/api/session.export'`),
+  `packages/api/session-controller/src/media-references.ts:70-71` (`'/api/file'`),
   `packages/client/file-upload/src/protocol.ts:2` (`'/api/session/uploadFileBinary'`),
   `packages/client/ui-deliverables/src/presented.ts:7,10` (`'/api/present.open'`,
   `'/api/present.host'`). `assertFetchRoute` enforces the `/api/` prefix and the segment grammar
-  `^[A-Za-z0-9_$.-]+$` **[V]** (`rpc-host.ts:33`, `:260-276`).
+  `^[A-Za-z0-9_$.-]+$` **[V]** (`rpc-host.ts:33`, `:292-303`, `:266-276`).
   **Security:** these routes are dispatched by the shared handler that the Connection's `/api`
   **prefix** route reaches only after `connection.requestRejection(req)` (Host/Origin trust, then
   the browser session cookie) **[V]** — `packages/client/connection/src/index.ts:124-138`, and
-  `rpc-host.ts:83-86`:
+  `rpc-host.ts:96-100`:
 
   ```ts
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
@@ -503,7 +504,7 @@ Two route registries, with different security postures:
   `Access-Control-Allow-Origin` / `access-control-allow-origin` finds **no** occurrence in any
   `packages/**` or `apps/**` TypeScript **[V]**, and `dsh-as-mcp`'s own listener sets only
   `content-type` / `content-length` / `cache-control` on its responses **[V]** —
-  `packages/dsh-as-mcp/src/mcp/http.ts:41-50` (`deny()`). So a browser `fetch` to it would fail
+  `packages/dsh-as-mcp/src/mcp/http.ts:38-46` (`deny()`). So a browser `fetch` to it would fail
   preflight/response inspection. **[I]** (I did not run a browser to demonstrate the CORS refusal;
   the absence of ACAO headers is the verified part.)
 
@@ -514,7 +515,7 @@ Two route registries, with different security postures:
   for `ctx.remote.$stream()`; it is not a general host→client channel and exposes no
   plugin-registerable logical endpoint except through the Gateway's own stream descriptors.
   **[V]** — `packages/api/gateway/README.md` §Host service ("The Client opens the Gateway-owned
-  `/api/remote.mux` WebSocket…"), `packages/api/gateway/src/index.ts:210-235`
+  `/api/remote.mux` WebSocket…"), `packages/api/gateway/src/index.ts:209-229`
   (`webServer.registerUpgrade(route)` for that one path).
 * `text/event-stream` appears in this tree only in `packages/experimental/webworker-runtime`
   (its own tunnel), `packages/experimental/inspector` (CDP), and LLM adapters' test/production
@@ -533,23 +534,23 @@ Two route registries, with different security postures:
   schema-backed) and is explicitly scoped to the client's `settingsScope` service. **[V]** — the
   workspace's own `docs/CLIENT-PLUGIN-BLUEPRINT.md` §2 documents the whole path, including
   `persistence = ctx.remote.$host.isLoopback ? 'host' : 'memory'`
-  (`packages/client/ui-settings/src/client/index.ts:43`).
+  (`packages/client/ui-settings/src/client/index.ts:58`).
 * **A client store — ❌ there is no host→client store.** `@deepseek-ai/dsh-client-store` is
   "Observable browser state stores … React-free observable and snapshot-store primitives" with no
   host binding **[V]** — `packages/client/store/README.md` §Summary. No host service named `store`
   exists (`grep "super(ctx, 'store')"` finds nothing) **[V]**.
 * **`ctx.remote.$host` — ❌ not general.** It is `RemoteHostFacts = { home, isLoopback }` and is
   documented as "Fixed Host facts as plain reads: no store, no subscription, no generation counter."
-  **[V]** — `packages/api/gateway/src/client/index.ts:105-120` and
+  **[V]** — `packages/api/gateway/src/client/index.ts:110-123` and
   `packages/api/gateway/README.md` §Client service. It cannot carry plugin state.
 
 ### 4.4 Reactive seam summary
 
 There is no third-party push. Both viable mechanisms are pull, so a live indicator requires either
 (i) a client-side poll/interval + `connection/reset` re-read — exactly what `dsh-cost-meter`'s
-client does (`setInterval(...)` at byte offset ~244900 of `lib/client.js`, plus
-`t.on("connection/reset",()=>{m()})` **[V]**) — or (ii) a host-initiated client notification, which
-does not exist for third parties.
+client does (at byte offset 246017 of `lib/client.js`,
+`t.effect(()=>t.on("connection/reset",()=>{m()}),"cost-meter: reconnect reload");const b=setInterval(()=>{...},1e3);`
+— **[V]**) — or (ii) a host-initiated client notification, which does not exist for third parties.
 
 ---
 
@@ -558,7 +559,7 @@ does not exist for third parties.
 Current state, read from this workspace: the host already computes exactly the needed shape
 **[V]** — `packages/dsh-as-mcp/src/status.ts:10-23` (`EndpointStatus` with `listening`, `url`,
 `mountedOnWebServer`, `error`, `tokenSource`, `settingsRegistered`) and
-`packages/dsh-as-mcp/src/index.ts:103-113`:
+`packages/dsh-as-mcp/src/index.ts:102-113`:
 
 ```ts
   const status = (): EndpointStatus => {
@@ -575,7 +576,7 @@ Current state, read from this workspace: the host already computes exactly the n
   }
 ```
 
-It then parks that closure on the **host** ctx **[V]** — `src/index.ts:181-184`:
+It then parks that closure on the **host** ctx **[V]** — `src/index.ts:186-189`:
 
 ```ts
   // Exposed so the settings panel can render live status, and so tests can
@@ -592,8 +593,8 @@ the 9 seed words plus cordis services; there is no host-object mirror anywhere i
 ### Recommended: Mechanism B, the in-fence exact Fetch route (smallest, verified, no schema duplication)
 
 1. **Host**: register one exact route inside DSH's trust fence, reading the existing `status()`
-   closure. Shape verbatim from a shipped user of the same API **[V]** —
-   `packages/api/gateway`'s sibling `packages/session-query/session-log-export/src/index.ts:85-104`:
+   closure. Shape verbatim from a shipped monorepo user of the same API **[V]** —
+   `packages/session-query/session-log-export/src/index.ts:85-104`:
 
    ```ts
    connectionOf(ctx).fetch.register({
@@ -618,10 +619,10 @@ the 9 seed words plus cordis services; there is no host-object mirror anywhere i
    authenticated by DSH itself. **[V]** for every API used; **[I]** for the assembled recommendation.
 
    Note the path must satisfy `/^\/api\/[A-Za-z0-9_$.-]+(\/[A-Za-z0-9_$.-]+)*$/`
-   (`assertFetchRoute` → `endpointFromPath`, `rpc-host.ts:33,260-276`); `/api/as-mcp/status` does.
+   (`assertFetchRoute` → `endpointFromPath`, `rpc-host.ts:33`, `:292-303`, `:266-276`); `/api/as-mcp/status` does.
    Also note that with a 2-segment endpoint the gateway would have claimed it too, but the shared
    handler consults exact routes **before** the interceptor, so the exact route wins unambiguously
-   **[V]** (`rpc-host.ts:125-137`).
+   **[V]** (`rpc-host.ts:125-137`, `:292-303`).
 
 ### Acceptable alternative: Mechanism A (Typert Remote) — choose it only if you want in-band typing
 
@@ -685,7 +686,7 @@ Everything below is a claim I could **not** confirm from source or a real instal
    decorator semantics. Treat the decorator path as **[I]**, and prefer the strict/manual artifact
    path or Mechanism B.
 8. **`ctx.typert.register()` called directly from a third-party host `apply()`** was verified as an
-   existing API and as the loader's documented fallback, but not executed. Whether `CTX.typert` is
+   existing API and as the loader's documented fallback, but not executed. Whether `ctx.typert` is
    reliably available at a third-party plugin's `apply()` time (it is registered by the `typert`
    row, which precedes `typert-loader` and `typert-gateway` in the shipped config) is **[V]** from
    the config order but **not** exercised.

@@ -160,40 +160,50 @@ export interface WebServerLike {
 }
 
 /**
- * The parts of a Node response this route touches.
+ * The in-fence route registrar DSH's connection service exposes.
  *
- * Declared structurally so the plugin keeps no type dependency on the harness's
- * HTTP layer.
+ * A route registered here sits *inside* the connection layer's Host/Origin and
+ * browser-cookie fence, so it inherits DSH's own authorization instead of
+ * re-implementing it. Registering the same path on the raw web server would put
+ * it in front of that fence and require self-screening.
  */
-export interface HttpResponseLike {
-  statusCode?: number
-  setHeader?(name: string, value: string): void
-  end?(body?: string): void
+export interface ConnectionFetchLike {
+  register(route: {
+    readonly path: string
+    readonly methods: readonly string[]
+    readonly requestBody: 'buffered'
+    readonly fetch: (request: Request) => Promise<Response>
+  }): () => void
+}
+
+/** The `connection` service, whose `fetch` member owns the `/api` channel. */
+export interface ConnectionLike {
+  readonly fetch: ConnectionFetchLike
 }
 
 /**
- * Serve one read-only JSON document on DSH's own web server.
+ * Serve one read-only JSON document to the settings panel.
  *
- * Registered as an exact route so it lands in front of that server's SPA
- * fallback, and same-origin so the settings panel can read it without tripping
+ * Same-origin with the web shell, so the browser can read it without tripping
  * over cross-origin rules — which is what makes live endpoint state available to
- * the browser at all.
+ * the panel at all. It carries no secret: the token appears only as a source and
+ * a file path, never as a value.
  *
- * The body comes from `build()` on every request, so nothing here is a cached
- * reading, and a throwing `build()` must not take the web server down with it.
+ * `build()` runs on every request, so nothing here is a cached reading, and a
+ * throwing `build()` returns an empty document rather than failing the route.
  */
-export function mountStatusRoute(input: {
-  readonly webServer: WebServerLike
+export function registerStatusRoute(input: {
+  readonly connectionFetch: ConnectionFetchLike
   readonly path: string
   readonly build: () => unknown
   readonly log: DshLogger
 }): () => void {
-  const { webServer, path, build, log } = input
-  const dispose = webServer.register({
-    kind: 'exact',
+  const { connectionFetch, path, build, log } = input
+  const dispose = connectionFetch.register({
     path,
-    handler: (_req, res) => {
-      const response = res as HttpResponseLike
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: () => {
       let body: string
       try {
         body = JSON.stringify(build())
@@ -201,13 +211,15 @@ export function mountStatusRoute(input: {
         log.warn('[dsh-as-mcp] could not serialize the status payload', error)
         body = '{}'
       }
-      response.statusCode = 200
-      response.setHeader?.('content-type', 'application/json; charset=utf-8')
-      response.setHeader?.('cache-control', 'no-store')
-      response.end?.(body)
+      return Promise.resolve(
+        new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+        }),
+      )
     },
   })
-  log.info(`[dsh-as-mcp] settings panel status route mounted at ${path}`)
+  log.info(`[dsh-as-mcp] settings panel status route registered at ${path}, inside DSH's auth fence`)
   return dispose
 }
 

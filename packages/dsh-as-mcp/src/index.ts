@@ -6,8 +6,9 @@ import { eventsOf, loggerOf, serviceOf } from './dsh/types.js'
 import {
   createRequestHandler,
   mountOnWebServer,
-  mountStatusRoute,
+  registerStatusRoute,
   startListener,
+  type ConnectionLike,
   type EndpointHandle,
   type WebServerLike,
 } from './mcp/http.js'
@@ -184,10 +185,6 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     }
   }
 
-  // Exposed so the settings panel can render live status, and so tests can
-  // observe the endpoint without reaching into the closure.
-  ;(ctx as unknown as { dshAsMcpStatus?: () => EndpointStatus }).dshAsMcpStatus = status
-
   ctx.effect(() => {
     let disposed = false
 
@@ -206,10 +203,17 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     // unconditionally rather than under http.mountOnWebServer: that option is
     // about where the MCP endpoint is served, and tying the panel's own status
     // to it would hide the status exactly when a bind has just failed.
-    const webServer = serviceOf<WebServerLike>(ctx, 'webServer')
-    if (webServer !== undefined) {
-      unmountStatusRoute = mountStatusRoute({
-        webServer,
+    //
+    // Deliberately on the connection layer's `/api` channel and not the raw web
+    // server: an exact route on the web server sits in front of the connection
+    // fence, which would expose endpoint state to anything that can reach the
+    // port. Inside the fence it inherits DSH's own authorization. When there is
+    // no connection service the panel simply shows no liveness, which is the
+    // honest outcome rather than an unauthenticated one.
+    const connection = serviceOf<ConnectionLike>(ctx, 'connection')
+    if (connection !== undefined) {
+      unmountStatusRoute = registerStatusRoute({
+        connectionFetch: connection.fetch,
         path: STATUS_ROUTE,
         build: status,
         log,

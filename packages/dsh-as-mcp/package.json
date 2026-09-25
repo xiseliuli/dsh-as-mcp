@@ -52,11 +52,11 @@
     }
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node scripts/build-client.mjs",
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.client.json",
     "test": "vitest run --passWithNoTests",
-    "prepare": "tsdown",
+    "prepare": "tsdown && node scripts/build-client.mjs",
     "build:client": "node scripts/build-client.mjs"
   },
   "dependencies": {

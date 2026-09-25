@@ -256,18 +256,55 @@ key named, because a silently ignored typo means your override is not being appl
       policy: inherit        # inherit | allow
 ```
 
+## Settings panel
+
+Where the host mounts a settings service — DSH Desktop and `dsh web` both do — the plugin
+contributes an **MCP server** section to the settings panel. It edits the same `dsh-as-mcp`
+namespace the configuration above fills, so the panel and the file are two views of one
+value, not two copies.
+
+Every change applies **live**:
+
+| Change | Effect |
+| --- | --- |
+| a tool toggle | the group leaves or joins the very next `tools/list`; a disabled tool is genuinely absent, so calling it reports an unknown tool rather than running and being refused |
+| a limit, or a session default | read at the start of the next call |
+| the token | the new value is required by the next request; the old one stops working immediately |
+| `enabled`, `host`, `port`, `path`, `mountOnWebServer` | the listener is moved |
+
+Changing the port is the case worth stating plainly: the plugin stops the old listener and
+starts the new one, so the endpoint really does move. If the new port is taken, the bind error
+is shown in the panel and in `dsh_info` rather than being swallowed.
+
+The token is rendered **write-only**. Its literal never leaves the host process, so the panel
+shows only whether one is set, and a "clear" button. The copyable client configuration uses a
+`<token>` placeholder and points at the token file. Live endpoint state (listening, bind error,
+enabled tool groups) is served by a read-only route on DSH's connection layer — inside that
+layer's Host/Origin and browser-cookie fence, so it inherits DSH's own authorization and is
+never exposed on a bare port.
+
+The panel needs `@deepseek-ai/schemastery` to register a settings namespace; there is no
+schemastery-free path in DSH. It is declared as an **optional** peer and loaded by dynamic
+import, so a host that cannot supply it loses the section and nothing else — the endpoint keeps
+running from the configuration file. `dsh_info` and the smoke script both report which of the
+two you have.
+
 ## Compatibility
 
 - **Harness** ≥ `0.1.5-rc.1` (developed and verified against `dsh-v0.1.5-rc.1`, the version
   bundled with DSH Desktop 2.0.9).
 - **Node** `^22.19.0 || >=24.0.0`.
-- **Zero `@deepseek-ai/*` dependencies.** DSH gates a plugin on each declared
+- **No hard `@deepseek-ai/*` dependencies.** DSH gates a plugin on each declared
   `@deepseek-ai/dsh-*` peer range against the single running runtime version, so this package
   declares none: it resolves every capability structurally through `ctx.get(name)`, and its
   config schema is a hand-written [Standard Schema](https://standardschema.dev) rather than a
   schemastery schema — which is all Cordis's `resolveConfig` actually consumes. The result
   installs and loads with no version gate, and cannot fail at import time because a peer was
   not installed.
+  The one exception is `@deepseek-ai/schemastery`, declared as an **optional** peer: DSH offers
+  no schemastery-free path to registering a settings namespace, so wanting the panel means
+  declaring it — but optional means a host without it loses only the panel. This is the same
+  stance the installed third-party `dsh-tokenledger` takes.
 
 ## Design notes
 

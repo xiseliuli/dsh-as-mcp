@@ -31,15 +31,42 @@ const SEEDED = [
 ]
 
 let bundle = ''
-let manifest: { name: string; exports: Record<string, unknown>; dsh?: { client?: { platform?: string } } }
+let manifest: {
+  name: string
+  scripts: Record<string, string>
+  exports: Record<string, unknown>
+  dsh?: { client?: { platform?: string } }
+}
 
 beforeAll(async () => {
-  // Build on demand: a test that reads a stale artifact proves nothing, and an
-  // unbuilt tree should fail here rather than at the user's next restart.
-  await run(process.execPath, ['scripts/build-client.mjs'], { cwd: ROOT })
-  bundle = await readFile(join(ROOT, 'lib/client.js'), 'utf8')
   manifest = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')) as typeof manifest
-}, 120_000)
+  // Run the *declared* build script rather than the client script directly: the
+  // node bundler cleans lib/ before it emits, so the order between the two halves
+  // is load-bearing and only the real script exercises it. A test that called
+  // build-client.mjs alone would happily recreate the artifact after the wipe and
+  // prove nothing.
+  await run('sh', ['-c', manifest.scripts.build as string], {
+    cwd: ROOT,
+    env: { ...process.env, PATH: `${join(ROOT, 'node_modules', '.bin')}:${process.env.PATH ?? ''}` },
+  })
+  bundle = await readFile(join(ROOT, 'lib/client.js'), 'utf8')
+}, 180_000)
+
+describe('the build ships both halves', () => {
+  it('leaves the node bundle and the client bundle side by side', async () => {
+    // Regression: tsdown wipes lib/ before emitting, so building the client
+    // first leaves a tree that packs without lib/client.js — a plugin whose panel
+    // silently never appears, with nothing in the build log to say so.
+    await expect(stat(join(ROOT, 'lib/index.js'))).resolves.toBeTruthy()
+    await expect(stat(join(ROOT, 'lib/client.js'))).resolves.toBeTruthy()
+  })
+
+  it('builds the client after the node bundle', () => {
+    const build = manifest.scripts.build as string
+    expect(build.indexOf('tsdown')).toBeGreaterThanOrEqual(0)
+    expect(build.indexOf('build-client.mjs')).toBeGreaterThan(build.indexOf('tsdown'))
+  })
+})
 
 describe('the client half is declared', () => {
   it('advertises a web client face pointing at a file that exists', async () => {

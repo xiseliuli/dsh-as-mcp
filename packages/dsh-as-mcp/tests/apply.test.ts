@@ -194,21 +194,20 @@ describe('apply() with harness services present', () => {
       return pluginConfig({ port, mountOnWebServer: true })
     })
 
-    // Registration happens inside the effect, so wait for it. Two routes are
-    // expected: the MCP endpoint itself, and the settings panel's status route —
-    // the latter is registered whether or not mountOnWebServer is set.
+    // Registration happens inside the effect, so wait for it. Only the MCP
+    // endpoint goes on the raw web server: the panel's status route rides the
+    // connection layer's fence instead, so it must NOT appear here — an exact
+    // route on the web server would sit in front of that fence.
     const deadline = Date.now() + 5_000
-    while (registered.length < 2 && Date.now() < deadline) {
+    while (registered.length < 1 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
 
     const endpoint = registered.find((route) => route.path === '/mcp')
-    const statusRoute = registered.find((route) => route.path === STATUS_ROUTE)
-    // Exact routes, not prefixes: they must sit in front of the web server's SPA
+    // An exact route, not a prefix: it must sit in front of the web server's SPA
     // fallback without swallowing the rest of the surface.
     expect(endpoint).toMatchObject({ kind: 'exact', path: '/mcp' })
-    expect(statusRoute).toMatchObject({ kind: 'exact', path: STATUS_ROUTE })
-    expect(registered).toHaveLength(2)
+    expect(registered).toHaveLength(1)
 
     // Driving the captured handler directly proves the mount is live and that
     // the same bearer check applies on this route. The status route is a
@@ -228,37 +227,38 @@ describe('apply() with harness services present', () => {
 
   it('serves the panel a status payload that never carries the token', async () => {
     const port = await freePort()
-    const registered: { kind: string; path: string; handler: unknown }[] = []
+    const routes: { path: string; methods: readonly string[]; fetch: (req: Request) => Promise<Response> }[] = []
     await bootWithContext((root) => {
-      root.provide('webServer', {
-        register: (route: { kind: string; path: string; handler: unknown }) => {
-          registered.push(route)
-          return () => undefined
+      root.provide('connection', {
+        fetch: {
+          register: (route: (typeof routes)[number]) => {
+            routes.push(route)
+            return () => undefined
+          },
         },
       })
       return pluginConfig({ port })
     })
 
-    // The status route is registered whether or not mountOnWebServer is set, so
-    // this configuration yields exactly that one route.
     const deadline = Date.now() + 5_000
-    while (registered.length < 1 && Date.now() < deadline) {
+    while (routes.length < 1 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
-    const statusRoute = registered.find((route) => route.path === STATUS_ROUTE)
+
+    const statusRoute = routes.find((route) => route.path === STATUS_ROUTE)
     expect(statusRoute).toBeDefined()
-    expect(registered).toHaveLength(1)
+    // On the connection layer's `/api` channel, which is what puts it inside the
+    // Host/Origin and browser-cookie fence rather than in front of it.
+    expect(statusRoute?.methods).toEqual(['GET'])
+    expect(routes).toHaveLength(1)
 
-    // No token: the panel reads this from the DSH web shell, same-origin, and
-    // the route is behind DSH's own browser authorization.
-    const answer = await driveHandler(
-      statusRoute?.handler as (req: unknown, res: unknown) => Promise<void>,
-      {},
-      null,
-    )
+    // No token and no cookie: the panel reads this from the DSH web shell,
+    // same-origin, where DSH's own authorization has already passed.
+    const answer = await statusRoute!.fetch(new Request('http://127.0.0.1/'))
     expect(answer.status).toBe(200)
+    const body = await answer.text()
 
-    const payload = JSON.parse(answer.body) as Record<string, unknown>
+    const payload = JSON.parse(body) as Record<string, unknown>
     expect(payload).toMatchObject({
       listening: true,
       mountedOnWebServer: false,
@@ -270,8 +270,8 @@ describe('apply() with harness services present', () => {
     expect(typeof payload.tokenFile).toBe('string')
     expect(payload.enabledToolGroups).toContain('workspace')
     // The whole point of a redacted view: the literal must not be reachable from
-    // an unauthenticated same-origin read.
-    expect(answer.body).not.toContain(TOKEN)
+    // the panel's own read.
+    expect(body).not.toContain(TOKEN)
     expect(payload).not.toHaveProperty('token')
   })
 })
