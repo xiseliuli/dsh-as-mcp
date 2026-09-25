@@ -220,6 +220,17 @@ export interface DshShellExecutor {
   execute?(spec: unknown): Promise<DshShellRunResult>
 }
 
+/**
+ * `ctx.sandboxPolicy` — packages/sandbox/sandbox-policy/src/index.ts
+ *
+ * Read-only use: the plugin consults the deployment's file policy before the one
+ * mutation it cannot route through the fs seam (creating a workspace directory).
+ */
+export interface DshSandboxPolicy {
+  readonly defaultMode?: string
+  resolve?(request?: unknown): { mode: string }
+}
+
 /** `ctx.approval` — packages/interaction/user-approval/src/index.ts */
 export interface DshApprovalService {
   setPolicy(agent: unknown, policy: 'ask' | 'never'): void

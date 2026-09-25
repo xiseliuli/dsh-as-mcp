@@ -213,6 +213,27 @@ describe('apply() with harness services present', () => {
     expect(payload.created).toBe(true)
   })
 
+  it('refuses to create the directory under the read-only file policy', async () => {
+    // `workspace_create` is the one mutation the driver cannot route through the
+    // fs seam, because the harness has no directory-creation primitive: the seam
+    // makes directories as a side effect of writing a file inside the fence, and
+    // `workspaceRegistry.create()` rejects a path that does not exist. So it uses
+    // `node:fs` — and it must still honour the deployment's policy rather than
+    // quietly writing on an instance that has said it is read-only.
+    const port = await freePort()
+    const root = await mkdtemp(join(tmpdir(), 'dsh-as-mcp-ws-ro-'))
+    const target = join(root, 'forbidden')
+    const { url } = await bootWithContext((context) => {
+      context.provide('workspaceRegistry', fakeWorkspaceRegistry())
+      context.provide('sandboxPolicy', { resolve: () => ({ mode: 'read-only' }) })
+      return pluginConfig({ port })
+    })
+
+    const response = await callTool(url, 'workspace_create', { path: target })
+    expect(response.text).toMatch(/read-only file policy/)
+    expect(existsSync(target)).toBe(false)
+  })
+
   it('explains a missing directory instead of leaking a raw ENOENT', async () => {
     const port = await freePort()
     const root = await mkdtemp(join(tmpdir(), 'dsh-as-mcp-ws-'))
@@ -477,6 +498,31 @@ describe('endpoint lifecycle', () => {
     const port = await freePort()
     await bootWithContext(() => pluginConfig({ port, enabled: false }))
     await expect(fetch(`http://127.0.0.1:${port}/mcp`, { method: 'POST', body: '{}' })).rejects.toThrow()
+  })
+})
+
+describe('argument ceilings', () => {
+  it('rejects a prompt wait long enough to hold the poll loop open forever', async () => {
+    // Each waiting call re-reads and replays the whole session log every 200 ms,
+    // and the turn queue only serialises per session, so an uncapped timeout lets
+    // one caller keep N loops alive. The schema refuses it at the edge.
+    const port = await freePort()
+    const { url } = await bootWithContext((context) => {
+      context.provide('sessionController', {
+        create: async () => ({ sessionId: 's' }),
+        list: async () => ({ items: [] }),
+        prompt: async () => ({ accepted: true }),
+        inspect: async () => ({ events: [] }),
+      })
+      return pluginConfig({ port })
+    })
+
+    const response = await callTool(url, 'session_prompt', {
+      sessionId: 's',
+      prompt: 'go',
+      timeoutMs: 24 * 60 * 60 * 1_000,
+    })
+    expect(response.text).toMatch(/too_big|600000|<=/i)
   })
 })
 

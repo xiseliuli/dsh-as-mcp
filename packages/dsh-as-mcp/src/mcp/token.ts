@@ -84,6 +84,12 @@ export function maskToken(token: string): string {
 
 /** Constant-time-ish comparison so a wrong token does not leak its prefix length. */
 export function tokenMatches(expected: string, presented: string | undefined): boolean {
+  // An empty expectation never matches, not even an empty presentation. The
+  // XOR loop below would otherwise report `'' === ''` as a match, which turns a
+  // caller-side mistake into an open endpoint. `resolveToken` never returns an
+  // empty token today, so this is defence in depth — but it is the one guard
+  // whose absence would be silent.
+  if (expected === '') return false
   if (presented === undefined) return false
   if (presented.length !== expected.length) return false
   let mismatch = 0

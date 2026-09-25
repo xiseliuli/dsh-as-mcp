@@ -239,6 +239,13 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .number()
             .int()
             .positive()
+            // Capped because each waiting call holds a poll loop that re-reads and
+            // replays the whole session log every 200 ms, and the queue only
+            // serialises per session — so an uncapped timeout lets a caller keep N
+            // loops alive indefinitely. Ten minutes is far beyond any real turn the
+            // wait is meant to cover; a caller that genuinely needs longer should
+            // poll `session_messages` instead of holding one call open.
+            .max(600_000)
             .optional()
             .describe('Upper bound for the wait. Defaults to the endpoint configuration.'),
         }),

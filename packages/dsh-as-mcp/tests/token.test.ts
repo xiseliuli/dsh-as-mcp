@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { TokenSource, maskToken, resolveToken } from '../src/mcp/token.js'
+import { TokenSource, maskToken, resolveToken, tokenMatches } from '../src/mcp/token.js'
 
 /** Point DSH_HOME at a scratch directory for the duration of one test. */
 function withHome(): string {
@@ -89,5 +89,23 @@ describe('maskToken', () => {
 
   it('does not throw on a token shorter than the prefix', () => {
     expect(maskToken('ab')).toBe('ab…(2 chars)')
+  })
+})
+
+describe('tokenMatches', () => {
+  it('matches only an identical token', () => {
+    expect(tokenMatches('abc123', 'abc123')).toBe(true)
+    expect(tokenMatches('abc123', 'abc124')).toBe(false)
+    expect(tokenMatches('abc123', 'abc12')).toBe(false)
+    expect(tokenMatches('abc123', undefined)).toBe(false)
+  })
+
+  it('never matches an empty expectation', () => {
+    // Without this guard the XOR loop reports '' === '' as a match, which would
+    // turn a caller-side mistake into an endpoint with no admission at all. The
+    // resolver never returns an empty token, so this is defence in depth — and it
+    // is the one guard whose absence would be silent.
+    expect(tokenMatches('', '')).toBe(false)
+    expect(tokenMatches('', 'anything')).toBe(false)
   })
 })

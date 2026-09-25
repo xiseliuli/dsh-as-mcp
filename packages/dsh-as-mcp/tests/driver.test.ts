@@ -1,5 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
-import { resolve } from 'node:path'
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative as relativeTo } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { DshDriver, locateTurn, type TurnResult } from '../src/dsh/driver.js'
@@ -105,10 +107,14 @@ function driverWith(sessions: ReturnType<typeof fakeSessions>): { driver: DshDri
   return { driver: new DshDriver(ctx, () => testConfig()), ctx }
 }
 
+/** Scratch directories removed after each test. */
+const scratch: string[] = []
+
 const contexts: Context[] = []
 
 afterEach(async () => {
   for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
+  for (const directory of scratch.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
 
 describe('locateTurn', () => {
@@ -364,14 +370,19 @@ describe('DshDriver.createSession', () => {
 
   it('resolves a relative cwd to an absolute one', async () => {
     // The session header requires an absolute path; forwarding a relative one
-    // would be accepted here and rejected by the harness later.
+    // would be accepted here and rejected by the harness later. The directory is
+    // also canonicalised, so the sandbox root is the directory that exists rather
+    // than the name it was reached by.
     const sessions = fakeSessions()
     const { driver } = driverWith(sessions)
+    const directory = mkdtempSync(join(tmpdir(), 'dsh-as-mcp-cwd-'))
+    scratch.push(directory)
+    const relative = relativeTo(process.cwd(), directory)
 
-    const created = await driver.createSession({ cwd: 'relative/dir' })
+    const created = await driver.createSession({ cwd: relative })
 
-    expect(sessions.creates[0]?.cwd).toBe(resolve('relative/dir'))
-    expect(created.cwd).toBe(resolve('relative/dir'))
+    expect(sessions.creates[0]?.cwd).toBe(realpathSync(directory))
+    expect(created.cwd).toBe(realpathSync(directory))
   })
 
   it('reports an unusable model without losing the session it created', async () => {
@@ -396,11 +407,52 @@ describe('DshDriver.createSession', () => {
   it('passes a bare directory through as cwd', async () => {
     const sessions = fakeSessions()
     const { driver } = driverWith(sessions)
+    const directory = mkdtempSync(join(tmpdir(), 'dsh-as-mcp-cwd-'))
+    scratch.push(directory)
 
-    await driver.createSession({ cwd: '/tmp/elsewhere' })
+    await driver.createSession({ cwd: directory })
 
-    expect(sessions.creates[0]).toEqual({ cwd: '/tmp/elsewhere' })
+    expect(sessions.creates[0]).toEqual({ cwd: realpathSync(directory) })
     expect(sessions.creates[0]).not.toHaveProperty('workspaceId')
+  })
+
+  it('refuses a session directory that does not exist', async () => {
+    // A `cwd` becomes the session's `workspaceRoot` — the sandbox's containment
+    // boundary for everything the agent then does. Accepting a path that is not
+    // there would defer the failure to the middle of a turn, where it reads as an
+    // agent problem rather than a bad argument.
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const absent = join(tmpdir(), `dsh-as-mcp-absent-${Date.now()}`)
+
+    await expect(driver.createSession({ cwd: absent })).rejects.toThrow(/does not exist/)
+    expect(sessions.creates).toHaveLength(0)
+  })
+
+  it('refuses a session directory that is a file', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const file = join(mkdtempSync(join(tmpdir(), 'dsh-as-mcp-cwd-')), 'a-file')
+    scratch.push(dirname(file))
+    writeFileSync(file, 'x')
+
+    await expect(driver.createSession({ cwd: file })).rejects.toThrow(/not a directory/)
+  })
+
+  it('canonicalises a symlinked session directory to its real location', async () => {
+    // The boundary must be the directory that exists, not the name it was reached
+    // by, or a symlink would place the real containment root somewhere the policy
+    // never agreed to.
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const real = mkdtempSync(join(tmpdir(), 'dsh-as-mcp-cwd-real-'))
+    const link = join(mkdtempSync(join(tmpdir(), 'dsh-as-mcp-cwd-link-')), 'link')
+    scratch.push(real, dirname(link))
+    symlinkSync(real, link)
+
+    await driver.createSession({ cwd: link })
+
+    expect(sessions.creates[0]?.cwd).toBe(realpathSync(real))
   })
 })
 

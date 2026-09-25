@@ -11,6 +11,10 @@
  * convenient. Every rejection modelled below is quoted from the harness source.
  */
 
+import { existsSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -96,11 +100,16 @@ function fakeFileSystem(files: Record<string, Buffer | string>): {
 }
 
 /** A driver over the given doubles. */
-function driverWith(services: { fs?: DshFileSystem; shell?: unknown }): DshDriver {
+function driverWith(services: {
+  fs?: DshFileSystem
+  shell?: unknown
+  sandboxPolicy?: unknown
+}): DshDriver {
   const ctx = new Context()
   contexts.push(ctx)
   if (services.fs !== undefined) ctx.provide('fs', services.fs)
   if (services.shell !== undefined) ctx.provide('shell', services.shell)
+  if (services.sandboxPolicy !== undefined) ctx.provide('sandboxPolicy', services.sandboxPolicy)
   return new DshDriver(ctx, () => testConfig())
 }
 
@@ -253,5 +262,57 @@ describe('the shell seam across harness versions', () => {
     const driver = driverWith({ shell: { resolve: () => ({}) } })
     await expect(driver.runShell({ command: 'echo hi', timeoutMs: 1_000 }))
       .rejects.toThrow(/neither run\(\) nor execute\(\)/)
+  })
+})
+
+describe('file_write never creates the parent outside the sandbox (F1)', () => {
+  it('does not mkdir through node:fs before the fs seam sees the write', async () => {
+    // The bug this encodes: `file_write {createDirectories: true}` used to call
+    // `node:fs` mkdir on a lexically-resolved parent BEFORE `fs.resolve`, so it ran
+    // ahead of the sandbox backend's `checkedTarget`. Under the fail-safe
+    // `read-only` default that created directories the policy forbids, and under
+    // `workspace-write` a symlinked ancestor put them outside the root before the
+    // write itself was refused. The seam's atomic write already mkdirs inside the
+    // fence (`fs-local/src/fsio.ts:578-580`), so the driver must not do it at all.
+    const workspace = join(tmpdir(), `dsh-as-mcp-f1-${process.pid}-${Date.now()}`, 'nested', 'deep')
+    const order: string[] = []
+    const fs: DshFileSystem = {
+      resolve: async (path: string) => {
+        order.push('resolve')
+        return targetFor(path)
+      },
+      processPath: (target: DshFsTarget) => target.displayPath,
+      stat: async () => ({ type: 'file' as const, size: 0 }),
+      readText: async () => '',
+      readByteRange: async () => new Uint8Array(),
+      listDir: async () => [],
+      // Modelled on the real sandbox backend, which refuses before writing.
+      writeText: async () => {
+        order.push('writeText')
+        throw Object.assign(new Error('FS_SANDBOX_DENIED: file access denied under read-only mode'), {
+          code: 'FS_SANDBOX_DENIED',
+        })
+      },
+    }
+
+    try {
+      await expect(
+        driverWith({ fs, sandboxPolicy: { defaultMode: 'read-only' } }).writeFile({
+          path: join(workspace, 'out.txt'),
+          content: 'x',
+          createDirectories: true,
+        }),
+      ).rejects.toThrow(/FS_SANDBOX_DENIED/)
+
+      // The seam was consulted, and nothing was created behind its back.
+      expect(order).toEqual(['resolve', 'writeText'])
+      expect(existsSync(workspace)).toBe(false)
+      expect(existsSync(dirname(workspace))).toBe(false)
+    } finally {
+      rmSync(join(tmpdir(), dirname(workspace).slice(dirname(workspace).lastIndexOf('dsh-as-mcp-f1-'))), {
+        recursive: true,
+        force: true,
+      })
+    }
   })
 })

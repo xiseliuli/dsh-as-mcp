@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve as resolveAbsolute } from 'node:path'
 
 import type { Config } from '../config.js'
@@ -14,6 +14,7 @@ import {
   type DshSessionController,
   type DshSessionEvent,
   type DshSessionQuery,
+  type DshSandboxPolicy,
   type DshShellExecutor,
   type DshWorkspaceRegistry,
 } from './types.js'
@@ -179,6 +180,33 @@ export class DshDriver {
     return this.ownedSessions.has(sessionId)
   }
 
+  /**
+   * Canonicalise a caller-supplied directory, insisting that it exists and is one.
+   *
+   * The sandbox policy takes a session's `cwd` as its `workspaceRoot`, so this is
+   * not cosmetic: whatever is returned here decides what the agent's write fence
+   * contains. `realpath` is deliberate — it resolves a symlinked root to its real
+   * location, so the boundary is the directory that actually exists rather than
+   * the name it was reached by.
+   */
+  private async requireUsableDirectory(path: string): Promise<string> {
+    const absolute = resolveAbsolute(path)
+    let canonical: string
+    try {
+      canonical = await realpath(absolute)
+    } catch {
+      throw new Error(
+        `cannot use "${path}" as a session directory: it does not exist. `
+        + 'Create it first, or pass a workspaceId instead.',
+      )
+    }
+    const info = await stat(canonical)
+    if (!info.isDirectory()) {
+      throw new Error(`cannot use "${path}" as a session directory: it is not a directory.`)
+    }
+    return canonical
+  }
+
   /** Capabilities the running profile actually provides, for diagnostics. */
   describeCapabilities(): Record<string, boolean> {
     return {
@@ -219,6 +247,20 @@ export class DshDriver {
 
   private shellExecutor(): DshShellExecutor | undefined {
     return serviceOf<DshShellExecutor>(this.ctx, 'shell')
+  }
+
+  /**
+   * The file policy this deployment enforces, or `undefined` when no sandbox
+   * policy service is mounted (a bare profile), in which case the caller's own
+   * configuration is the only authority and nothing is refused.
+   *
+   * Read per call rather than cached: the panel can change it live.
+   */
+  private sandboxMode(): string | undefined {
+    const policy = serviceOf<DshSandboxPolicy>(this.ctx, 'sandboxPolicy')
+    if (policy === undefined) return undefined
+    if (typeof policy.resolve === 'function') return policy.resolve().mode
+    return policy.defaultMode
   }
 
   private requireWorkspaceRegistry(): DshWorkspaceRegistry {
@@ -287,9 +329,30 @@ export class DshDriver {
     // with a raw ENOENT. That is the common case for this tool: registering a
     // project that does not exist yet.
     if (request.createDirectory !== false) {
+      // This is the one place the driver touches `node:fs`, and it has to: the fs
+      // seam exposes no directory-creation primitive, because the harness creates
+      // directories as a side effect of writing a file inside the fence, and
+      // `workspaceRegistry.create()` deliberately refuses a path that does not
+      // exist. Registering a project that does not exist yet therefore needs a
+      // real mkdir.
+      //
+      // What it must not do is ignore the deployment's own policy, so a
+      // `read-only` instance refuses rather than quietly writing. The fs
+      // sandbox's `workspace-write` containment is *not* applied here and cannot
+      // be: the directory being created is the new workspace root itself, which
+      // is by definition outside the roots that exist before it. The OS remains
+      // the only boundary for this single call, which is why it is gated on the
+      // policy and why `createDirectory: false` is available.
+      const mode = this.sandboxMode()
+      if (mode === 'read-only') {
+        throw new Error(
+          `cannot create the directory "${absolute}": this DSH instance runs the read-only file `
+          + 'policy, which forbids it. Create the directory outside this endpoint and call '
+          + 'workspace_create again, or change the policy.',
+        )
+      }
       // `workspaceRegistry.create()` canonicalizes through realpath and rejects a
-      // missing directory; it deliberately does not mkdir. `ctx.fs` exposes no
-      // mkdir either, so this is the one place the driver touches node:fs.
+      // missing directory; it deliberately does not mkdir.
       await mkdir(absolute, { recursive: true })
     }
 
@@ -360,8 +423,11 @@ export class DshDriver {
     const workspaceId = request.workspaceId
     // Resolved to an absolute path here: the session header requires one, and a
     // relative directory would otherwise be accepted by the call and rejected
-    // later by the harness.
-    let cwd = request.cwd === undefined ? undefined : resolveAbsolute(request.cwd)
+    // later by the harness. Canonicalised and checked, because this value becomes
+    // the session's `workspaceRoot` — the sandbox's containment boundary for
+    // everything the agent then does. A typo, a file, or a path that does not
+    // exist would otherwise be accepted here and fail confusingly much later.
+    let cwd = request.cwd === undefined ? undefined : await this.requireUsableDirectory(request.cwd)
     if (workspaceId === undefined && cwd === undefined) {
       throw new Error('provide either workspaceId or cwd when creating a session')
     }
@@ -592,14 +658,16 @@ export class DshDriver {
     createDirectories: boolean
   }): Promise<{ path: string; operation: 'create' | 'update' }> {
     const fs = this.requireFileSystem()
-    if (request.createDirectories) {
-      const absolute = isAbsolute(request.path)
-        ? request.path
-        : resolveAbsolute(request.cwd ?? process.cwd(), request.path)
-      const parent = resolveAbsolute(absolute, '..')
-      // As in createWorkspace: the fs seam exposes no mkdir.
-      await mkdir(parent, { recursive: true })
-    }
+    // Deliberately no `node:fs` mkdir here, even when `createDirectories` is set.
+    // Creating the parent ourselves would run *before* `fs.resolve`, and therefore
+    // before the sandbox backend's `checkedTarget`: under the fail-safe `read-only`
+    // default it would create directories the policy forbids, and under
+    // `workspace-write` a symlinked ancestor would land them outside the root
+    // before the write itself was refused. It is also unnecessary — the seam's
+    // atomic write already does `mkdir(dirname(target), { recursive: true })`
+    // inside the fence (`fs-local/src/fsio.ts:578-580`). `createDirectories` is
+    // kept in the schema because it is a no-op that documents intent, not because
+    // the driver acts on it.
     const target = await fs.resolve(request.path, {
       ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
     })
