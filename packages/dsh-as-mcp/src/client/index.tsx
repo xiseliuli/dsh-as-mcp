@@ -9,8 +9,8 @@
  */
 
 import type { Config } from '../config.js'
-import type { EndpointStatus } from '../status.js'
-import type { ClientContext } from './contract.js'
+import { STATUS_ROUTE, type EndpointStatus } from '../status.js'
+import type { ClientContext, SettingsScopeService } from './contract.js'
 import { NS, en, zh } from './locales.js'
 import { McpSection, type SectionStore } from './section.js'
 import './styles.js'
@@ -19,16 +19,58 @@ import './styles.js'
  * Cordis service names this bundle needs before it can register.
  *
  * These are *services*, not packages — a separate list from any
- * `dsh.client.inject` of package names. `settingsScope` is required rather than
- * optional: without the settings UI there is no panel to contribute to.
+ * `dsh.client.inject` of package names.
+ *
+ * `settingsScope` is deliberately absent. The only thing that can create the
+ * `settings.section` slot is the settings UI itself, so whenever this bundle's
+ * registration callback runs, the service is there; resolving it inside that
+ * callback costs nothing and removes a failure mode. Declaring it would leave the
+ * entry waiting on a service in exactly the profile where the slot never appears
+ * and nothing needed it — and a browser entry that waits on a missing service
+ * fails the shell's boot audit, which is a far worse outcome than a panel that is
+ * not offered.
  */
-export const inject = ['slots', 'locale', 'settingsScope']
+export const inject = ['slots', 'locale']
 
 /** Where the generated token lives, when the host has not told us otherwise. */
 const FALLBACK_TOKEN_FILE = '~/.dsh/dsh-as-mcp/token'
 
-/** The host's read-only status route. */
-const STATUS_PATH = '/api/dsh-as-mcp/status'
+/**
+ * Build the bound store, or `undefined` when this profile has no settings scope.
+ * @param ctx - the browser plugin context.
+ */
+function buildStore(ctx: ClientContext): SectionStore | undefined {
+  const scope = (ctx.get('settingsScope') as SettingsScopeService | undefined)?.bind<Config>({
+    namespace: NS,
+  })
+  if (scope === undefined) return undefined
+  const mirror = (ctx.get('settingsScope') as SettingsScopeService).describe()
+
+  return {
+    subscribe: (listener) => scope.subscribe(listener),
+    getSnapshot: () => scope.getSnapshot(),
+    mutate: (ops, revision) => scope.mutate(ops, revision),
+    secretIsSet: () => {
+      // The bound scope's snapshot drops the `secrets` sidecar, so the only
+      // place to learn that a token is pinned is the raw describe mirror. The
+      // literal itself never crosses the wire.
+      const view = mirror.getSnapshot().view
+      const namespace = view?.namespaces.find((entry) => entry.ns === NS)
+      return namespace?.secrets.some((secret) => secret.path.join('.') === 'auth.token' && secret.set) ?? false
+    },
+    readStatus: async () => {
+      try {
+        const response = await fetch(STATUS_ROUTE, { headers: { accept: 'application/json' } })
+        if (!response.ok) return undefined
+        return (await response.json()) as EndpointStatus
+      } catch {
+        // A host that mounts no status route is not an error worth rendering:
+        // the configuration half of the panel is fully functional without it.
+        return undefined
+      }
+    },
+  }
+}
 
 /**
  * Mount the section.
@@ -46,43 +88,19 @@ export function apply(ctx: ClientContext): void {
     }, 'dsh-as-mcp: dictionaries')
   } catch (error) {
     // Dictionaries are a nicety; the section is the point. Losing one must not
-    // cost the other, and a raw key still renders as a word in the fallback path.
+    // cost the other, and the component falls back to readable built-in strings.
     console.warn('[dsh-as-mcp] locale.register failed; falling back to built-in strings:', error)
   }
 
-  const scope = ctx.settingsScope.bind<Config>({ namespace: NS })
-  const mirror = ctx.settingsScope.describe()
-
-  const store: SectionStore = {
-    subscribe: (listener) => scope.subscribe(listener),
-    getSnapshot: () => scope.getSnapshot(),
-    mutate: (ops, revision) => scope.mutate(ops, revision),
-    secretIsSet: () => {
-      // The bound scope's snapshot drops the `secrets` sidecar, so the only
-      // place to learn that a token is pinned is the raw describe mirror. The
-      // literal itself never crosses the wire.
-      const view = mirror.getSnapshot().view
-      const namespace = view?.namespaces.find((entry) => entry.ns === NS)
-      return namespace?.secrets.some((secret) => secret.path.join('.') === 'auth.token' && secret.set) ?? false
-    },
-    readStatus: async () => {
-      try {
-        const response = await fetch(STATUS_PATH, { headers: { accept: 'application/json' } })
-        if (!response.ok) return undefined
-        return (await response.json()) as EndpointStatus
-      } catch {
-        // A host that mounts no status route is not an error worth rendering:
-        // the configuration half of the panel is fully functional without it.
-        return undefined
-      }
-    },
-  }
+  let store: SectionStore | undefined
 
   // `slots.inject` rather than a bare `register`, so a late-declared or
   // re-declared slot is followed instead of missed — the settings shell declares
   // this hole, and this bundle must not assume it is already there.
-  ctx.slots.inject('settings.section', () =>
-    ctx.slots.register(
+  ctx.slots.inject('settings.section', () => {
+    store ??= buildStore(ctx)
+    if (store === undefined) return undefined
+    return ctx.slots.register(
       {
         name: 'settings.section',
         id: 'mcp',
@@ -92,6 +110,6 @@ export function apply(ctx: ClientContext): void {
         inject: () => ({ store, tokenFile: FALLBACK_TOKEN_FILE }),
       },
       McpSection,
-    ),
-  )
+    )
+  })
 }

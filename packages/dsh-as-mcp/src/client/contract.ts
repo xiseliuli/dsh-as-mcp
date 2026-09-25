@@ -103,10 +103,16 @@ export interface LocaleService {
   bind(ns: string): (key: string) => string
 }
 
-/** The browser plugin context. */
+/**
+ * The browser plugin context.
+ *
+ * Services are resolved through `get` rather than declared as properties, so a
+ * profile missing one yields `undefined` instead of a throw or a wait. This
+ * mirrors the host half, which resolves every capability the same way.
+ */
 export interface ClientContext {
   readonly locale: LocaleService
   readonly slots: SlotService
-  readonly settingsScope: SettingsScopeService
+  get(key: string): unknown
   effect(callback: () => void | (() => void), label: string): void
 }
