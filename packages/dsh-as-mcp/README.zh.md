@@ -199,6 +199,24 @@ cd /path/to/dsh-plugins/packages/dsh-as-mcp && pnpm pack --pack-destination /tmp
 cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
 ```
 
+> **覆盖安装时，务必换一个 tarball 路径。**
+> `pnpm` 把 `file:` 依赖按**路径**记录；从同一路径重装会报 `added 0`，却仍然链接着上一份内容——
+> 一个能启动、能运行、但静默过期的构建。让每次构建的文件名唯一，spec 字符串才会跟着变：
+>
+> ```bash
+> TARBALL=/tmp/dsh-as-mcp-$(date +%s).tgz
+> cd /path/to/dsh-plugins/packages/dsh-as-mcp && pnpm pack --pack-destination "$(dirname $TARBALL)"
+> mv /tmp/dsh-as-mcp-0.1.0.tgz "$TARBALL"
+> cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp && pnpm add "$TARBALL"
+> ```
+>
+> 然后核对字节数是否真的相同，否则你测的是旧构建：
+>
+> ```bash
+> wc -c ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/lib/index.js \
+>       /path/to/dsh-plugins/packages/dsh-as-mcp/lib/index.js
+> ```
+
 ### 2. 把插件行写进 profile 自己的 patch 层
 
 编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`（把其中的 `[]` 替换为）：
