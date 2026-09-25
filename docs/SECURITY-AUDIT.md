@@ -42,6 +42,25 @@ not the workspace a user would assume, and the plugin is what makes that reachab
 
 ---
 
+## Remediation status
+
+Recorded at commit `946c5f9`, so this audit stays useful rather than reading as a list of open holes.
+
+| Finding | Status |
+| --- | --- |
+| **F1** sandbox bypass via `node:fs` mkdir | **Fixed.** `file_write`'s pre-mkdir is deleted — the seam already creates parents inside the fence, so it was pure downside. `workspace_create` keeps its mkdir (the harness has no directory-creation primitive) but now reads `ctx.sandboxPolicy` and refuses under `read-only`; its `workspace-write` gap is documented in the code, because the directory being created *is* the new root. Regression test asserts a sandbox-denied write leaves no directory behind, and fails against the old code. |
+| **F2** caller chooses the containment root | **Partly fixed.** `session_create {cwd}` is canonicalised through `realpath` and must be an existing directory, so a typo, a file, or a symlink to somewhere else is rejected at the argument rather than mid-turn. Choosing a *wide* root (`/`) still works — that is a policy choice, so `session.allowedRoots` is left as a recommendation in F2's "fix" rather than invented. Reporting the effective preset in `dsh_info` is still open. |
+| **F3** token passed to `log.info` | **Fixed** in source and now **in the deployed build**: rebuilt, repacked and reinstalled, so `lib/index.js` contains `maskToken`. Takes effect after a DSH Desktop restart. |
+| **F4** instance-wide session access | **Accepted and documented**, as the audit recommends. Both READMEs state that `session_list`/`session_messages` reach every session, that this is not an escalation because the same bytes are in `$DSH_HOME/sessions`, and that it is a privacy consequence to weigh before handing out a token. `session.scope` is not implemented. |
+| **F5** unbounded wait | **Fixed** for the schema half: `session_prompt.timeoutMs` is capped at 10 minutes. The deeper half — subscribing to session events instead of replaying the whole log every 200 ms per waiter — is not done, so the cost per wait is unchanged; only the number of indefinitely-open waits is bounded. |
+| **F6** `tokenMatches('','')` | **Fixed.** An empty expectation never matches. |
+| **F7** unserialized `reconcile()`, disposal not re-checked | **Open.** Low. |
+| **F8** dropped handler promise | **Open.** Low; no reachable trigger was found. |
+
+The hardening notes at the end are likewise unremediated, except the deployed token-log path covered by F3.
+
+---
+
 ## Findings
 
 ### F1 — `file_write` / `workspace_create` create directories with `node:fs`, before and outside the sandbox policy (High)
