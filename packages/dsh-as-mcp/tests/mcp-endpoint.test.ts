@@ -76,9 +76,12 @@ describe('MCP Streamable HTTP endpoint', () => {
     const { isError, text } = await callTool(url, 'dsh_info', {})
     expect(isError).toBe(false)
     expect(JSON.parse(text)).toMatchObject({
-      bearerToken: TOKEN,
+      tokenSource: expect.any(String),
       enabledToolGroups: { shell: false, session: true },
     })
+    // dsh_info describes the endpoint; it must not disclose the credential that
+    // reached it, or every calling agent's transcript would carry the secret.
+    expect(text).not.toContain(TOKEN)
   })
 
   it('routes a tool argument through to the driver', async () => {

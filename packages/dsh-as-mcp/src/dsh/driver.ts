@@ -280,16 +280,35 @@ export class DshDriver {
     const registry = this.requireWorkspaceRegistry()
     const absolute = isAbsolute(request.path) ? request.path : resolveAbsolute(request.path)
 
-    const existing = await registry.resolveByPath(absolute)
-    if (existing !== undefined) {
-      return { workspace: await this.toWorkspaceInfo(existing), created: false }
-    }
-
+    // The directory is created *before* the lookup, and the order matters.
+    // `workspaceRegistry.resolveByPath` REJECTS on a path that does not exist
+    // rather than returning `undefined` — the harness documents exactly that — so
+    // asking it about a directory that is about to be created fails the whole call
+    // with a raw ENOENT. That is the common case for this tool: registering a
+    // project that does not exist yet.
     if (request.createDirectory !== false) {
       // `workspaceRegistry.create()` canonicalizes through realpath and rejects a
       // missing directory; it deliberately does not mkdir. `ctx.fs` exposes no
       // mkdir either, so this is the one place the driver touches node:fs.
       await mkdir(absolute, { recursive: true })
+    }
+
+    let existing: Awaited<ReturnType<DshWorkspaceRegistry['resolveByPath']>>
+    try {
+      existing = await registry.resolveByPath(absolute)
+    } catch (error) {
+      // Turn the raw realpath failure into something a calling agent can act on:
+      // it names the missing directory and the argument that creates it.
+      if ((error as { code?: unknown }).code === 'ENOENT') {
+        throw new Error(
+          `cannot register ${absolute} as a workspace: the directory does not exist. `
+          + 'Pass createDirectory: true (the default) to create it.',
+        )
+      }
+      throw error
+    }
+    if (existing !== undefined) {
+      return { workspace: await this.toWorkspaceInfo(existing), created: false }
     }
 
     const workspace = await registry.create(absolute, request.title)

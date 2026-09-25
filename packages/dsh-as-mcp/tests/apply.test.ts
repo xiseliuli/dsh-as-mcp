@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -81,7 +82,7 @@ function pluginConfig(overrides: {
 function fakeWorkspaceRegistry(): {
   list: () => unknown[]
   get: (id: string) => unknown
-  resolveByPath: () => Promise<undefined>
+  resolveByPath: (path: string) => Promise<unknown>
   create: (path: string, title?: string) => Promise<unknown>
 } {
   const workspace = {
@@ -96,7 +97,18 @@ function fakeWorkspaceRegistry(): {
   return {
     list: () => [workspace],
     get: (id: string) => (id === 'ws-1' ? workspace : undefined),
-    resolveByPath: async () => undefined,
+    // Faithful to the real service, which canonicalizes through realpath: a path
+    // that does not exist REJECTS with ENOENT rather than resolving to undefined.
+    // Modelling that faithfully is the point — a friendlier stub here is what let
+    // a real "cannot create a new workspace directory" bug through.
+    resolveByPath: async (path: string) => {
+      if (!existsSync(path)) {
+        throw Object.assign(new Error(`ENOENT: no such file or directory, realpath '${path}'`), {
+          code: 'ENOENT',
+        })
+      }
+      return undefined
+    },
     create: async (path: string, title?: string) => ({ ...workspace, path, title: title ?? 'Fake' }),
   }
 }
@@ -179,6 +191,45 @@ describe('apply() with harness services present', () => {
     }
     expect(listed.workspaces).toHaveLength(1)
     expect(listed.workspaces[0]).toMatchObject({ id: 'ws-1', path: '/tmp/fake-workspace' })
+  })
+
+  it('creates a workspace directory that does not exist yet', async () => {
+    // The tool's headline use — register a new project — and the case a real
+    // install broke on: `resolveByPath` rejects an absent path instead of
+    // returning undefined, so looking it up before creating it failed the whole
+    // call with a raw ENOENT.
+    const port = await freePort()
+    const root = await mkdtemp(join(tmpdir(), 'dsh-as-mcp-ws-'))
+    const target = join(root, 'brand-new-project')
+    const { url } = await bootWithContext((context) => {
+      context.provide('workspaceRegistry', fakeWorkspaceRegistry())
+      return pluginConfig({ port })
+    })
+    expect(existsSync(target)).toBe(false)
+
+    const { text } = await callTool(url, 'workspace_create', { path: target })
+    const payload = JSON.parse(text) as { created: boolean; workspace: { path: string } }
+    expect(existsSync(target)).toBe(true)
+    expect(payload.created).toBe(true)
+  })
+
+  it('explains a missing directory instead of leaking a raw ENOENT', async () => {
+    const port = await freePort()
+    const root = await mkdtemp(join(tmpdir(), 'dsh-as-mcp-ws-'))
+    const target = join(root, 'absent')
+    const { url } = await bootWithContext((context) => {
+      context.provide('workspaceRegistry', fakeWorkspaceRegistry())
+      return pluginConfig({ port })
+    })
+
+    const { isError, text } = await callTool(url, 'workspace_create', {
+      path: target,
+      createDirectory: false,
+    })
+    expect(isError).toBe(true)
+    // Named directory, and the argument that fixes it — not `ENOENT: realpath`.
+    expect(text).toContain(target)
+    expect(text).toContain('createDirectory')
   })
 
   it('mounts on the DSH web server as an exact route when asked', async () => {

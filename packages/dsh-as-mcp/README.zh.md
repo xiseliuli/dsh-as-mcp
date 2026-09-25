@@ -73,7 +73,7 @@ dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 
 `dsh-as-mcp --help` 会打印它将使用的端点和 token 状态。
 
-**先调 `dsh_info`**。它会返回端点、token、哪些工具组开着，以及——这点很关键——当前 profile
+**先调 `dsh_info`**。它会返回端点、token 的来源、哪些工具组开着，以及——这点很关键——当前 profile
 实际提供了哪些 harness 服务，这样客户端能区分「这个 profile 没有 shell」和「这条命令执行
 失败了」。
 
@@ -81,7 +81,7 @@ dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 
 | 工具 | 作用 |
 | --- | --- |
-| `dsh_info` | 端点、token、已启用的工具组、可用的 harness 服务。 |
+| `dsh_info` | 端点、token 来源、已启用的工具组、可用的 harness 服务。 |
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、会话数、目录是否还在。 |
 | `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话。 |
@@ -107,7 +107,9 @@ workspace_create { path: "/Users/me/project" }
 
 ## 安全
 
-这个端点等于远程操控一个拥有 shell 权限的编码 agent。请把 token 当 SSH 私钥对待。
+这个端点等于远程操控一个拥有 shell 权限的编码 agent。请把 token 当 SSH 私钥对待——插件自己也是
+这么做的：没有任何工具会返回它的值。`dsh_info` 只报 token 的来源（文件路径或配置），不报明文，
+所以调用方 agent 的上下文里不会攒下这个凭证。
 
 - 监听绑定在 `127.0.0.1`，所有请求都做 bearer 校验——包括挂在 DSH 自身 web server 上的那条
   路由。把 `http.host` 改成 `0.0.0.0` 等于把同样的权力开放到你的网络，只在你自己的网关后面

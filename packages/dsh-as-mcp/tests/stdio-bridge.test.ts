@@ -114,8 +114,12 @@ describe('stdio ⇄ HTTP bridge', () => {
     expect((list.tools ?? []).map((tool) => tool.name)).toContain('workspace_create')
 
     const call = replies[2]?.result as { content?: { text: string }[] }
-    const payload = JSON.parse(call.content?.[0]?.text ?? '{}') as { bearerToken: string }
-    expect(payload.bearerToken).toBe(TOKEN)
+    // Reaching a tool result at all proves the bridge forwarded the same token
+    // the endpoint demands: a wrong or missing one is a 401 before any tool runs.
+    const payload = JSON.parse(call.content?.[0]?.text ?? '{}') as { tokenSource?: string }
+    expect(typeof payload.tokenSource).toBe('string')
+    // And the result must not hand the credential back.
+    expect(call.content?.[0]?.text ?? '').not.toContain(TOKEN)
   })
 
   it('reads the token from <DSH_HOME>/dsh-as-mcp/token when no env token is set', async () => {

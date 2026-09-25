@@ -75,7 +75,7 @@ endpoint over HTTP:
 
 `dsh-as-mcp --help` prints the endpoint and token state it will use.
 
-Start with **`dsh_info`**. It reports the endpoint, the token, which tool groups are enabled,
+Start with **`dsh_info`**. It reports the endpoint, where its token comes from, which tool groups are enabled,
 and — importantly — which harness services the current profile actually provides, so a client
 can tell "this profile has no shell" from "the command failed".
 
@@ -83,7 +83,7 @@ can tell "this profile has no shell" from "the command failed".
 
 | Tool | What it does |
 | --- | --- |
-| `dsh_info` | Endpoint, token, enabled groups, available harness services. |
+| `dsh_info` | Endpoint, token source, enabled groups, available harness services. |
 | `workspace_create` | Register a directory as a DSH workspace (creating it if needed). |
 | `workspace_list` | Every registered workspace with id, path, title, session count, directory status. |
 | `session_create` | Start a DSH agent session bound to a workspace or bare directory. |
@@ -111,7 +111,9 @@ something yourself without involving the agent.
 ## Security
 
 This endpoint is remote control of a coding agent that has shell access. Treat the token like
-an SSH key.
+an SSH key — and note that the plugin does too: no tool returns its value. `dsh_info` reports
+where the token comes from (a file path or the composition), never the literal, so a calling
+agent's transcript never accumulates the credential.
 
 - The listener binds to `127.0.0.1` and every request is bearer-checked, including requests on
   a route mounted on DSH's own web server. Setting `http.host: 0.0.0.0` exposes that same

@@ -105,8 +105,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       title: 'Describe this DSH MCP endpoint',
       description:
         'Report which DeepSeek Harness services this endpoint can drive, which tool groups are enabled, '
-        + 'and the URL plus bearer token an MCP client needs. Call this first when you are unsure whether '
-        + 'a capability (sessions, files, shell) is available in this DSH profile.',
+        + 'and the endpoint URL plus where its bearer token comes from. Call this first when you are unsure '
+        + 'whether a capability (sessions, files, shell) is available in this DSH profile.',
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -115,8 +115,13 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       const live = status()
       return ok({
         endpoint: info.url,
-        bearerToken: info.token,
+        // The token itself is deliberately absent. Its value is not needed by a
+        // caller that just authenticated with it, and echoing a live credential
+        // puts it into every calling agent's transcript and logs. `tokenSource`
+        // and `tokenFile` say where it comes from, which is what a client that
+        // legitimately needs to hand it on actually requires.
         tokenSource: info.tokenSource,
+        tokenFile: live.tokenFile,
         mountedOnDshWebServer: info.mountedOnWebServer,
         listening: live.listening,
         listenError: live.error,
