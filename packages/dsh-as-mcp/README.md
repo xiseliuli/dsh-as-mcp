@@ -44,6 +44,12 @@ Every request needs a bearer token. It is resolved in this order:
 
 The default endpoint is `http://127.0.0.1:8790/mcp`.
 
+A client that cannot set a header may pass `?token=<token>` instead. Prefer the header: a
+credential in a URL is one your shell history, a reverse proxy's access log, or a browser's
+history may keep. DSH itself does not log query strings (`webserver/src/index.ts:224`) and the
+plugin does not log the token, so this is a habit worth keeping rather than a leak this code
+introduces.
+
 **HTTP-capable client** (Streamable HTTP):
 
 ```json
@@ -116,11 +122,32 @@ where the token comes from (a file path or the composition), never the literal, 
 agent's transcript never accumulates the credential.
 
 - The listener binds to `127.0.0.1` and every request is bearer-checked, including requests on
-  a route mounted on DSH's own web server. Setting `http.host: 0.0.0.0` exposes that same
-  power to your network — do it only behind your own gateway.
-- Narrow the surface with the `tools` toggles. A profile that should never run commands sets
-  `tools.shell: false`; the tool is then not registered at all, so a client cannot even
-  discover it.
+  a route mounted on DSH's own web server. That check is the *only* gate there: an exact route
+  registered on the web server is matched **before** DSH's authorization fence — anything
+  unmatched is handed to that fence as a fallback (`webserver/src/index.ts:222-227`) — so with
+  `http.mountOnWebServer: true` the endpoint does not inherit your browser session's
+  protection, it enforces its own. Setting `http.host: 0.0.0.0` exposes that same power to your
+  network; do it only behind your own gateway.
+- **The token is the entire security boundary, and that boundary is your user account.** There
+  is no path sandbox. Once a caller holds the token, `file_read`/`file_write`/`file_list` reach
+  anything the DSH process can reach, and `shell_run` runs arbitrary commands as you — because
+  that is exactly what the harness's own `fs` and `shell` services do for DSH's own agent. Both
+  properties were verified against a live instance: `file_read` returned `/etc/passwd`,
+  `~/.dsh/settings.yaml`, and this plugin's own token file; `file_write` created a file outside
+  every registered workspace. A workspace sets where a *session's* agent starts; it does not
+  fence these tools.
+- **The bridge is instance-wide, not per-caller.** `session_list` enumerates every session in
+  this DSH instance and `session_messages` reads any of their transcripts — verified reading a
+  session this plugin did not create. Those are the sessions you have been talking to DSH in, so
+  a token holder sees your conversation history, and a calling agent's context accumulates it.
+  This is not an escalation (the same bytes are in `$DSH_HOME/sessions`, reachable through
+  `shell_run`), but it is a privacy consequence worth knowing before you hand out a token.
+- Consequently the `tools` toggles **narrow what a client can discover and call; they are not
+  containment.** `tools.shell: false` removes the shell tool, but `file_write` still writes your
+  shell startup files and `file_read` still reads your credentials, so a profile with the shell
+  tool switched off is not safe to hand to a caller you would not give a login to. For real
+  containment, run the whole DSH instance inside an OS-level sandbox or as a dedicated
+  unprivileged account, and treat the token as that account's password.
 - `approval.policy` decides what happens when the DSH agent wants to run something the harness
   would normally ask a human about:
   - `inherit` (default) — the plugin does not answer. With no browser attached, an

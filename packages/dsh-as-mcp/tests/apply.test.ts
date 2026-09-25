@@ -479,3 +479,36 @@ describe('endpoint lifecycle', () => {
     await expect(fetch(`http://127.0.0.1:${port}/mcp`, { method: 'POST', body: '{}' })).rejects.toThrow()
   })
 })
+
+describe('token hygiene in the log', () => {
+  it('announces the endpoint with a masked token, never the literal', async () => {
+    const port = await freePort()
+    const lines: string[] = []
+    const root = new Context()
+    contexts.push(root)
+    const capture =
+      (...args: unknown[]) =>
+        lines.push(args.map((argument) => String(argument)).join(' '))
+    root.logger = { debug: capture, info: capture, warn: capture, error: capture } as never
+
+    apply(root, pluginConfig({ port, token: TOKEN }))
+    const url = `http://127.0.0.1:${port}/mcp`
+    await waitForEndpoint(url)
+
+    // The announcement runs after the async reconcile, so give it a moment to land.
+    const deadline = Date.now() + 2_000
+    while (!lines.some((line) => line.includes('Bearer ')) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+
+    // The property that matters: a log file is a file, and this one never holds
+    // the credential. DSH's own logger masks the value today, but that is a host
+    // behaviour the plugin does not control — masking here makes it local.
+    expect(lines.some((line) => line.includes(TOKEN))).toBe(false)
+
+    // And the line is still useful for setting up a client.
+    const announcement = lines.find((line) => line.includes('Bearer '))
+    expect(announcement).toBeDefined()
+    expect(announcement).toContain(`${TOKEN.slice(0, 4)}…`)
+  })
+})

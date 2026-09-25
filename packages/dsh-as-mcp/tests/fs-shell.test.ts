@@ -199,3 +199,59 @@ describe('runShell', () => {
     expect(result).toMatchObject({ stdout: 'out', stderr: '', stdoutTruncated: false, exitCode: 0 })
   })
 })
+
+describe('the shell seam across harness versions', () => {
+  it('runs through `execute` when the host has no `run`', async () => {
+    // 0.1.7-rc.2 replaced `shell.run` with `shell.execute` and dropped `run`
+    // entirely. Calling `run` unconditionally would fail there with "not a
+    // function", so the driver has to pick whichever the host provides.
+    const calls: unknown[] = []
+    const shell = {
+      resolve: (request: unknown) => ({ resolvedFrom: request }),
+      execute: async (spec: unknown) => {
+        calls.push(spec)
+        return {
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          aborted: false,
+          timeoutMs: 1_000,
+          stdout: { text: 'via execute\n', truncated: false },
+          stderr: { text: '', truncated: false },
+        }
+      },
+    }
+    const driver = driverWith({ shell })
+    const result = await driver.runShell({ command: 'echo hi', timeoutMs: 1_000 })
+    expect(result.stdout).toBe('via execute\n')
+    expect(result.exitCode).toBe(0)
+    expect(calls).toEqual([{ resolvedFrom: { command: 'echo hi', timeoutMs: 1_000 } }])
+  })
+
+  it('still prefers `run` where the host has it', async () => {
+    const seen: string[] = []
+    const shell = {
+      resolve: () => ({ spec: true }),
+      run: async () => {
+        seen.push('run')
+        return {
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1_000,
+          stdout: { text: 'via run\n', truncated: false }, stderr: { text: '', truncated: false },
+        }
+      },
+      execute: async () => {
+        seen.push('execute')
+        throw new Error('execute should not be called when run exists')
+      },
+    }
+    const result = await driverWith({ shell }).runShell({ command: 'echo hi', timeoutMs: 1_000 })
+    expect(result.stdout).toBe('via run\n')
+    expect(seen).toEqual(['run'])
+  })
+
+  it('explains itself when the host exposes neither', async () => {
+    const driver = driverWith({ shell: { resolve: () => ({}) } })
+    await expect(driver.runShell({ command: 'echo hi', timeoutMs: 1_000 }))
+      .rejects.toThrow(/neither run\(\) nor execute\(\)/)
+  })
+})

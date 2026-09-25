@@ -64,6 +64,24 @@ export function resolveToken(configured: string): ResolvedToken {
   return { token, source: 'generated', file }
 }
 
+/**
+ * A token's public fingerprint: enough to confirm that the token in use is the
+ * one the endpoint holds, useless for presenting it.
+ *
+ * The log line that announces the endpoint is the one place a token could leak
+ * into a file, and DSH's own logger does happen to mask it today — verified by
+ * logging the raw value and grepping the whole log tree for it. Relying on that
+ * is relying on a host behaviour this plugin does not control, and a host is
+ * free to stop masking. Masking here makes the property local and keeps the
+ * debugging value: a prefix mismatch still tells an operator they hold the wrong
+ * token.
+ */
+export function maskToken(token: string): string {
+  if (token === '') return '(empty)'
+  const prefix = token.slice(0, 4)
+  return `${prefix}…(${token.length} chars)`
+}
+
 /** Constant-time-ish comparison so a wrong token does not leak its prefix length. */
 export function tokenMatches(expected: string, presented: string | undefined): boolean {
   if (presented === undefined) return false

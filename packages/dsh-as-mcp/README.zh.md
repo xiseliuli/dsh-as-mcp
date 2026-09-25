@@ -42,6 +42,11 @@ dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 
 默认端点是 `http://127.0.0.1:8790/mcp`。
 
+无法设置请求头的客户端可以改用 `?token=<token>`。但优先用请求头：写在 URL 里的凭证可能被
+你的 shell 历史、反向代理的访问日志、或浏览器历史留下。DSH 自己不记录查询串
+（`webserver/src/index.ts:224`），插件也不记录 token，所以这更多是一个值得养成的习惯，而不是
+这段代码引入的泄漏。
+
 **支持 HTTP 的客户端**（Streamable HTTP）：
 
 ```json
@@ -112,10 +117,26 @@ workspace_create { path: "/Users/me/project" }
 所以调用方 agent 的上下文里不会攒下这个凭证。
 
 - 监听绑定在 `127.0.0.1`，所有请求都做 bearer 校验——包括挂在 DSH 自身 web server 上的那条
-  路由。把 `http.host` 改成 `0.0.0.0` 等于把同样的权力开放到你的网络，只在你自己的网关后面
-  这么做。
-- 用 `tools` 开关收窄暴露面。一个绝不该执行命令的 profile 就设 `tools.shell: false`，此时该
-  工具根本不会注册，客户端连发现都发现不了。
+  路由。但在那条路由上，**这个校验是唯一的关卡**：插件注册的精确路由会先于 DSH 的鉴权围栏被
+  匹配，没匹配上的请求才会作为 fallback 交给围栏（`webserver/src/index.ts:222-227`）。所以
+  `http.mountOnWebServer: true` 并**不**继承你浏览器会话的保护，它自带准入。把 `http.host`
+  改成 `0.0.0.0` 等于把同样的权力开放到你的网络，只在你自己的网关后面这么做。
+- **token 就是全部的安全边界，而这个边界等于你的用户账号。** 这里没有任何路径沙箱。调用方一旦
+  持有 token，`file_read`／`file_write`／`file_list` 就能触及 DSH 进程能触及的一切，`shell_run`
+  就是以你的身份执行任意命令——因为 harness 自己的 `fs` 与 `shell` 服务替 DSH agent 做事时正是
+  如此。两条都在实机上验证过：`file_read` 读出了 `/etc/passwd`、`~/.dsh/settings.yaml` 以及本
+  插件自己的 token 文件；`file_write` 在**所有**已注册工作区之外创建了文件。工作区决定的是
+  *会话的 agent 从哪里开始*，它并不围住这些工具。
+- **这座桥是实例级的，不按调用方隔离。** `session_list` 会枚举本实例中的**每一个**会话，
+  `session_messages` 能读取其中任何一个的记录——已实测读到了一个并非本插件创建的会话。那些
+  正是你和 DSH 对话的会话，所以令牌持有者能看到你的对话历史，而调用方 agent 的上下文也会把
+  它攒下来。这不是越权（同样的字节就在 `$DSH_HOME/sessions`，用 `shell_run` 一样能读到），
+  但它是一个在你分发令牌之前值得知道的隐私后果。
+- 因此 `tools` 开关**收窄的是客户端能发现和调用的范围，而不是隔离**。`tools.shell: false`
+  会移除 shell 工具，但 `file_write` 照样能写你的 shell 启动文件、`file_read` 照样能读你的
+  凭证——所以关掉 shell 工具的 profile，**不等于**可以交给一个你不愿给登录权限的调用方。
+  要真正的隔离，请把整个 DSH 实例跑在操作系统级沙箱里、或用独立的非特权账号运行，并把 token
+  当作那个账号的密码。
 - `approval.policy` 决定 DSH agent 想做一件本该问人的事时怎么办：
   - `inherit`（默认）—— 插件不参与应答。没有浏览器接进来时，需要审批的工具会解析为
     `unavailable`，即 agent 的动作**失败关闭**。

@@ -12,7 +12,7 @@ import {
   type EndpointHandle,
   type WebServerLike,
 } from './mcp/http.js'
-import { resolveToken } from './mcp/token.js'
+import { maskToken, resolveToken } from './mcp/token.js'
 import type { ConnectionInfo, ToolDeps } from './mcp/tools.js'
 import { installSettings } from './settings.js'
 import { STATUS_ROUTE, type EndpointStatus } from './status.js'
@@ -90,12 +90,12 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
    * effect without a restart. An empty value means "inherit": the composition
    * token when it pins one, otherwise the generated file token.
    */
-  const effectiveToken = (): { token: string; source: string } => {
+  const effectiveToken = (): { token: string; source: string; file: string } => {
     const pinned = optional(getConfig().auth.token)
     if (pinned !== undefined) {
-      return { token: pinned, source: binding.registered() ? 'settings' : 'config' }
+      return { token: pinned, source: binding.registered() ? 'settings' : 'config', file: fallbackToken.file }
     }
-    return { token: fallbackToken.token, source: fallbackToken.source }
+    return { token: fallbackToken.token, source: fallbackToken.source, file: fallbackToken.file }
   }
 
   const status = (): EndpointStatus => {
@@ -231,10 +231,14 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
 
     void reconcile().then(() => {
       if (disposed || listener === undefined) return
+      const token = effectiveToken()
       log.info(
-        '[dsh-as-mcp] point an MCP client at %s with header "Authorization: Bearer %s"',
+        '[dsh-as-mcp] point an MCP client at %s with header "Authorization: Bearer %s" — the full token is %s',
         listener.url,
-        effectiveToken().token,
+        maskToken(token.token),
+        token.source === 'config'
+          ? 'the value pinned in the plugin config'
+          : `in ${token.file}`,
       )
     })
 

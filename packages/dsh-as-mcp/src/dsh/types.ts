@@ -206,7 +206,18 @@ export interface DshShellExecutor {
     stdoutMaxBytes?: number
     signal?: AbortSignal
   }): unknown
-  run(spec: unknown): Promise<DshShellRunResult>
+  /**
+   * Run a resolved spec to completion.
+   *
+   * The method was renamed across harness versions: 0.1.5-rc.1 — the one shipped
+   * in DSH Desktop — exposes `run`, while 0.1.7-rc.2 replaces it with `execute`
+   * and drops `run` and `start` altogether, so a plugin calling `run` there dies
+   * with "not a function". Both are declared optional and the driver picks
+   * whichever the running host provides, the same way the filesystem seam
+   * straddles `readBytes` and `readByteRange`.
+   */
+  run?(spec: unknown): Promise<DshShellRunResult>
+  execute?(spec: unknown): Promise<DshShellRunResult>
 }
 
 /** `ctx.approval` — packages/interaction/user-approval/src/index.ts */

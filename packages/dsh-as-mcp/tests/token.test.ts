@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { TokenSource, resolveToken } from '../src/mcp/token.js'
+import { TokenSource, maskToken, resolveToken } from '../src/mcp/token.js'
 
 /** Point DSH_HOME at a scratch directory for the duration of one test. */
 function withHome(): string {
@@ -69,5 +69,25 @@ describe('resolveToken', () => {
   it('mints a distinct ephemeral token per process rather than a shared constant', () => {
     process.env.DSH_HOME = '/dev/null/dsh-home'
     expect(resolveToken('').token).not.toBe(resolveToken('').token)
+  })
+})
+
+describe('maskToken', () => {
+  it('keeps a fingerprint and drops the secret', () => {
+    const token = 'hSsj-fqhYf9WwmGYTfEzZgA-vIB-d4RixbXUYOLXluo'
+    const masked = maskToken(token)
+    expect(masked).toBe('hSsj…(43 chars)')
+    // The whole point: what it returns cannot be presented to the endpoint.
+    expect(masked).not.toContain(token)
+    expect(token.startsWith(masked.slice(0, 4))).toBe(true)
+  })
+
+  it('is distinguishable between tokens and honest about an empty one', () => {
+    expect(maskToken('aaaa1111')).not.toBe(maskToken('bbbb2222'))
+    expect(maskToken('')).toBe('(empty)')
+  })
+
+  it('does not throw on a token shorter than the prefix', () => {
+    expect(maskToken('ab')).toBe('ab…(2 chars)')
   })
 })

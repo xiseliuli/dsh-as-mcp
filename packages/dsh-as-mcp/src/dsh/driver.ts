@@ -656,7 +656,13 @@ export class DshDriver {
       timeoutMs: request.timeoutMs,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     })
-    const result = await shell.run(spec)
+    // `run` on the shipped harness, `execute` from 0.1.7-rc.2 onward, which drops
+    // `run` altogether. Call whichever the host actually has.
+    const launch = shell.run ?? shell.execute
+    if (launch === undefined) {
+      throw new Error('the shell service exposes neither run() nor execute(); cannot run a command')
+    }
+    const result = await launch.call(shell, spec)
     return {
       exitCode: result.exitCode,
       signal: result.signal,
@@ -682,10 +688,15 @@ export class DshDriver {
  *
  * Which turn owns the message depends on the delivery mode:
  *
- * - `queue` (the default) appends a new turn, so the owner is the next
- *   `turn/start` to appear after the message.
- * - `steer` delivers into the turn that is already open, so the owner is the
- *   turn that was open when the message landed.
+ * - `steer` delivers into the turn that is already open, so the owner is that
+ *   turn.
+ * - `queue` (the default) prefers the next turn to begin after the message, and
+ *   falls back to the open turn when none does. The fallback is the common case,
+ *   not an edge one: against a real session log the order is `turn/start` and
+ *   *then* `user/message`, because DSH opens the turn before committing the
+ *   prompt, so an idle session's queued message has no later `turn/start` at all.
+ *   The open turn is used only when it had not already produced output before our
+ *   message — otherwise it is answering someone else and a later turn must come.
  */
 export function locateTurn(
   events: readonly DshSessionEvent[],
