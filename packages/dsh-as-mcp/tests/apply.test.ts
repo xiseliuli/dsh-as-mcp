@@ -274,6 +274,36 @@ describe('apply() with harness services present', () => {
     expect(body).not.toContain(TOKEN)
     expect(payload).not.toHaveProperty('token')
   })
+
+  it('picks up the connection service when it arrives after the plugin', async () => {
+    const port = await freePort()
+    const routes: { path: string; methods: readonly string[] }[] = []
+    const root = new Context()
+    contexts.push(root)
+    apply(root, pluginConfig({ port }))
+
+    // The real shape of the bug: at apply time the service is not there yet, and
+    // a single `ctx.get('connection')` meant the status route silently never
+    // existed. Waiting for it is the whole point.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(routes).toHaveLength(0)
+
+    root.provide('connection', {
+      fetch: {
+        register: (route: { path: string; methods: readonly string[] }) => {
+          routes.push(route)
+          return () => undefined
+        },
+      },
+    })
+
+    const deadline = Date.now() + 5_000
+    while (routes.length < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    expect(routes[0]?.path).toBe(STATUS_ROUTE)
+    expect(routes[0]?.methods).toEqual(['GET'])
+  })
 })
 
 /** Run a captured web-server handler against a real socket and capture the reply. */

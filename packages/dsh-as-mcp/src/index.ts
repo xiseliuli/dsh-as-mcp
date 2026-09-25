@@ -14,7 +14,7 @@ import {
 } from './mcp/http.js'
 import { resolveToken } from './mcp/token.js'
 import type { ConnectionInfo, ToolDeps } from './mcp/tools.js'
-import { installSettings, type SettingsProviderLike } from './settings.js'
+import { installSettings } from './settings.js'
 import { STATUS_ROUTE, type EndpointStatus } from './status.js'
 
 /** Cordis plugin name. */
@@ -69,14 +69,12 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
 
   let listener: EndpointHandle | undefined
   let unmountFromWebServer: (() => void) | undefined
-  let unmountStatusRoute: (() => void) | undefined
   let boundSignature = ''
   let listenError: string | null = null
 
   const binding = installSettings({
     ctx,
     entry,
-    settings: serviceOf<SettingsProviderLike>(ctx, 'settings'),
     log,
     onChange: () => {
       void reconcile()
@@ -204,21 +202,32 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     // about where the MCP endpoint is served, and tying the panel's own status
     // to it would hide the status exactly when a bind has just failed.
     //
-    // Deliberately on the connection layer's `/api` channel and not the raw web
-    // server: an exact route on the web server sits in front of the connection
+    // Deliberately on the connection layer's `/api` channel and not on the raw
+    // web server: an exact route on the web server sits in front of the connection
     // fence, which would expose endpoint state to anything that can reach the
-    // port. Inside the fence it inherits DSH's own authorization. When there is
-    // no connection service the panel simply shows no liveness, which is the
-    // honest outcome rather than an unauthenticated one.
-    const connection = serviceOf<ConnectionLike>(ctx, 'connection')
-    if (connection !== undefined) {
-      unmountStatusRoute = registerStatusRoute({
-        connectionFetch: connection.fetch,
-        path: STATUS_ROUTE,
-        build: status,
-        log,
-      })
-    }
+    // port. Inside the fence it inherits DSH's own authorization.
+    //
+    // Waited for rather than sampled — see `installSettings`. Reading
+    // `ctx.get('connection')` once here was measured returning `undefined` on a
+    // real install, because a service mounts after the plugins that use it, and
+    // the only symptom was a status route that silently never existed.
+    ctx.inject(['connection'], (connectionCtx: Context) => {
+      const connection = serviceOf<ConnectionLike>(connectionCtx, 'connection')
+      if (connection === undefined) return
+      // The route lives exactly as long as this injected fiber, which lives
+      // exactly as long as the connection service is available here. Nothing
+      // else needs to remember to take it down.
+      connectionCtx.effect(
+        () =>
+          registerStatusRoute({
+            connectionFetch: connection.fetch,
+            path: STATUS_ROUTE,
+            build: status,
+            log,
+          }),
+        'dsh-as-mcp status route',
+      )
+    })
 
     void reconcile().then(() => {
       if (disposed || listener === undefined) return
@@ -232,8 +241,6 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     return async () => {
       disposed = true
       binding.release()
-      unmountStatusRoute?.()
-      unmountStatusRoute = undefined
       unmountFromWebServer?.()
       unmountFromWebServer = undefined
       const current = listener

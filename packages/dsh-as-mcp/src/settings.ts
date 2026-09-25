@@ -33,7 +33,7 @@ import {
   DEFAULT_SESSION,
   DEFAULT_TOOLS,
 } from './defaults.js'
-import type { DshLogger } from './dsh/types.js'
+import { serviceOf, type DshLogger } from './dsh/types.js'
 
 /** The namespace this plugin owns; also the section id in the settings panel. */
 export const SETTINGS_NAMESPACE = 'dsh-as-mcp'
@@ -186,64 +186,68 @@ export interface SettingsBinding {
 export function installSettings(options: {
   readonly ctx: Context
   readonly entry: Config
-  readonly settings: SettingsProviderLike | undefined
   readonly log: DshLogger
   readonly onChange: () => void
 }): SettingsBinding {
-  const { ctx, entry, settings, log, onChange } = options
+  const { ctx, entry, log, onChange } = options
   let source: () => Config = () => entry
   let registered = false
 
-  if (settings === undefined) {
-    log.debug(
-      '[dsh-as-mcp] no settings provider is mounted; configuration comes from the plugin row alone',
-    )
-    return {
-      current: () => source(),
-      registered: () => registered,
-      release: () => {
-        source = () => entry
-      },
-    }
-  }
+  // Registered on the service's *arrival* rather than by reading it once.
+  //
+  // A composition is an ordered list and a third-party row can land anywhere in
+  // it, so `ctx.get('settings')` at apply time can legitimately return nothing
+  // even though the provider is mounted — that is exactly what happened on the
+  // first real install, and the only symptom was a panel that never appeared.
+  // `ctx.inject` is the optional-consumer form: it does not make this plugin
+  // depend on settings, it runs this callback when (and only when) a provider is
+  // available, and re-runs it if the provider is replaced.
+  //
+  // The injected context is also the `owner`, so the registration's lifetime is
+  // the provider's, with no separate disposer to get wrong.
+  ctx.inject(['settings'], (settingsCtx: Context) => {
+    const settings = serviceOf<SettingsProviderLike>(settingsCtx, 'settings')
+    if (settings === undefined) return
 
-  void (async () => {
-    const z = await loadSchemastery()
-    if (z === undefined) {
-      log.warn(
-        `[dsh-as-mcp] ${SCHEMASTERY_MODULE} is not resolvable here, so this profile gets no `
-        + 'settings entry — the plugin still runs from its composition configuration',
-      )
-      return
-    }
-    settings.installSection<Config>(ctx, SETTINGS_NAMESPACE, buildSettingsSchema(z), entry, {
-      // A write the plugin cannot serve is refused now, at the writer, rather
-      // than stored and then ignored on the next read.
-      validate: (value) => {
-        normalizeConfig(value)
-      },
-      setSource: (current) => {
-        source = () => {
-          try {
-            return normalizeConfig(current())
-          } catch (error) {
-            log.warn(
-              '[dsh-as-mcp] ignoring a stored settings section that no longer validates: %s',
-              error instanceof Error ? error.message : String(error),
-            )
-            return entry
+    void (async () => {
+      const z = await loadSchemastery()
+      if (z === undefined) {
+        log.warn(
+          `[dsh-as-mcp] ${SCHEMASTERY_MODULE} is not resolvable here, so this profile gets no `
+          + 'settings entry — the plugin still runs from its composition configuration',
+        )
+        return
+      }
+      settings.installSection<Config>(settingsCtx, SETTINGS_NAMESPACE, buildSettingsSchema(z), entry, {
+        // A write the plugin cannot serve is refused now, at the writer, rather
+        // than stored and then ignored on the next read.
+        validate: (value) => {
+          normalizeConfig(value)
+        },
+        setSource: (current) => {
+          source = () => {
+            try {
+              return normalizeConfig(current())
+            } catch (error) {
+              log.warn(
+                '[dsh-as-mcp] ignoring a stored settings section that no longer validates: %s',
+                error instanceof Error ? error.message : String(error),
+              )
+              return entry
+            }
           }
-        }
-      },
-      onChange,
+        },
+        onChange,
+      })
+      registered = true
+      onChange()
+      log.info(`[dsh-as-mcp] settings namespace "${SETTINGS_NAMESPACE}" registered`)
+    })().catch((error: unknown) => {
+      log.warn(
+        '[dsh-as-mcp] could not register the settings namespace: %s',
+        error instanceof Error ? error.message : String(error),
+      )
     })
-    registered = true
-    onChange()
-  })().catch((error: unknown) => {
-    log.warn(
-      '[dsh-as-mcp] could not register the settings namespace: %s',
-      error instanceof Error ? error.message : String(error),
-    )
   })
 
   return {

@@ -112,8 +112,9 @@ describe('installSettings', () => {
     const ctx = newContext()
     const entry = testConfig()
     const { provider, registrations } = stubProvider()
+    ctx.provide('settings', provider)
 
-    const binding = installSettings({ ctx, entry, settings: provider, log: silentLog, onChange: () => {} })
+    const binding = installSettings({ ctx, entry, log: silentLog, onChange: () => {} })
     await until(() => registrations.length > 0, 'registration')
 
     expect(registrations).toHaveLength(1)
@@ -126,12 +127,12 @@ describe('installSettings', () => {
   it('re-reports the configuration after the provider re-points the source', async () => {
     const ctx = newContext()
     const { provider, registrations } = stubProvider()
+    ctx.provide('settings', provider)
     const changes: number[] = []
 
     const binding = installSettings({
       ctx,
       entry: testConfig(),
-      settings: provider,
       log: silentLog,
       onChange: () => changes.push(changes.length),
     })
@@ -151,7 +152,8 @@ describe('installSettings', () => {
   it('refuses a write it could not act on, at the write', async () => {
     const ctx = newContext()
     const { provider, registrations } = stubProvider()
-    installSettings({ ctx, entry: testConfig(), settings: provider, log: silentLog, onChange: () => {} })
+    ctx.provide('settings', provider)
+    installSettings({ ctx, entry: testConfig(), log: silentLog, onChange: () => {} })
     await until(() => registrations.length > 0, 'registration')
 
     const validate = registrations[0]?.hooks.validate
@@ -162,10 +164,31 @@ describe('installSettings', () => {
     expect(() => validate!({ ...testConfig(), approval: { policy: 'nope' } } as unknown as Config)).toThrow()
   })
 
+  it('registers when the settings service arrives after the plugin', async () => {
+    // This is the shape the bug actually took on a real install: at apply time
+    // there is no provider, because a service mounts after the plugins that use
+    // it. Sampling the context once meant the namespace was never registered and
+    // the only symptom was a panel that never appeared.
+    const ctx = newContext()
+    const binding = installSettings({ ctx, entry: testConfig(), log: silentLog, onChange: () => {} })
+    expect(binding.registered()).toBe(false)
+    // Until it arrives, the composition entry is still the answer.
+    expect(binding.current().http.port).toBe(testConfig().http.port)
+
+    const { provider, registrations } = stubProvider()
+    ctx.provide('settings', provider)
+
+    await until(() => registrations.length > 0, 'late registration')
+    expect(binding.registered()).toBe(true)
+    expect(registrations[0]?.ns).toBe(SETTINGS_NAMESPACE)
+  })
+
   it('falls back to the composition entry when no provider is mounted', () => {
     const ctx = newContext()
     const entry = testConfig({ files: false, shell: true }, 5555)
-    const binding = installSettings({ ctx, entry, settings: undefined, log: silentLog, onChange: () => {} })
+    // No provider at all: the registration callback never runs, and the binding
+    // must still answer with the composition entry.
+    const binding = installSettings({ ctx, entry, log: silentLog, onChange: () => {} })
 
     // No provider must never cost the plugin its configuration.
     expect(binding.registered()).toBe(false)
@@ -176,7 +199,8 @@ describe('installSettings', () => {
     const ctx = newContext()
     const entry = testConfig()
     const { provider, registrations } = stubProvider()
-    const binding = installSettings({ ctx, entry, settings: provider, log: silentLog, onChange: () => {} })
+    ctx.provide('settings', provider)
+    const binding = installSettings({ ctx, entry, log: silentLog, onChange: () => {} })
     await until(() => registrations.length > 0, 'registration')
 
     registrations[0]?.hooks.setSource(() => testConfig({ files: false }))
@@ -194,10 +218,10 @@ describe('installSettings', () => {
         throw new Error('provider exploded')
       },
     }
+    ctx.provide('settings', provider)
     const binding = installSettings({
       ctx,
       entry: testConfig(),
-      settings: provider,
       log: { ...silentLog, warn: (...args: unknown[]) => warnings.push(args.map(String).join(' ')) },
       onChange: () => {},
     })
