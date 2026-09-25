@@ -44,7 +44,8 @@ not the workspace a user would assume, and the plugin is what makes that reachab
 
 ## Remediation status
 
-Recorded at commit `946c5f9`, so this audit stays useful rather than reading as a list of open holes.
+Recorded at commit `946c5f9` (F1–F8) and updated after `dsh_tool_call` shipped (F9), so this
+audit stays useful rather than reading as a list of open holes.
 
 | Finding | Status |
 | --- | --- |
@@ -56,12 +57,16 @@ Recorded at commit `946c5f9`, so this audit stays useful rather than reading as 
 | **F6** `tokenMatches('','')` | **Fixed.** An empty expectation never matches. |
 | **F7** unserialized `reconcile()`, disposal not re-checked | **Open.** Low. |
 | **F8** dropped handler promise | **Open.** Low; no reachable trigger was found. |
+| **F9** `dsh_tool_call` selection surface | **Closed by design** with an allow-list enforced on both listing and execution; see F9. Not a defect — recorded because a deny-list was the obvious reading and is unsound. |
 
 The hardening notes at the end are likewise unremediated, except the deployed token-log path covered by F3.
 
 ---
 
 ## Findings
+
+*(F9 below was added with the `dsh_tool_call` surface and is a design record, not a defect.)*
+
 
 ### F1 — `file_write` / `workspace_create` create directories with `node:fs`, before and outside the sandbox policy (High)
 
@@ -293,6 +298,45 @@ rejection policy is "exit", and the fix is the harness's own.
 **Fix.** `handler(req, res).catch((error) => { log.error(...); if (!res.headersSent) deny(res, 500, 'internal error') })`.
 
 ---
+
+### F9 — `dsh_tool_call` is an allow-list because a deny-list cannot be made sound (analysis of a newly added surface)
+
+The `dsh_tool_call` / `dsh_tool_list` pair (group `tools.agentTools`) was added after the audit above
+and is assessed here on the same terms. It is the only place in the plugin that hands a caller the
+harness's own tool pipeline: `ctx.tools.execute` runs pre-policy, guards, around-dispatch, post-policy
+and content finalization (`api-catalog.ts:2656`), so **the permission model travels with the call** and
+a caller cannot exceed what the owning agent could do under the same policy. The surface therefore adds
+no authority — `shell_run` already runs arbitrary commands as the user.
+
+What it *does* add is a **selection** surface, and that is where the design decision sits. The harness
+registers 57 tool names (enumerated from `defineTool({ name })` across every package; the Desktop
+profile mounts 23 of them). Three groups among them must never be reachable through a bridge:
+
+- **`run_code`** (`core/tools/src/ptc.ts:20`) is programmatic tool calling: it runs a program that
+  invokes **any other tool by name**. One permitted `run_code` would void every other entry, so a
+  deny-list at this layer is *structurally* unsound rather than merely incomplete.
+- **`cordis_run` / `cordis_define` / `cordis_undefine` / `cordis_stop`** execute arbitrary plugin
+  code. No shipped bundle mounts `tool-cordis` — which is exactly the hazard: a deny-list written
+  against the Desktop profile is blind in the profile that adds it.
+- **`workflow`, `ralph`, `spawn_teammate`, `send_message`, `schedule_create`** start work that outlives
+  the call, and **`create_goal` / `update_goal`** sustain unattended execution. `ask_user_question` and
+  `present` reach the human at the keyboard.
+
+The plugin therefore ships an **allow-list** that fails closed: a tool a future harness version adds is
+denied by default rather than exposed by default. It is enforced on **both** sides — a name that is not
+permitted is absent from `dsh_tool_list` *and* refused in `dsh_tool_call`, because `schemas()` still
+reports the forbidden names and a listing-only filter would be bypassable by guessing. Both boundaries
+are covered by tests that were verified to fail when the corresponding check is removed.
+
+Residual risk, accepted: the permitted set includes `write`, `edit`, `bash` and `pwsh`. Under
+`danger-full-access` those are no wider than `file_write`/`shell_run`, which the endpoint already
+exposes; under `workspace-write` they remain fenced by the same fs/sandbox seam. An operator who wants
+a strictly read-only bridge must set `tools.agentTools: false` — the allow-list cannot express "read
+only", because some permitted tools are dual-use.
+
+Related, and unchanged by this surface: `dsh_tool_call` honours `approval.policy: allow` when scoped to
+a plugin-owned session, exactly as `session_prompt` does. That does not widen anything (the same
+argument as F2), but it means the `allow` policy should be read as covering this group too.
 
 ## Hardening notes (no exploit path found)
 

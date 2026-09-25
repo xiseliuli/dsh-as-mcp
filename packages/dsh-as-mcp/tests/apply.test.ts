@@ -8,6 +8,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { Config } from '../src/config.js'
+import { DEFAULT_AGENT_TOOLS } from '../src/defaults.js'
 import { STATUS_ROUTE } from '../src/status.js'
 import { apply, inject, name } from '../src/index.js'
 import { TOKEN, callTool, rpc } from './harness.js'
@@ -71,7 +72,8 @@ function pluginConfig(overrides: {
       mountOnWebServer: overrides.mountOnWebServer ?? false,
     },
     auth: { token: overrides.token ?? TOKEN },
-    tools: { workspace: true, session: true, files: true, shell: true, ...overrides.tools },
+    tools: { workspace: true, session: true, files: true, shell: true, agentTools: true, ...overrides.tools },
+    agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 500 },
     limits: { maxReadBytes: 1024, shellTimeoutMs: 1000 },
     approval: overrides.approval ?? { policy: 'inherit' },
@@ -543,7 +545,7 @@ describe('token hygiene in the log', () => {
 
     // The announcement runs after the async reconcile, so give it a moment to land.
     const deadline = Date.now() + 2_000
-    while (!lines.some((line) => line.includes('Bearer ')) && Date.now() < deadline) {
+    while (!lines.some((line) => line.includes('fingerprint')) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
 
@@ -553,8 +555,15 @@ describe('token hygiene in the log', () => {
     expect(lines.some((line) => line.includes(TOKEN))).toBe(false)
 
     // And the line is still useful for setting up a client.
-    const announcement = lines.find((line) => line.includes('Bearer '))
+    const announcement = lines.find((line) => line.includes('fingerprint'))
     expect(announcement).toBeDefined()
     expect(announcement).toContain(`${TOKEN.slice(0, 4)}…`)
+
+    // Nothing is written as `bearer <value>`. DSH's log masker matches that shape
+    // and replaces the rest of the line, so the pointer to the token file would be
+    // swallowed — masking a fingerprint hides the pointer without hiding a secret.
+    for (const line of lines) {
+      expect(line).not.toMatch(/bearer\s+\S/i)
+    }
   })
 })

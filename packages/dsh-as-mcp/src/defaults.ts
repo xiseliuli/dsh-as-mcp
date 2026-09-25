@@ -11,6 +11,7 @@
  */
 
 import type {
+  AgentToolsConfig,
   ApprovalConfig,
   AuthConfig,
   Config,
@@ -38,7 +39,55 @@ export const DEFAULT_TOOLS = {
   session: true,
   files: true,
   shell: true,
+  agentTools: true,
 } as const satisfies ToolToggles
+
+/**
+ * {@link AgentToolsConfig} defaults.
+ *
+ * An **allow-list**, not a deny-list, because the harness ships tools no
+ * deny-list can be trusted to cover:
+ *
+ * - `run_code` is the programmatic-tool-calling entry point: one call runs a
+ *   program that may invoke *any other tool by name* (`core/tools/src/ptc.ts:20`).
+ *   Exposing it would void every other entry here.
+ * - `cordis_run`, `cordis_define`, `cordis_undefine` … execute arbitrary plugin
+ *   code. No shipped bundle mounts them, so a deny-list written against today's
+ *   Desktop profile is blind in exactly the profile that adds them.
+ * - `ask_user_question` and `present` reach the human at the keyboard.
+ * - `workflow`, `ralph`, `spawn_teammate`, `send_message` and `schedule_create`
+ *   start work that outlives the call; `create_goal` and `update_goal` sustain
+ *   unattended execution.
+ *
+ * All of those are denied by omission, and a tool a future harness adds is denied
+ * by default rather than exposed by default. What remains is the deterministic,
+ * bounded set — file access and search, the two shells, web read, job
+ * observation, todo/skill/goal reads — whose authority this bridge already grants
+ * through `file_*` and `shell_run`, so exposing them widens nothing.
+ */
+export const DEFAULT_AGENT_TOOLS: AgentToolsConfig = {
+  allow: [
+    'read',
+    'write',
+    'edit',
+    'glob',
+    'grep',
+    'str_replace_editor',
+    'read_image',
+    'bash',
+    'pwsh',
+    'web_search',
+    'web_fetch',
+    'job_list',
+    'job_output',
+    'job_kill',
+    'todo_write',
+    'skill',
+    'get_goal',
+    'lsp',
+  ],
+  deny: [],
+}
 
 /** {@link SessionConfig} defaults: inherit the DSH agent route, 15-minute turns. */
 export const DEFAULT_SESSION = {
@@ -63,6 +112,7 @@ export function defaultConfig(): Config {
     http: { ...DEFAULT_HTTP },
     auth: { ...DEFAULT_AUTH },
     tools: { ...DEFAULT_TOOLS },
+    agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { ...DEFAULT_SESSION },
     limits: { ...DEFAULT_LIMITS },
     approval: { ...DEFAULT_APPROVAL },

@@ -94,6 +94,21 @@ export interface DshSessionController {
   }): Promise<{ readonly selected: { readonly provider: string; readonly model: string } }>
 
   /**
+   * Resolve the live agent driving a session, or report why it cannot be.
+   *
+   * This is the bridge that makes the agent's *own* tools reachable: the returned
+   * agent is the scope key `ctx.tools` resolves visibility against, so without it
+   * a caller can start a turn and read the log but cannot address the toolbox the
+   * turn would use. The harness resolves sessions this way for its own host API
+   * domains (`packages/api/session-controller/src/agent.ts:149-162`, which is how
+   * `ctx.tools`, `ctx.commands` and `ctx.skills` are reached in-process).
+   *
+   * Optional because it is additive across versions: a host without it simply
+   * reports the capability as absent.
+   */
+  resolveAgent?(sessionId: string): Promise<DshAgentResolution>
+
+  /**
    * Admit one user message. Resolves as soon as the message is queued; it does
    * not wait for the turn to run.
    */
@@ -240,6 +255,65 @@ export interface DshApprovalService {
  * Minimal logger contract. Cordis supplies `ctx.logger`; we type only what we
  * call so this package does not depend on the harness's logger declaration.
  */
+/** What `sessionController.resolveAgent` reports. */
+export type DshAgentResolution =
+  | { readonly agent: DshAgentHandle }
+  | { readonly error: unknown }
+
+/**
+ * A live agent, as far as this plugin is concerned.
+ *
+ * Opaque on purpose: the only thing done with it is to hand it back to `ctx.tools`
+ * as a scope. Nothing here reads its fields, so no `@deepseek-ai/*` shape leaks
+ * into this package.
+ */
+export interface DshAgentHandle {
+  readonly [brand]?: never
+}
+declare const brand: unique symbol
+
+/** One tool as a scope sees it — the model-facing schema, no callbacks. */
+export interface DshToolSchema {
+  readonly name: string
+  readonly description: string
+  readonly parameters: Record<string, unknown>
+}
+
+/** A tool call that ran. Mirrors the harness's `ToolExecutionSuccess`. */
+export interface DshToolSuccess {
+  readonly isError: false
+  readonly value: unknown
+  readonly content: readonly unknown[]
+}
+
+/** A tool call that was refused or failed. Mirrors `ToolExecutionFailure`. */
+export interface DshToolFailure {
+  readonly isError: true
+  readonly error: { readonly message: string }
+  readonly content: readonly unknown[]
+}
+
+export type DshToolExecutionResult = DshToolSuccess | DshToolFailure
+
+/**
+ * `ctx.tools` — packages/core/tools/src/index.ts
+ *
+ * `execute` runs the full production pipeline: pre-policy, guards, around-dispatch,
+ * post-policy and final notification. That is the point of routing through it
+ * rather than calling a service directly — the permission model travels with the
+ * call, so an external caller gets exactly the decisions the agent would get.
+ */
+export interface DshToolRegistry {
+  schemas(scope?: unknown): DshToolSchema[]
+  execute(exec: {
+    readonly callId: string
+    readonly name: string
+    readonly arguments: unknown
+    readonly agent?: DshAgentHandle
+    readonly signal: AbortSignal
+  }): Promise<DshToolExecutionResult>
+}
+
 export interface DshLogger {
   debug(...args: unknown[]): void
   info(...args: unknown[]): void

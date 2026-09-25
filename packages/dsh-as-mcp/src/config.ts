@@ -64,6 +64,27 @@ export interface ToolToggles {
   files: boolean
   /** `shell_run`. */
   shell: boolean
+  /**
+   * `dsh_tool_list` and `dsh_tool_call` — run this instance's own agent tools
+   * directly, without spending a model turn to decide to call them.
+   */
+  agentTools: boolean
+}
+
+/**
+ * Which of the harness's own tools `dsh_tool_call` may invoke.
+ *
+ * Only these names are reachable; `dsh_tool_list` reports exactly them and no
+ * others, so a caller cannot discover what it may not call.
+ */
+export interface AgentToolsConfig {
+  /**
+   * Permitted tool names. A non-empty list **replaces** the built-in default;
+   * an empty list leaves the default in place, so widening is always deliberate.
+   */
+  allow: string[]
+  /** Names removed after `allow` is resolved, so an operator can subtract only. */
+  deny: string[]
 }
 
 /** Defaults applied when a caller does not name an agent preset or model route. */
@@ -103,6 +124,7 @@ export interface Config {
   http: HttpConfig
   auth: AuthConfig
   tools: ToolToggles
+  agentTools: AgentToolsConfig
   session: SessionConfig
   limits: LimitsConfig
   approval: ApprovalConfig
@@ -218,6 +240,31 @@ function str(raw: Record<string, unknown>, key: string, fallback: string, path: 
   return value
 }
 
+/** Read an array of tool names, rejecting anything that is not one. */
+function stringArray(
+  raw: Record<string, unknown>,
+  key: string,
+  fallback: readonly string[],
+  path: string,
+  issues: string[],
+): string[] {
+  const value = raw[key]
+  if (value === undefined) return [...fallback]
+  if (!Array.isArray(value)) {
+    issues.push(`${path}.${key} must be an array of tool names, got ${describe(value)}`)
+    return [...fallback]
+  }
+  const names: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.trim() === '') {
+      issues.push(`${path}.${key} must contain non-empty strings, got ${describe(entry)}`)
+      continue
+    }
+    names.push(entry.trim())
+  }
+  return names
+}
+
 function oneOf<T extends string>(
   raw: Record<string, unknown>,
   key: string,
@@ -250,7 +297,7 @@ export function normalizeConfig(input: unknown = {}): Config {
     issues.push(`configuration must be an object, got ${describe(input)}`)
   }
 
-  rejectUnknown(root, ['http', 'auth', 'tools', 'session', 'limits', 'approval'], 'config', issues)
+  rejectUnknown(root, ['http', 'auth', 'tools', 'agentTools', 'session', 'limits', 'approval'], 'config', issues)
 
   const http = section(root, 'http', 'http', issues)
   rejectUnknown(http, ['enabled', 'host', 'port', 'path', 'mountOnWebServer'], 'http', issues)
@@ -267,7 +314,10 @@ export function normalizeConfig(input: unknown = {}): Config {
   rejectUnknown(auth, ['token'], 'auth', issues)
 
   const tools = section(root, 'tools', 'tools', issues)
-  rejectUnknown(tools, ['workspace', 'session', 'files', 'shell'], 'tools', issues)
+  rejectUnknown(tools, ['workspace', 'session', 'files', 'shell', 'agentTools'], 'tools', issues)
+
+  const agentTools = section(root, 'agentTools', 'agentTools', issues)
+  rejectUnknown(agentTools, ['allow', 'deny'], 'agentTools', issues)
 
   const session = section(root, 'session', 'session', issues)
   rejectUnknown(session, ['agentPreset', 'provider', 'model', 'promptTimeoutMs'], 'session', issues)
@@ -296,6 +346,16 @@ export function normalizeConfig(input: unknown = {}): Config {
       session: bool(tools, 'session', fallback.tools.session, 'tools', issues),
       files: bool(tools, 'files', fallback.tools.files, 'tools', issues),
       shell: bool(tools, 'shell', fallback.tools.shell, 'tools', issues),
+      agentTools: bool(tools, 'agentTools', fallback.tools.agentTools, 'tools', issues),
+    },
+    agentTools: {
+      // An empty `allow` means "use the built-in list", so a config that sets
+      // only `deny` still starts from the defaults rather than from nothing.
+      allow: (() => {
+        const names = stringArray(agentTools, 'allow', [], 'agentTools', issues)
+        return names.length > 0 ? names : [...fallback.agentTools.allow]
+      })(),
+      deny: stringArray(agentTools, 'deny', fallback.agentTools.deny, 'agentTools', issues),
     },
     session: {
       agentPreset: str(session, 'agentPreset', fallback.session.agentPreset, 'session', issues),

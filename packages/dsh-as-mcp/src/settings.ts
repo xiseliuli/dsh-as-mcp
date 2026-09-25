@@ -26,6 +26,7 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { normalizeConfig, type Config } from './config.js'
 import {
+  DEFAULT_AGENT_TOOLS,
   DEFAULT_APPROVAL,
   DEFAULT_AUTH,
   DEFAULT_HTTP,
@@ -61,6 +62,7 @@ export interface SchemasteryLike {
   string(): SchemaNode
   const(value: string): SchemaNode
   union(choices: readonly SchemaNode[]): SchemaNode
+  array(inner: SchemaNode): SchemaNode
 }
 
 /** Hooks `installSection` accepts around one consumer-owned section. */
@@ -134,7 +136,15 @@ export function buildSettingsSchema(z: SchemasteryLike): SchemaNode {
         .description('Expose file_read, file_write, and file_list.'),
       shell: z.boolean().default(DEFAULT_TOOLS.shell)
         .description('Expose shell_run, which executes commands as this DSH instance.'),
+      agentTools: z.boolean().default(DEFAULT_TOOLS.agentTools)
+        .description("Expose dsh_tool_list and dsh_tool_call, which run this instance's own agent tools."),
     }).description('Which tool groups the endpoint advertises.'),
+    agentTools: z.object({
+      allow: z.array(z.string()).default([...DEFAULT_AGENT_TOOLS.allow])
+        .description('Tool names dsh_tool_call may invoke. A non-empty list replaces the built-in default.'),
+      deny: z.array(z.string()).default([...DEFAULT_AGENT_TOOLS.deny])
+        .description('Names removed from the permitted set, for subtracting from the default.'),
+    }).description('Which harness tools dsh_tool_call may reach.'),
     session: z.object({
       agentPreset: z.string().default(DEFAULT_SESSION.agentPreset)
         .description('Agent preset for turns this plugin starts; empty inherits.'),

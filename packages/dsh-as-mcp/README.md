@@ -101,6 +101,8 @@ can tell "this profile has no shell" from "the command failed".
 | `file_write` | Create or replace a file through DSH's filesystem service. |
 | `file_list` | List a directory through DSH's filesystem service. |
 | `shell_run` | Run one command through DSH's shell service. |
+| `dsh_tool_list` | The agent tools this endpoint permits, with the schema DSH's own agent sees. |
+| `dsh_tool_call` | Run one of them directly, through the same pipeline the agent uses. |
 
 The typical coding flow:
 
@@ -113,6 +115,27 @@ workspace_create { path: "/Users/me/project" }
 `session_prompt` is how you get work done *by* DSH: the DSH agent plans, edits files, runs
 its own tools, and can spawn subagents. `file_*` and `shell_run` are for when you want to do
 something yourself without involving the agent.
+
+`dsh_tool_call` is the third option: it runs one of DSH's *own* tools without spending a model
+turn to decide to call it. Call `dsh_tool_list` first — it reports exactly what is permitted,
+and a name it does not report is refused. Pass a `sessionId` to run under that session's agent,
+policy and working directory; omit it to run against the deployment default, the same scope
+`file_*` and `shell_run` use.
+
+The permitted set is an **allow-list**, and it is deliberately narrow. Everything absent is
+refused *and* hidden from `dsh_tool_list`. The omissions that matter:
+
+- **`run_code`** is DSH's programmatic-tool-calling entry point: one call runs a program that
+  can invoke *any other tool by name*. Exposing it would void the list entirely.
+- **`cordis_run`, `cordis_define`, …** execute arbitrary plugin code. No shipped bundle mounts
+  them, so a deny-list written against today's profile would be blind in exactly the profile
+  that adds them — which is why this is an allow-list.
+- **`ask_user_question` and `present`** reach the human at the keyboard.
+- **`workflow`, `ralph`, `send_message`, `spawn_teammate`, `schedule_create`** start work that
+  outlives the call; **`create_goal` and `update_goal`** sustain unattended execution.
+
+An operator can widen this deliberately with the `agentTools.allow` setting, or subtract from
+the default with `agentTools.deny`.
 
 ## Security
 

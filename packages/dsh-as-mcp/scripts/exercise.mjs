@@ -182,6 +182,8 @@ section('surface')
     'dsh_info',
     'file_list',
     'file_read',
+    'dsh_tool_call',
+    'dsh_tool_list',
     'file_write',
     'session_cancel',
     'session_create',
@@ -194,7 +196,7 @@ section('surface')
   ]
   check(
     JSON.stringify(names) === JSON.stringify(expected),
-    'tools/list exposes all 12 tools',
+    'tools/list exposes all 14 tools',
     `${names.length} tools`,
   )
   check(
@@ -223,8 +225,9 @@ section('surface')
   )
   // Both of these are objects keyed by name, not lists.
   const groups = info.enabledToolGroups ?? {}
-  const wanted = ['workspace', 'session', 'files', 'shell'].filter((group) => groups[group] !== true)
-  check(wanted.length === 0, 'all four tool groups are enabled', Object.keys(groups).join(', '))
+  const wanted = ['workspace', 'session', 'files', 'shell', 'agentTools']
+    .filter((group) => groups[group] !== true)
+  check(wanted.length === 0, 'all five tool groups are enabled', Object.keys(groups).join(', '))
   const services = info.harnessServices ?? {}
   for (const service of ['workspaceRegistry', 'sessionController', 'agents', 'fs', 'shell']) {
     check(services[service] === true, `harness service: ${service}`)
@@ -378,6 +381,61 @@ try {
     const bad = await tool('shell_run', { command: 'exit 3' })
     check(bad.ok, 'a failing command still returns a result', `exit ${bad.payload?.exitCode}`)
     check(bad.payload?.exitCode === 3, 'its exit code is reported', `${bad.payload?.exitCode}`)
+  }
+
+  section('agent tools')
+  {
+    const listed = await must('dsh_tool_list')
+    const names = (listed.tools ?? []).map((entry) => entry.name)
+    check(names.length > 0, 'dsh_tool_list reports a permitted set', `${names.length} tools`)
+    check(names.includes('read'), 'a deterministic tool is permitted', 'read')
+
+    // The security property of this group, checked live rather than only in unit
+    // tests: the escape hatches must be absent from the LISTING as well as refused
+    // on call. `run_code` is the one that matters most — it runs a program that can
+    // invoke any other tool by name, so exposing it would void the allow-list.
+    const forbidden = [
+      'run_code', 'cordis_run', 'cordis_define', 'cordis_undefine',
+      'workflow', 'ralph', 'spawn_teammate', 'wait_agent',
+      'ask_user_question', 'create_goal', 'update_goal', 'schedule_create',
+    ]
+    const leaked = forbidden.filter((name) => names.includes(name))
+    check(leaked.length === 0, 'the escape hatches are not listed', leaked.join(', ') || 'none listed')
+
+    // A real write/read pair through the real pipeline, which is what makes this
+    // more than a listing test: pre-policy, guards and the fs seam all ran.
+    const target = join(projectPath, 'agent-tool.txt')
+    const wrote = await tool('dsh_tool_call', { name: 'write', args: { file_path: target, content: 'via dsh_tool_call' } })
+    check(wrote.ok, 'dsh_tool_call runs a permitted tool', (wrote.error ?? 'ok').slice(0, 60))
+    check(existsSync(target), 'the file exists on disk', target)
+
+    const read = await tool('dsh_tool_call', { name: 'read', args: { file_path: target } })
+    check(read.ok, 'the result comes back through the same tool', (read.error ?? 'ok').slice(0, 60))
+    check(
+      typeof read.payload?.text === 'string' && read.payload.text.includes('via dsh_tool_call'),
+      'its text is returned to the caller',
+    )
+
+    // Refused on call even though the harness itself registers it.
+    const escape = await tool('dsh_tool_call', { name: 'run_code', args: { code: 'return 1' } })
+    check(!escape.ok, 'run_code is refused on call, not merely hidden', (escape.error ?? '').slice(0, 60))
+
+    const unknown = await tool('dsh_tool_call', { name: 'definitely_not_a_tool', args: {} })
+    check(!unknown.ok, 'an unknown tool name is refused', (unknown.error ?? '').slice(0, 60))
+
+    // Scoped to a session, the same call runs under that session's policy and
+    // lands in that session transcript rather than the deployment default.
+    if (sessionId !== undefined) {
+      const scoped = await tool('dsh_tool_list', { sessionId })
+      check(scoped.ok, 'dsh_tool_list accepts a sessionId', (scoped.error ?? 'ok').slice(0, 60))
+      check(
+        (scoped.payload?.tools ?? []).length > 0,
+        'a session-scoped listing still resolves tools',
+        `${(scoped.payload?.tools ?? []).length}`,
+      )
+      const scopedCall = await tool('dsh_tool_call', { name: 'read', args: { file_path: target }, sessionId })
+      check(scopedCall.ok, 'dsh_tool_call runs under a session scope', (scopedCall.error ?? 'ok').slice(0, 60))
+    }
   }
 } catch (error) {
   check(false, 'run aborted', error instanceof Error ? error.message : String(error))

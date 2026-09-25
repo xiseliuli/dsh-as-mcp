@@ -57,6 +57,8 @@ export type McpDriver = Pick<
   | 'writeFile'
   | 'listDirectory'
   | 'runShell'
+  | 'listAgentTools'
+  | 'callAgentTool'
 >
 
 /** Pretty-printed JSON as ordinary text content — the one shape every MCP client renders. */
@@ -372,6 +374,55 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       guard('shell_run', log, async (args) => ok(await driver.runShell({
         command: args.command,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+        timeoutMs: args.timeoutMs ?? getConfig().limits.shellTimeoutMs,
+      }))),
+    )
+  }
+
+  if (enabled.agentTools) {
+    server.registerTool(
+      'dsh_tool_list',
+      {
+        title: "List this DSH instance's own agent tools",
+        description:
+          'List the tools this DSH instance can run directly, with the same schema its own agent sees. '
+          + 'Only the permitted names are shown; the rest are neither listed nor callable. Pass a sessionId to '
+          + 'see the toolbox as that session narrows it.',
+        inputSchema: z.object({
+          sessionId: z.string().optional()
+            .describe('Scope the listing to one session and its policy. Omit for the deployment default.'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('dsh_tool_list', log, async (args) => ok(await driver.listAgentTools({
+        ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
+      }))),
+    )
+
+    server.registerTool(
+      'dsh_tool_call',
+      {
+        title: "Run one of this DSH instance's agent tools",
+        description:
+          'Run a tool from dsh_tool_list directly, through the same pipeline the DSH agent uses — pre-policy, '
+          + 'guards, sandbox and approval all still apply — without spending a model turn to decide to call it. '
+          + 'Use dsh_tool_list first: a name that is not listed is refused. Prefer session_prompt when the task '
+          + 'needs judgement; use this for deterministic calls.',
+        inputSchema: z.object({
+          name: z.string().trim().min(1).describe('Tool name, exactly as dsh_tool_list reports it.'),
+          args: z.record(z.string(), z.unknown()).optional()
+            .describe('Arguments object matching the schema that tool reports.'),
+          sessionId: z.string().optional()
+            .describe('Run as this session agent, under its policy and cwd. Omit for the deployment default.'),
+          timeoutMs: z.number().int().positive().max(600_000).optional()
+            .describe('Abort the call after this many milliseconds.'),
+        }),
+        annotations: { openWorldHint: true },
+      },
+      guard('dsh_tool_call', log, async (args) => ok(await driver.callAgentTool({
+        name: args.name,
+        ...(args.args === undefined ? {} : { args: args.args }),
+        ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
         timeoutMs: args.timeoutMs ?? getConfig().limits.shellTimeoutMs,
       }))),
     )

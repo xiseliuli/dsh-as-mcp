@@ -36,6 +36,26 @@
           session: true
           files: true
           shell: true
+          # `dsh_tool_list` and `dsh_tool_call`: run this instance's own agent
+          # tools directly, with no model turn spent deciding to call them.
+          agentTools: true
+        agentTools:
+          # Which harness tools `dsh_tool_call` may reach. This is an ALLOW-LIST:
+          # anything absent is refused AND hidden from `dsh_tool_list`. A
+          # non-empty `allow` replaces the built-in default below; leaving it
+          # empty keeps the default, so widening is always deliberate.
+          #
+          # The omitted ones are omitted on purpose. `run_code` runs a program
+          # that can call any other tool, which would void this list; the
+          # `cordis_*` tools execute arbitrary plugin code; `ask_user_question`
+          # and `present` reach the human at the keyboard; and `workflow`,
+          # `ralph`, `send_message`, `spawn_teammate`, `schedule_create`,
+          # `create_goal` and `update_goal` start or sustain work that outlives
+          # the call. Add any of them here if you want them — deliberately.
+          allow: []
+          # Names removed from the permitted set, for subtracting from the
+          # default without restating it.
+          deny: []
         session:
           # Empty values fall back to the harness default model and preset.
           agentPreset: ''

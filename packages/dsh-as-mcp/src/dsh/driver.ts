@@ -4,6 +4,7 @@ import { isAbsolute, resolve as resolveAbsolute } from 'node:path'
 
 import type { Config } from '../config.js'
 import { optional } from '../config.js'
+import { DEFAULT_AGENT_TOOLS } from '../defaults.js'
 import {
   eventsOf,
   loggerOf,
@@ -13,8 +14,10 @@ import {
   type DshLogger,
   type DshSessionController,
   type DshSessionEvent,
+  type DshAgentHandle,
   type DshSessionQuery,
   type DshSandboxPolicy,
+  type DshToolRegistry,
   type DshShellExecutor,
   type DshWorkspaceRegistry,
 } from './types.js'
@@ -627,6 +630,155 @@ export class DshDriver {
   }
 
   // ---------------------------------------------------------------------------
+  // The harness's own tools
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The harness tools this caller may invoke, as the given session's agent sees
+   * them.
+   *
+   * Two filters compose, and both are needed. The allow-list is this plugin's:
+   * it decides what the endpoint exposes at all, and it is applied to the listing
+   * as well as to execution so a caller cannot discover what it may not call. The
+   * scope is the harness's: `schemas(agent)` already hides tools the session's own
+   * policy restricts away, so a caller under a narrower preset sees a narrower
+   * toolbox without this plugin reimplementing that model.
+   */
+  async listAgentTools(request: { sessionId?: string }): Promise<{
+    tools: { name: string; description: string; parameters: Record<string, unknown> }[]
+    sessionId?: string
+    /** Set when a session was named but could not be scoped to an agent. */
+    scopeError?: string
+  }> {
+    const registry = this.requireToolRegistry()
+    const { agent, scopeError } = await this.resolveScope(request.sessionId)
+    const visible = registry.schemas(agent) ?? []
+    const permitted = this.permittedAgentTools()
+    const tools = visible
+      .filter((schema) => permitted.has(schema.name))
+      .map((schema) => ({
+        name: schema.name,
+        description: schema.description,
+        parameters: schema.parameters,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name))
+    return {
+      tools,
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+      ...(scopeError === undefined ? {} : { scopeError }),
+    }
+  }
+
+  /**
+   * Run one harness tool through the production pipeline.
+   *
+   * The allow-list is re-checked here rather than trusted from the listing: a
+   * caller can name any tool it likes, and `execute` would happily run one that
+   * was never advertised.
+   */
+  async callAgentTool(request: {
+    name: string
+    args?: unknown
+    sessionId?: string
+    signal?: AbortSignal
+    timeoutMs: number
+  }): Promise<{
+    name: string
+    ok: boolean
+    value?: unknown
+    /** Text blocks the tool produced, flattened. */
+    text: string
+    error?: string
+  }> {
+    const registry = this.requireToolRegistry()
+    const permitted = this.permittedAgentTools()
+    if (!permitted.has(request.name)) {
+      throw new Error(
+        `tool "${request.name}" is not exposed by this endpoint. `
+        + 'Only the names in dsh_tool_list may be called; an operator can add one '
+        + 'with the agentTools.allow setting.',
+      )
+    }
+
+    const { agent } = await this.resolveScope(request.sessionId)
+    // Cancellation has to come from somewhere: `signal` is required by the
+    // harness, and a hung tool would otherwise hold the call open forever.
+    const controller = new AbortController()
+    const relay = (): void => controller.abort()
+    request.signal?.addEventListener('abort', relay, { once: true })
+    const timer = setTimeout(() => controller.abort(), request.timeoutMs)
+    if (typeof timer === 'object' && 'unref' in timer) timer.unref()
+
+    try {
+      const result = await registry.execute({
+        callId: `dsh-as-mcp-${randomUUID()}`,
+        name: request.name,
+        arguments: request.args ?? {},
+        ...(agent === undefined ? {} : { agent }),
+        signal: controller.signal,
+      })
+      const text = flattenToolContent(result.content)
+      if (result.isError) {
+        return { name: request.name, ok: false, text, error: result.error.message }
+      }
+      return { name: request.name, ok: true, value: result.value, text }
+    } finally {
+      clearTimeout(timer)
+      request.signal?.removeEventListener('abort', relay)
+    }
+  }
+
+  /** The tool names this configuration exposes. */
+  private permittedAgentTools(): Set<string> {
+    const { allow, deny } = this.config.agentTools
+    const names = allow.length > 0 ? allow : DEFAULT_AGENT_TOOLS.allow
+    const denied = new Set(deny)
+    return new Set(names.filter((name) => !denied.has(name)))
+  }
+
+  /**
+   * Resolve the scope a tool call runs under.
+   *
+   * A named session scopes the call to that session's live agent, so the harness
+   * applies that session's policy and the call appears in its transcript. Without
+   * one, the call is agentless and the harness falls back to the deployment
+   * default — the same resolution this plugin's own `file_*` and `shell_run`
+   * already use.
+   */
+  private async resolveScope(sessionId?: string): Promise<{
+    agent?: DshAgentHandle
+    scopeError?: string
+  }> {
+    if (sessionId === undefined) return {}
+    const controller = this.requireSessionController()
+    if (typeof controller.resolveAgent !== 'function') {
+      return { scopeError: 'this DSH profile cannot resolve a session to an agent; the call ran unscoped' }
+    }
+    const found = await controller.resolveAgent(sessionId)
+    if ('error' in found) {
+      return {
+        scopeError: `session "${sessionId}" could not be scoped to an agent: ${String(found.error)}`,
+      }
+    }
+    return { agent: found.agent }
+  }
+
+  private requireToolRegistry(): DshToolRegistry {
+    const registry = this.toolRegistry()
+    if (registry === undefined) {
+      throw new DshCapabilityError(
+        'tools',
+        'this DSH profile provides no tools service, so its agent tools cannot be called.',
+      )
+    }
+    return registry
+  }
+
+  private toolRegistry(): DshToolRegistry | undefined {
+    return serviceOf<DshToolRegistry>(this.ctx, 'tools')
+  }
+
+  // ---------------------------------------------------------------------------
   // Files
   // ---------------------------------------------------------------------------
 
@@ -750,6 +902,25 @@ export class DshDriver {
       stderrTruncated: result.stderr.truncated,
     }
   }
+}
+
+/**
+ * Flatten a tool result's content blocks to text.
+ *
+ * A result is an array of blocks of several kinds; only the text is worth
+ * returning through a JSON-RPC payload that already carries `value`, and an
+ * image or resource block is summarized rather than dropped silently.
+ */
+function flattenToolContent(content: readonly unknown[]): string {
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue
+    const record = block as { type?: unknown; text?: unknown }
+    if (record.type === 'text' && typeof record.text === 'string') parts.push(record.text)
+    else if (typeof record.type === 'string') parts.push(`[${record.type}]`)
+  }
+  return parts.join('\n')
 }
 
 /**

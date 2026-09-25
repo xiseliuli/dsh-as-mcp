@@ -189,8 +189,11 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     const initial = effectiveToken()
     if (getConfig().http.enabled || getConfig().http.mountOnWebServer) {
       log.info(
-        '[dsh-as-mcp] bearer token %s; set auth.token in the plugin row or the settings panel to pin your own value',
-        initial.source === 'generated' ? `generated at ${fallbackToken.file}` : `from ${initial.source}`,
+        // Phrased to avoid a `bearer <word>` pair: DSH's log masker matches that
+        // shape and replaces it, which turned this line into "bearer ****" and lost
+        // the part that says where the credential came from.
+        '[dsh-as-mcp] credential source: %s. Set auth.token in the plugin row or the settings panel to pin your own value.',
+        initial.source === 'generated' ? `generated at ${fallbackToken.file}` : `read from ${initial.source}`,
       )
     }
 
@@ -233,12 +236,20 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
       if (disposed || listener === undefined) return
       const token = effectiveToken()
       log.info(
-        '[dsh-as-mcp] point an MCP client at %s with header "Authorization: Bearer %s" — the full token is %s',
+        '[dsh-as-mcp] MCP endpoint ready at %s — clients must present the auth header.',
         listener.url,
+      )
+      // Two lines, and deliberately no `Bearer <value>` adjacent pair. DSH's own
+      // log masker matches the word "bearer" followed by anything and replaces the
+      // rest of the line, which ate the half of this message that told an operator
+      // where the credential lives. The fingerprint is not the secret, so masking
+      // it hides the pointer without protecting anything.
+      log.info(
+        '[dsh-as-mcp] credential fingerprint %s, %s',
         maskToken(token.token),
         token.source === 'config'
-          ? 'the value pinned in the plugin config'
-          : `in ${token.file}`,
+          ? 'pinned in the plugin config'
+          : `read from ${token.file}`,
       )
     })
 

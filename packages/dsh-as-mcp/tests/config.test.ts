@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 
 import { Config, ConfigValidationError, normalizeConfig, optional } from '../src/config.js'
+import { DEFAULT_AGENT_TOOLS } from '../src/defaults.js'
 
 const patchPath = fileURLToPath(new URL('../cordis.patch.yml', import.meta.url))
 
@@ -50,7 +51,10 @@ describe('cordis.patch.yml', () => {
     expect(config).toEqual({
       http: { enabled: true, host: '127.0.0.1', port: 8790, path: '/mcp', mountOnWebServer: false },
       auth: { token: '' },
-      tools: { workspace: true, session: true, files: true, shell: true },
+      tools: { workspace: true, session: true, files: true, shell: true, agentTools: true },
+      // The patch spells out `agentTools` too. An empty `allow` means "keep the
+      // built-in list", so the row and the schema still agree on the default.
+      agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [] },
       session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900_000 },
       limits: { maxReadBytes: 1_048_576, shellTimeoutMs: 120_000 },
       approval: { policy: 'inherit' },

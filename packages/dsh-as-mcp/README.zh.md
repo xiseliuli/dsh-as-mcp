@@ -98,6 +98,8 @@ dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 | `file_write` | 经 DSH 文件系统服务创建或覆盖文件。 |
 | `file_list` | 经 DSH 文件系统服务列一层目录。 |
 | `shell_run` | 经 DSH shell 服务执行一条命令。 |
+| `dsh_tool_list` | 本端点允许调用的 agent 工具，附 DSH 自己 agent 所见的结构。 |
+| `dsh_tool_call` | 直接运行其中之一，走与 agent 完全相同的管线。 |
 
 典型的编码流程：
 
@@ -109,6 +111,22 @@ workspace_create { path: "/Users/me/project" }
 
 `session_prompt` 是让 DSH **替你干活**的入口：DSH agent 自己规划、改文件、调它自己的工具，
 还能派生子 agent。`file_*` 和 `shell_run` 用在你想自己动手、不想经过 agent 的场合。
+
+`dsh_tool_call` 是第三种选择：直接运行 DSH **自己**的某个工具，不必先花一轮模型去决定要调用它。
+先调 `dsh_tool_list`——它报告的正是被允许的集合，没报告的名字一律拒绝。传 `sessionId` 就以该会话的
+agent、策略和工作目录运行；不传则走部署默认，与 `file_*`、`shell_run` 同一个作用域。
+
+允许集是**白名单**，而且刻意很窄。不在名单里的一律**拒绝且不出现在 `dsh_tool_list` 中**。要紧的几项遗漏：
+
+- **`run_code`** 是 DSH 的程序化工具调用入口：一次调用即可运行一个能按名字调用**任意其他工具**的程序。
+  放它进来等于让整份名单失效。
+- **`cordis_run`、`cordis_define` 等**会执行任意插件代码。现成的 bundle 都没挂它们，所以一份照今天
+  profile 写的黑名单，恰恰会在挂上它们的那个 profile 里失明——这正是这里用白名单的原因。
+- **`ask_user_question` 与 `present`** 会直接触达键盘前的人。
+- **`workflow`、`ralph`、`send_message`、`spawn_teammate`、`schedule_create`** 会启动比本次调用活得更久的
+  工作；**`create_goal`、`update_goal`** 会维持无人值守的持续执行。
+
+运维方可以通过 `agentTools.allow` 有意放宽，或用 `agentTools.deny` 从默认集合里减去。
 
 ## 安全
 

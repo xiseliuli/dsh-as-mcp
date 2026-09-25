@@ -1,4 +1,5 @@
 import type { Config } from '../src/config.js'
+import { DEFAULT_AGENT_TOOLS } from '../src/defaults.js'
 import type { EndpointStatus } from '../src/status.js'
 import type { DshLogger } from '../src/dsh/types.js'
 import { createRequestHandler, startListener, type EndpointHandle } from '../src/mcp/http.js'
@@ -34,6 +35,10 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
     readFile: async ({ path }) => ({ path, text: 'hello', truncated: false }),
     writeFile: async ({ path }) => ({ path, operation: 'create' }),
     listDirectory: async ({ path }) => ({ path, entries: [] }),
+    // Present so the new group's tools can be registered; a test that exercises
+    // them supplies its own driver.
+    listAgentTools: async () => ({ tools: [] }),
+    callAgentTool: async ({ name }) => ({ name, ok: true, text: '' }),
     runShell: async () => ({
       exitCode: 0,
       signal: null,
@@ -53,7 +58,8 @@ export function testConfig(overrides: Partial<Config['tools']> = {}, port = 0): 
   return {
     http: { enabled: true, host: '127.0.0.1', port, path: '/mcp', mountOnWebServer: false },
     auth: { token: TOKEN },
-    tools: { workspace: true, session: true, files: true, shell: false, ...overrides },
+    tools: { workspace: true, session: true, files: true, shell: false, agentTools: false, ...overrides },
+    agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 1000 },
     limits: { maxReadBytes: 1024, shellTimeoutMs: 1000 },
     approval: { policy: 'inherit' },
