@@ -1,6 +1,9 @@
 /**
  * Plugin configuration: contract, defaults, and validation.
  *
+ * Defaults themselves live in `defaults.ts`, because the settings-service schema
+ * must resolve the very same values.
+ *
  * Cordis validates a plugin's entry config through **Standard Schema**:
  *
  * ```js
@@ -22,6 +25,8 @@
  * their intent is silently not applied. Failing at boot with the exact key is
  * far cheaper to diagnose.
  */
+
+import { DEFAULT_HTTP, defaultConfig } from './defaults.js'
 
 /** Where the MCP endpoint listens, and whether DSH's own web server carries it too. */
 export interface HttpConfig {
@@ -102,6 +107,9 @@ export interface Config {
   limits: LimitsConfig
   approval: ApprovalConfig
 }
+
+/** The approval policies a configuration may name. */
+export const APPROVAL_POLICIES = ['inherit', 'allow'] as const
 
 /** One reported problem, in Standard Schema's shape. */
 interface StandardIssue {
@@ -246,11 +254,11 @@ export function normalizeConfig(input: unknown = {}): Config {
 
   const http = section(root, 'http', 'http', issues)
   rejectUnknown(http, ['enabled', 'host', 'port', 'path', 'mountOnWebServer'], 'http', issues)
-  const port = num(http, 'port', 8790, 'http', issues)
+  const port = num(http, 'port', DEFAULT_HTTP.port, 'http', issues)
   if (port < 0 || !Number.isInteger(port)) {
     issues.push(`http.port must be a non-negative integer, got ${port}`)
   }
-  const path = str(http, 'path', '/mcp', 'http', issues)
+  const path = str(http, 'path', DEFAULT_HTTP.path, 'http', issues)
   if (!path.startsWith('/')) {
     issues.push(`http.path must start with "/", got ${JSON.stringify(path)}`)
   }
@@ -273,32 +281,35 @@ export function normalizeConfig(input: unknown = {}): Config {
   // Every reader below records into `issues` rather than throwing, so the
   // result must be built before the check — otherwise a bad field value would
   // be silently replaced by its default and the config accepted.
+  const fallback = defaultConfig()
   const config: Config = {
     http: {
-      enabled: bool(http, 'enabled', true, 'http', issues),
-      host: str(http, 'host', '127.0.0.1', 'http', issues),
+      enabled: bool(http, 'enabled', fallback.http.enabled, 'http', issues),
+      host: str(http, 'host', fallback.http.host, 'http', issues),
       port,
       path,
-      mountOnWebServer: bool(http, 'mountOnWebServer', false, 'http', issues),
+      mountOnWebServer: bool(http, 'mountOnWebServer', fallback.http.mountOnWebServer, 'http', issues),
     },
-    auth: { token: str(auth, 'token', '', 'auth', issues) },
+    auth: { token: str(auth, 'token', fallback.auth.token, 'auth', issues) },
     tools: {
-      workspace: bool(tools, 'workspace', true, 'tools', issues),
-      session: bool(tools, 'session', true, 'tools', issues),
-      files: bool(tools, 'files', true, 'tools', issues),
-      shell: bool(tools, 'shell', true, 'tools', issues),
+      workspace: bool(tools, 'workspace', fallback.tools.workspace, 'tools', issues),
+      session: bool(tools, 'session', fallback.tools.session, 'tools', issues),
+      files: bool(tools, 'files', fallback.tools.files, 'tools', issues),
+      shell: bool(tools, 'shell', fallback.tools.shell, 'tools', issues),
     },
     session: {
-      agentPreset: str(session, 'agentPreset', '', 'session', issues),
-      provider: str(session, 'provider', '', 'session', issues),
-      model: str(session, 'model', '', 'session', issues),
-      promptTimeoutMs: positiveInt(session, 'promptTimeoutMs', 15 * 60_000, 'session', issues),
+      agentPreset: str(session, 'agentPreset', fallback.session.agentPreset, 'session', issues),
+      provider: str(session, 'provider', fallback.session.provider, 'session', issues),
+      model: str(session, 'model', fallback.session.model, 'session', issues),
+      promptTimeoutMs: positiveInt(session, 'promptTimeoutMs', fallback.session.promptTimeoutMs, 'session', issues),
     },
     limits: {
-      maxReadBytes: positiveInt(limits, 'maxReadBytes', 1024 * 1024, 'limits', issues),
-      shellTimeoutMs: positiveInt(limits, 'shellTimeoutMs', 120_000, 'limits', issues),
+      maxReadBytes: positiveInt(limits, 'maxReadBytes', fallback.limits.maxReadBytes, 'limits', issues),
+      shellTimeoutMs: positiveInt(limits, 'shellTimeoutMs', fallback.limits.shellTimeoutMs, 'limits', issues),
     },
-    approval: { policy: oneOf(approval, 'policy', ['inherit', 'allow'] as const, 'inherit', 'approval', issues) },
+    approval: {
+      policy: oneOf(approval, 'policy', APPROVAL_POLICIES, fallback.approval.policy, 'approval', issues),
+    },
   }
 
   if (issues.length > 0) throw new ConfigValidationError(issues)

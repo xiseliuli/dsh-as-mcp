@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 
-import { Config, type Config as DshAsMcpConfig } from './config.js'
+import { Config, normalizeConfig, optional, type Config as DshAsMcpConfig } from './config.js'
 import { DshDriver } from './dsh/driver.js'
 import { eventsOf, loggerOf, serviceOf } from './dsh/types.js'
 import {
@@ -11,7 +11,9 @@ import {
   type WebServerLike,
 } from './mcp/http.js'
 import { resolveToken } from './mcp/token.js'
-import type { ConnectionInfo } from './mcp/tools.js'
+import type { ConnectionInfo, ToolDeps } from './mcp/tools.js'
+import { installSettings, type SettingsProviderLike } from './settings.js'
+import type { EndpointStatus } from './status.js'
 
 /** Cordis plugin name. */
 export const name = 'dsh-as-mcp'
@@ -33,11 +35,14 @@ export type {
   DirectoryEntry,
   SessionInfo,
   ToolCallInfo,
-  TranscriptMessage,
   TurnResult,
+  TranscriptMessage,
   WorkspaceInfo,
 } from './dsh/driver.js'
 export type { Config as DshAsMcpConfig }
+export { SETTINGS_NAMESPACE } from './settings.js'
+
+export type { EndpointStatus } from './status.js'
 
 /**
  * Expose this DeepSeek Harness as an MCP server.
@@ -46,118 +51,190 @@ export type { Config as DshAsMcpConfig }
  * by this process's own harness services — so a session created through MCP
  * appears live in the DSH UI and runs under the same sandbox and permission
  * policy as any other session.
+ *
+ * Nothing here is captured once. The configuration is read through a getter, so
+ * an edit in the settings panel reaches the next request, and a change to the
+ * bind parameters (enabled, host, port, path, mountOnWebServer) is reconciled by
+ * moving the listener.
  */
 export function apply(ctx: Context, config: DshAsMcpConfig): void {
   const log = loggerOf(ctx)
-  const driver = new DshDriver(ctx, config)
+  const entry = normalizeConfig(config)
 
-  const { token, source, file } = resolveToken(config.auth.token)
-  const advertisedHost = config.http.host === '0.0.0.0' ? '127.0.0.1' : config.http.host
-  let url = `http://${advertisedHost}:${config.http.port}${config.http.path}`
-  let mountedOnDshWebServer = false
+  // The configured/file token is resolved once: it is the fallback whenever the
+  // effective configuration pins no token of its own.
+  const fallbackToken = resolveToken(entry.auth.token)
 
-  const connection = (): ConnectionInfo => ({
-    url,
-    token,
-    tokenSource: source,
-    mountedOnWebServer: mountedOnDshWebServer,
+  let listener: EndpointHandle | undefined
+  let unmountFromWebServer: (() => void) | undefined
+  let boundSignature = ''
+  let listenError: string | null = null
+
+  const binding = installSettings({
+    ctx,
+    entry,
+    settings: serviceOf<SettingsProviderLike>(ctx, 'settings'),
+    log,
+    onChange: () => {
+      void reconcile()
+    },
   })
 
+  const getConfig = (): DshAsMcpConfig => binding.current()
+
+  /**
+   * The token a request must present.
+   *
+   * Read per request, so pinning or rotating one in the settings panel takes
+   * effect without a restart. An empty value means "inherit": the composition
+   * token when it pins one, otherwise the generated file token.
+   */
+  const effectiveToken = (): { token: string; source: string } => {
+    const pinned = optional(getConfig().auth.token)
+    if (pinned !== undefined) {
+      return { token: pinned, source: binding.registered() ? 'settings' : 'config' }
+    }
+    return { token: fallbackToken.token, source: fallbackToken.source }
+  }
+
+  const status = (): EndpointStatus => {
+    const current = getConfig()
+    const advertisedHost = current.http.host === '0.0.0.0' ? '127.0.0.1' : current.http.host
+    return {
+      listening: listener !== undefined,
+      url: listener?.url ?? `http://${advertisedHost}:${current.http.port}${current.http.path}`,
+      mountedOnWebServer: unmountFromWebServer !== undefined,
+      error: listenError,
+      tokenSource: effectiveToken().source,
+      settingsRegistered: binding.registered(),
+    }
+  }
+
+  const connection = (): ConnectionInfo => {
+    const token = effectiveToken()
+    return {
+      url: status().url,
+      token: token.token,
+      tokenSource: token.source,
+      mountedOnWebServer: unmountFromWebServer !== undefined,
+    }
+  }
+
+  const deps: ToolDeps = { driver: new DshDriver(ctx, getConfig), getConfig, connection, status, log }
+
   const requestHandler = createRequestHandler({
-    deps: { driver, config, connection, log },
-    token,
+    deps,
+    getToken: () => effectiveToken().token,
     log,
   })
 
-  if (source === 'ephemeral') {
-    log.warn(
-      '[dsh-as-mcp] could not write %s — using a token that lives only in this process. '
-      + 'Set auth.token in the plugin row to pin a stable value.',
-      file,
-    )
-  }
+  /** Everything that decides *where* the endpoint lives. */
+  const signatureOf = (current: DshAsMcpConfig): string => [
+    current.http.enabled,
+    current.http.host,
+    current.http.port,
+    current.http.path,
+    current.http.mountOnWebServer,
+  ].join('|')
 
-  if (config.http.enabled || config.http.mountOnWebServer) {
-    log.info(
-      '[dsh-as-mcp] bearer token %s (%s); '
-      + 'configure auth.token in the plugin row to pin your own value',
-      source === 'generated' ? `generated at ${file}` : `from ${source}`,
-      source,
-    )
-  }
+  /** Move the endpoint to match the current configuration. */
+  const reconcile = async (): Promise<void> => {
+    const current = getConfig()
+    const signature = signatureOf(current)
+    if (signature === boundSignature) return
+    boundSignature = signature
 
-  ctx.effect(() => {
-    let listener: EndpointHandle | undefined
-    let unmountFromWebServer: (() => void) | undefined
-    let disposed = false
+    unmountFromWebServer?.()
+    unmountFromWebServer = undefined
+    const previous = listener
+    listener = undefined
+    await previous?.dispose()
 
-    const start = async (): Promise<void> => {
-      if (config.http.enabled) {
-        try {
-          listener = await startListener({ config, handler: requestHandler.handle, log })
-          url = listener.url
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          log.error(
-            `[dsh-as-mcp] could not listen on ${config.http.host}:${config.http.port} — ${message}. `
-            + 'Set http.port to a free port, or http.enabled=false to only mount on the DSH web server.',
-          )
-        }
-      }
-
-      if (config.http.mountOnWebServer) {
-        const webServer = serviceOf<WebServerLike>(ctx, 'webServer')
-        if (webServer === undefined) {
-          log.warn('[dsh-as-mcp] http.mountOnWebServer is set but this profile has no webServer service')
-        } else if (!disposed) {
-          unmountFromWebServer = mountOnWebServer({
-            webServer,
-            path: config.http.path,
-            handler: requestHandler.handle,
-            log,
-          })
-          mountedOnDshWebServer = true
-          if (!config.http.enabled) url = `http://127.0.0.1:<dsh port>${config.http.path}`
-        }
-      }
-
-      if (!disposed) {
-        log.info(
-          '[dsh-as-mcp] point an MCP client at %s with header "Authorization: Bearer %s"',
-          url,
-          token,
+    if (current.http.enabled) {
+      try {
+        listener = await startListener({ config: current, handler: requestHandler.handle, log })
+        listenError = null
+      } catch (error) {
+        listenError = error instanceof Error ? error.message : String(error)
+        log.error(
+          `[dsh-as-mcp] could not listen on ${current.http.host}:${current.http.port} — ${listenError}. `
+          + 'Set http.port to a free port, or http.enabled=false to only mount on the DSH web server.',
         )
       }
     }
 
-    void start()
+    if (current.http.mountOnWebServer) {
+      const webServer = serviceOf<WebServerLike>(ctx, 'webServer')
+      if (webServer === undefined) {
+        log.warn('[dsh-as-mcp] http.mountOnWebServer is set but this profile has no webServer service')
+      } else {
+        unmountFromWebServer = mountOnWebServer({
+          webServer,
+          path: current.http.path,
+          handler: requestHandler.handle,
+          log,
+        })
+      }
+    }
+  }
+
+  // Exposed so the settings panel can render live status, and so tests can
+  // observe the endpoint without reaching into the closure.
+  ;(ctx as unknown as { dshAsMcpStatus?: () => EndpointStatus }).dshAsMcpStatus = status
+
+  ctx.effect(() => {
+    let disposed = false
+
+    const initial = effectiveToken()
+    if (getConfig().http.enabled || getConfig().http.mountOnWebServer) {
+      log.info(
+        '[dsh-as-mcp] bearer token %s; set auth.token in the plugin row or the settings panel to pin your own value',
+        initial.source === 'generated' ? `generated at ${fallbackToken.file}` : `from ${initial.source}`,
+      )
+    }
+
+    // The first reconcile is issued here rather than directly, because
+    // registration completes asynchronously: by the time it resolves, a
+    // user-layer port or path is known and is honoured on the very first bind.
+    void reconcile().then(() => {
+      if (disposed || listener === undefined) return
+      log.info(
+        '[dsh-as-mcp] point an MCP client at %s with header "Authorization: Bearer %s"',
+        listener.url,
+        effectiveToken().token,
+      )
+    })
 
     return async () => {
       disposed = true
+      binding.release()
       unmountFromWebServer?.()
-      await listener?.dispose()
+      unmountFromWebServer = undefined
+      const current = listener
+      listener = undefined
+      await current?.dispose()
       await requestHandler.close()
     }
   }, 'dsh-as-mcp endpoint')
 
-  if (config.approval.policy === 'allow') {
-    // Scoped to sessions this plugin created: a programmatic caller has no
-    // browser to answer the harness approval waterfall, so without an answerer
-    // every approval-requiring tool would fail closed. Answering globally would
-    // silently widen permission for the user's own interactive sessions too.
-    ctx.effect(() => {
-      const off = eventsOf(ctx).on('approval/request', (...args: unknown[]) => {
-        const request = args[0] as { agent?: { session?: { id?: string } } } | undefined
-        const next = args[1] as (() => unknown) | undefined
-        const sessionId = request?.agent?.session?.id
-        if (sessionId !== undefined && driver.ownsSession(sessionId)) return 'allowed-once'
-        return typeof next === 'function' ? next() : undefined
-      })
-      return () => {
-        off()
-      }
-    }, 'dsh-as-mcp approval answerer')
+  // Registered unconditionally so the policy itself can change live: the handler
+  // is a pass-through unless the current policy is `allow` and the request
+  // belongs to a session this plugin started.
+  ctx.effect(() => {
+    const off = eventsOf(ctx).on('approval/request', (...args: unknown[]) => {
+      const request = args[0] as { agent?: { session?: { id?: string } } } | undefined
+      const next = args[1] as (() => unknown) | undefined
+      if (getConfig().approval.policy !== 'allow') return typeof next === 'function' ? next() : undefined
+      const sessionId = request?.agent?.session?.id
+      if (sessionId !== undefined && deps.driver.ownsSession(sessionId)) return 'allowed-once'
+      return typeof next === 'function' ? next() : undefined
+    })
+    return () => {
+      off()
+    }
+  }, 'dsh-as-mcp approval answerer')
 
+  if (entry.approval.policy === 'allow') {
     log.warn(
       '[dsh-as-mcp] approval.policy=allow — every approval request raised by a session this plugin '
       + 'created is approved automatically. Set approval.policy=inherit to disable.',

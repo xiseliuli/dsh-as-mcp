@@ -48,8 +48,19 @@ describe('scripts/smoke.mjs', () => {
     expect(stdout).toContain('dsh-as-mcp')
     expect(stdout).toContain('tools/list')
     expect(stdout).toContain('tools/call dsh_info')
+    expect(stdout).toContain('endpoint status')
+    expect(stdout).toContain('listening=true')
     expect(stdout).toContain('tools/call workspace_list')
     expect(stdout).toContain('OK —')
+  })
+
+  it('explains a missing settings entry instead of failing the run', async () => {
+    // The endpoint is still fully usable without a settings section, so an
+    // absent settings provider must be reported, not treated as a failure.
+    const { code, stdout } = await runSmoke(['--url', url])
+    expect(code).toBe(0)
+    expect(stdout).toContain('settings=absent')
+    expect(stdout).toContain('No settings entry')
   })
 
   it('runs a full workspace → session → agent round trip with --prompt', async () => {

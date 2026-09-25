@@ -147,11 +147,19 @@ describe('MCP Streamable HTTP endpoint', () => {
     const requestHandler = createRequestHandler({
       deps: {
         driver: stubDriver(),
-        config,
+        getConfig: () => config,
+        status: () => ({
+          listening: true,
+          url: first.url,
+          mountedOnWebServer: false,
+          error: null,
+          tokenSource: 'test',
+          settingsRegistered: false,
+        }),
         connection: () => ({ url: first.url, token: 'x', tokenSource: 'test', mountedOnWebServer: false }),
         log: silentLog,
       },
-      token: 'x',
+      getToken: () => 'x',
       log: silentLog,
     })
     const second = await startListener({ config, handler: requestHandler.handle, log: silentLog })

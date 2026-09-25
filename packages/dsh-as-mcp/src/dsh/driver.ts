@@ -159,9 +159,19 @@ export class DshDriver {
 
   constructor(
     private readonly ctx: unknown,
-    private readonly config: Config,
+    private readonly configSource: () => Config,
   ) {
     this.log = loggerOf(ctx)
+  }
+
+  /**
+   * The configuration as it stands now.
+   *
+   * Every reader goes through this getter, so a settings-panel edit applies to
+   * the next turn, command, or request without anything being rebuilt.
+   */
+  private get config(): Config {
+    return this.configSource()
   }
 
   /** Whether `sessionId` was created through this plugin. */

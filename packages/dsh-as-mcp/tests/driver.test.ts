@@ -72,7 +72,7 @@ function driverWith(sessions: ReturnType<typeof fakeSessions>): { driver: DshDri
   contexts.push(ctx)
   ctx.provide('sessionController', sessions.controller)
   ctx.provide('sessionQuery', sessions.query)
-  return { driver: new DshDriver(ctx, testConfig()), ctx }
+  return { driver: new DshDriver(ctx, () => testConfig()), ctx }
 }
 
 const contexts: Context[] = []
@@ -276,7 +276,7 @@ describe('DshDriver capability gating', () => {
   it('names the missing service instead of failing obscurely', async () => {
     const ctx = new Context()
     contexts.push(ctx)
-    const driver = new DshDriver(ctx, testConfig())
+    const driver = new DshDriver(ctx, () => testConfig())
 
     await expect(driver.listWorkspaces()).rejects.toThrow(/workspaceRegistry/)
     await expect(driver.createSession({ cwd: '/tmp' })).rejects.toThrow(/sessionController/)

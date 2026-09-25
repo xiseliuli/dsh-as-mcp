@@ -161,6 +161,22 @@ async function main() {
     )
   }
 
+  // The endpoint's own view of itself. Without this, "the plugin is not mounted"
+  // and "the plugin is mounted but its listener never bound" look identical from
+  // the outside, and they have entirely different fixes.
+  const settingsNote = info.settingsRegistered === true ? 'registered' : 'absent'
+  step(info.listening !== false, 'endpoint status', `listening=${info.listening === true} settings=${settingsNote}`)
+  if (info.listenError) {
+    process.stdout.write(`${red('The listener failed to bind:')} ${info.listenError}\n`)
+  }
+  if (info.settingsRegistered !== true) {
+    process.stdout.write(
+      `${dim('No settings entry: this host provided no settings service, or its plugin resolver could')}\n`
+      + `${dim('not supply @deepseek-ai/schemastery. Configuration then comes from the plugin row alone:')}\n`
+      + `${dim('the endpoint still works, but the settings panel shows no section for it.')}\n`,
+    )
+  }
+
   if (names.includes('workspace_list')) {
     const workspaces = await callTool('workspace_list')
     const count = workspaces.workspaces?.length ?? 0

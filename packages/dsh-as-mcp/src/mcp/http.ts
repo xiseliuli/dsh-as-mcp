@@ -20,7 +20,11 @@ export interface EndpointHandle {
 /** Everything {@link createRequestHandler} needs. */
 export interface RequestHandlerOptions {
   readonly deps: ToolDeps
-  readonly token: string
+  /**
+   * The token every request must present, read per request so pinning or
+   * rotating one in the settings panel takes effect without a restart.
+   */
+  readonly getToken: () => string
   readonly log: DshLogger
 }
 
@@ -58,7 +62,7 @@ function queryToken(url: string | undefined): string | null {
  * in the surface.
  */
 export function createRequestHandler(options: RequestHandlerOptions): RequestHandler {
-  const { deps, token, log } = options
+  const { deps, getToken, log } = options
 
   // One server instance per request: `createMcpHandler` owns the modern leg's
   // per-request lifetime, and our tools are stateless beyond the driver.
@@ -86,7 +90,7 @@ export function createRequestHandler(options: RequestHandlerOptions): RequestHan
 
   const guard: NodeMcpRequestHandler = async (req, res, parsedBody) => {
     const presented = presentedToken(req.headers.authorization, queryToken(req.url))
-    if (!tokenMatches(token, presented)) {
+    if (!tokenMatches(getToken(), presented)) {
       deny(res, 401, 'unauthorized')
       return
     }

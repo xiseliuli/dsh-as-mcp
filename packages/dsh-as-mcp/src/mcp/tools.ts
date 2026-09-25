@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { Config } from '../config.js'
 import type { DshDriver } from '../dsh/driver.js'
 import type { DshLogger } from '../dsh/types.js'
+import type { EndpointStatus } from '../status.js'
 
 /** Where external agents should connect, reported by `dsh_info`. */
 export interface ConnectionInfo {
@@ -17,11 +18,20 @@ export interface ConnectionInfo {
   readonly mountedOnWebServer: boolean
 }
 
-/** What {@link registerTools} needs beyond the server itself. */
+/**
+ * What {@link registerTools} needs beyond the server itself.
+ *
+ * Configuration is a getter rather than a value: the MCP handler builds a fresh
+ * server per request, so reading the toggles here at that moment is what makes a
+ * settings-panel change show up in the very next `tools/list` instead of at the
+ * next restart.
+ */
 export interface ToolDeps {
   readonly driver: McpDriver
-  readonly config: Config
+  readonly getConfig: () => Config
   readonly connection: () => ConnectionInfo
+  /** Live endpoint state, so a caller can tell "not listening" from "no such tool". */
+  readonly status: () => EndpointStatus
   readonly log: DshLogger
 }
 
@@ -35,6 +45,7 @@ export interface ToolDeps {
 export type McpDriver = Pick<
   DshDriver,
   | 'describeCapabilities'
+  | 'ownsSession'
   | 'createWorkspace'
   | 'listWorkspaces'
   | 'createSession'
@@ -85,8 +96,8 @@ function guard<A>(name: string, log: DshLogger, body: (args: A) => Promise<CallT
  * runs on every call; keep the bodies thin and push work into {@link DshDriver}.
  */
 export function registerTools(server: McpServer, deps: ToolDeps): void {
-  const { driver, config, connection, log } = deps
-  const enabled = config.tools
+  const { driver, getConfig, connection, status, log } = deps
+  const enabled = getConfig().tools
 
   server.registerTool(
     'dsh_info',
@@ -101,11 +112,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     },
     guard('dsh_info', log, async () => {
       const info = connection()
+      const live = status()
       return ok({
         endpoint: info.url,
         bearerToken: info.token,
         tokenSource: info.tokenSource,
         mountedOnDshWebServer: info.mountedOnWebServer,
+        listening: live.listening,
+        listenError: live.error,
+        settingsRegistered: live.settingsRegistered,
         enabledToolGroups: enabled,
         harnessServices: driver.describeCapabilities(),
         notes: [
@@ -275,7 +290,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       guard('file_read', log, async (args) => ok(await driver.readFile({
         path: args.path,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
-        maxBytes: config.limits.maxReadBytes,
+        maxBytes: getConfig().limits.maxReadBytes,
       }))),
     )
 
@@ -342,7 +357,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       guard('shell_run', log, async (args) => ok(await driver.runShell({
         command: args.command,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
-        timeoutMs: args.timeoutMs ?? config.limits.shellTimeoutMs,
+        timeoutMs: args.timeoutMs ?? getConfig().limits.shellTimeoutMs,
       }))),
     )
   }

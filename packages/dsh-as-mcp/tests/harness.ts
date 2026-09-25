@@ -1,4 +1,5 @@
 import type { Config } from '../src/config.js'
+import type { EndpointStatus } from '../src/status.js'
 import type { DshLogger } from '../src/dsh/types.js'
 import { createRequestHandler, startListener, type EndpointHandle } from '../src/mcp/http.js'
 import type { ConnectionInfo, McpDriver } from '../src/mcp/tools.js'
@@ -11,6 +12,7 @@ export const silentLog: DshLogger = { debug: () => {}, info: () => {}, warn: () 
 export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
   return {
     describeCapabilities: () => ({ sessionController: true, shell: false }),
+    ownsSession: (sessionId) => sessionId === 'session-1',
     createWorkspace: async ({ path, title }) => ({
       created: true,
       workspace: {
@@ -69,9 +71,17 @@ export async function boot(driver: McpDriver, config: Config = testConfig()): Pr
     tokenSource: 'test',
     mountedOnWebServer: false,
   })
+  const status = (): EndpointStatus => ({
+    listening: true,
+    url: 'http://127.0.0.1:0/mcp',
+    mountedOnWebServer: false,
+    error: null,
+    tokenSource: 'test',
+    settingsRegistered: false,
+  })
   const requestHandler = createRequestHandler({
-    deps: { driver, config, connection, log: silentLog },
-    token: TOKEN,
+    deps: { driver, getConfig: () => config, connection, status, log: silentLog },
+    getToken: () => TOKEN,
     log: silentLog,
   })
   const handle: EndpointHandle = await startListener({ config, handler: requestHandler.handle, log: silentLog })
