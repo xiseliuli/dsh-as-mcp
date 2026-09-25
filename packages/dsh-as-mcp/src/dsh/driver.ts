@@ -18,6 +18,16 @@ import {
   type DshWorkspaceRegistry,
 } from './types.js'
 
+/** How often a prompt wait re-reads the durable session log. */
+const TURN_POLL_INTERVAL_MS = 200
+
+/** Resolve after `ms`, without holding the event loop open. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref()
+  })
+}
+
 /** Raised when the running profile does not provide a service a tool needs. */
 export class DshCapabilityError extends Error {
   override readonly name = 'DshCapabilityError'
@@ -84,16 +94,34 @@ export interface DirectoryEntry {
   readonly size?: number
 }
 
-/** One tool name the driver can serve, used to advertise capability gating. */
+/** A tool name the driver can serve, used to advertise capability gating. */
 export type DriverTool = 'workspace' | 'session' | 'files' | 'shell'
 
-/** How one turn wait settled. */
-type TurnSettlement = 'turn/end' | 'idle' | 'timeout' | 'aborted'
+/**
+ * Where one request's prompt sits in the durable session log.
+ *
+ * The harness records the `requestId` given to `prompt()` as `source.rpcId` on
+ * the committed user message — `sessionController`'s own idempotency check
+ * matches it the same way — which is what makes it possible to attribute a turn
+ * to the request that created it rather than assuming the newest turn is ours.
+ */
+interface TurnLocation {
+  /** Index of the `user/message` carrying this request's id, or -1 if not committed yet. */
+  readonly promptIndex: number
+  /** Inclusive start of the content belonging to this turn. */
+  readonly from: number
+  /** Exclusive end of the content belonging to this turn. */
+  readonly to: number
+  /** The turn that consumed this prompt, or null while none has begun. */
+  readonly owningTurn: number | null
+  /** True once the owning turn has closed in the log. */
+  readonly settled: boolean
+}
 
-/** A turn observer armed *before* the prompt is admitted, so no fast turn is missed. */
-interface TurnWatcher {
-  wait(timeoutMs: number, signal?: AbortSignal): Promise<TurnSettlement>
-  dispose(): void
+/** The turn number an event belongs to, when it carries one. */
+function turnOf(event: DshSessionEvent | undefined): number | null {
+  const turn = (event?.data as { turn?: unknown } | undefined)?.turn
+  return typeof turn === 'number' ? turn : null
 }
 
 /** Extract concatenated text from a model-facing content-block array. */
@@ -151,6 +179,7 @@ export class DshDriver {
       fs: this.fileSystem() !== undefined,
       shell: this.shellExecutor() !== undefined,
       webServer: serviceOf<unknown>(this.ctx, 'webServer') !== undefined,
+      events: typeof eventsOf(this.ctx).on === 'function',
     }
   }
 
@@ -343,9 +372,9 @@ export class DshDriver {
   }
 
   /**
-   * Submit one user message and, by default, wait for the turn to settle.
+   * Submit one user message and, by default, wait for its turn to settle.
    *
-   * Turns on one session are serialized: two concurrent MCP callers cannot
+   * Turns on one session are serialized, so two concurrent MCP callers cannot
    * interleave prompts and then disagree about which reply belongs to which
    * request.
    */
@@ -359,32 +388,48 @@ export class DshDriver {
   }): Promise<{ accepted: true; turn?: TurnResult }> {
     return await this.enqueueTurn(request.sessionId, async () => {
       const controller = this.requireSessionController()
-      const timeoutMs = request.timeoutMs ?? this.config.session.promptTimeoutMs
-      const watcher = this.armTurnWatcher(request.sessionId)
-      try {
-        await controller.prompt(
-          {
-            requestId: `dsh-as-mcp-${randomUUID()}`,
-            sessionId: request.sessionId,
-            mode: request.mode,
-            content: [{ type: 'text', text: request.prompt }],
-          },
-          request.signal ?? new AbortController().signal,
-        )
-        if (!request.wait) return { accepted: true as const }
+      // The harness records this id as `source.rpcId` on the committed user
+      // message, which is how the wait below identifies *our* turn.
+      const requestId = `dsh-as-mcp-${randomUUID()}`
 
-        const settlement = await watcher.wait(timeoutMs, request.signal)
-        const summary = this.summarizeTurn(await this.readEvents(request.sessionId))
-        return {
-          accepted: true as const,
-          turn: {
-            ...summary,
-            timedOut: settlement === 'timeout',
-            aborted: settlement === 'aborted' || summary.aborted,
-          },
+      await controller.prompt(
+        {
+          requestId,
+          sessionId: request.sessionId,
+          mode: request.mode,
+          content: [{ type: 'text', text: request.prompt }],
+        },
+        request.signal ?? new AbortController().signal,
+      )
+      if (!request.wait) return { accepted: true as const }
+
+      const timeoutMs = request.timeoutMs ?? this.config.session.promptTimeoutMs
+      const deadline = Date.now() + timeoutMs
+
+      for (;;) {
+        const events = await this.readEvents(request.sessionId)
+        const location = locateTurn(events, requestId, request.mode)
+
+        if (location.settled) {
+          const summary = summarizeTurn(events, location)
+          return { accepted: true as const, turn: { ...summary, timedOut: false } }
         }
-      } finally {
-        watcher.dispose()
+
+        if (request.signal?.aborted === true) {
+          return {
+            accepted: true as const,
+            turn: { ...summarizeTurn(events, location), timedOut: false, aborted: true },
+          }
+        }
+
+        if (Date.now() >= deadline) {
+          return {
+            accepted: true as const,
+            turn: { ...summarizeTurn(events, location), timedOut: true },
+          }
+        }
+
+        await delay(TURN_POLL_INTERVAL_MS)
       }
     })
   }
@@ -415,6 +460,12 @@ export class DshDriver {
     return messages.slice(-limit)
   }
 
+  /**
+   * The durable session log.
+   *
+   * `sessionQuery` is the purpose-built reader; `sessionController.inspect` is
+   * the fallback for a composition that mounts the controller without it.
+   */
   private async readEvents(sessionId: string): Promise<readonly DshSessionEvent[]> {
     const query = this.sessionQuery()
     if (query !== undefined) {
@@ -423,128 +474,6 @@ export class DshDriver {
     }
     const inspected = await this.requireSessionController().inspect(sessionId)
     return inspected.events
-  }
-
-  /** Project the most recent turn out of a session log. */
-  private summarizeTurn(events: readonly DshSessionEvent[]): Omit<TurnResult, 'timedOut' | 'aborted'> & { aborted: boolean } {
-    let endIndex = -1
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      if (events[index]?.type === 'turn/end') {
-        endIndex = index
-        break
-      }
-    }
-
-    let startIndex = 0
-    const searchFrom = endIndex >= 0 ? endIndex : events.length - 1
-    for (let index = searchFrom; index >= 0; index -= 1) {
-      if (events[index]?.type === 'turn/start') {
-        startIndex = index
-        break
-      }
-    }
-
-    const slice = events.slice(startIndex, endIndex >= 0 ? endIndex + 1 : events.length)
-    const replies: string[] = []
-    const toolCalls: ToolCallInfo[] = []
-    let turn: number | null = null
-    let turnEndReason: unknown = null
-
-    for (const event of slice) {
-      if (event.type === 'assistant/message') {
-        const data = event.data as { turn?: number; message?: { content?: unknown } } | undefined
-        if (typeof data?.turn === 'number') turn = data.turn
-        const text = textOfBlocks(data?.message?.content)
-        if (text.trim() !== '') replies.push(text)
-      } else if (event.type === 'tool/call') {
-        const data = event.data as { name?: string; arguments?: string; callId?: string } | undefined
-        toolCalls.push({
-          name: typeof data?.name === 'string' ? data.name : 'unknown',
-          arguments: typeof data?.arguments === 'string' ? data.arguments : '',
-          ...(typeof data?.callId === 'string' ? { callId: data.callId } : {}),
-        })
-      } else if (event.type === 'turn/end') {
-        const data = event.data as { turn?: number; reason?: unknown } | undefined
-        if (typeof data?.turn === 'number') turn = data.turn
-        turnEndReason = data?.reason ?? null
-      }
-    }
-
-    return {
-      reply: replies.join('\n\n'),
-      toolCalls,
-      turn,
-      turnEndReason,
-      aborted: isAbortedReason(turnEndReason),
-    }
-  }
-
-  /**
-   * Watch one session for the end of its next turn.
-   *
-   * `sessionController.prompt()` resolves as soon as the message is queued, and
-   * the harness ships no per-message "await this turn" helper — even
-   * `whenIdle()` is whole-agent quiescence rather than per-message settlement.
-   * So the watcher subscribes to durable `turn/end` and additionally treats a
-   * `running` → `idle` transition as settlement, which covers a profile that
-   * does not surface session events to this context.
-   */
-  private armTurnWatcher(sessionId: string): TurnWatcher {
-    const bus = eventsOf(this.ctx)
-    const agents = this.agentRegistry()
-
-    let settled = false
-    let settle!: (value: TurnSettlement) => void
-    const done = new Promise<TurnSettlement>((resolve) => {
-      settle = resolve
-    })
-    const finish = (value: TurnSettlement): void => {
-      if (settled) return
-      settled = true
-      settle(value)
-    }
-
-    let sawRunning = agents?.get(sessionId)?.status === 'running'
-    const off = bus.on('session/event', (...args: unknown[]) => {
-      const session = args[0] as { id?: string } | undefined
-      const event = args[1] as { type?: string } | undefined
-      if (session?.id !== sessionId) return
-      if (event?.type === 'turn/end') finish('turn/end')
-    })
-
-    const poll = setInterval(() => {
-      const status = agents?.get(sessionId)?.status
-      if (status === 'running') sawRunning = true
-      else if (status === 'idle' && sawRunning) finish('idle')
-    }, 250)
-    poll.unref()
-
-    return {
-      async wait(timeoutMs: number, signal?: AbortSignal): Promise<TurnSettlement> {
-        let timer: NodeJS.Timeout | undefined
-        const timeout = new Promise<TurnSettlement>((resolve) => {
-          timer = setTimeout(() => resolve('timeout'), timeoutMs)
-          timer.unref()
-        })
-        const aborted = new Promise<TurnSettlement>((resolve) => {
-          if (signal === undefined) return
-          if (signal.aborted) {
-            resolve('aborted')
-            return
-          }
-          signal.addEventListener('abort', () => resolve('aborted'), { once: true })
-        })
-        try {
-          return await Promise.race([done, timeout, aborted])
-        } finally {
-          if (timer !== undefined) clearTimeout(timer)
-        }
-      },
-      dispose(): void {
-        off()
-        clearInterval(poll)
-      },
-    }
   }
 
   /** Serialize driver-initiated turns per session. */
@@ -672,5 +601,163 @@ export class DshDriver {
       stdoutTruncated: result.stdout.truncated,
       stderrTruncated: result.stderr.truncated,
     }
+  }
+}
+
+/**
+ * Locate a request's prompt in the durable log.
+ *
+ * A prompt that has not been committed yet reports `promptIndex: -1`, and one
+ * whose turn has not closed reports `settled: false`. That is what makes a
+ * queued prompt wait for *its own* turn: a `turn/end` that appears after our
+ * user message very often closes a turn that was already running when we
+ * prompted — someone typing in the DSH UI, say — and must not be mistaken for
+ * ours.
+ *
+ * Which turn owns the message depends on the delivery mode:
+ *
+ * - `queue` (the default) appends a new turn, so the owner is the next
+ *   `turn/start` to appear after the message.
+ * - `steer` delivers into the turn that is already open, so the owner is the
+ *   turn that was open when the message landed.
+ */
+export function locateTurn(
+  events: readonly DshSessionEvent[],
+  requestId: string,
+  mode: 'queue' | 'steer' = 'queue',
+): TurnLocation {
+  let promptIndex = -1
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type !== 'user/message') continue
+    const source = (event.data as { source?: { kind?: string; rpcId?: string } } | undefined)?.source
+    if (source?.kind === 'user' && source.rpcId === requestId) {
+      promptIndex = index
+      break
+    }
+  }
+
+  if (promptIndex < 0) {
+    return { promptIndex: -1, from: 0, to: 0, owningTurn: null, settled: false }
+  }
+
+  // The turn already open when our message landed: the last `turn/start` before
+  // it, unless a `turn/end` already closed that turn.
+  let openTurn: number | null = null
+  let openTurnIndex = -1
+  for (let index = promptIndex - 1; index >= 0; index -= 1) {
+    const type = events[index]?.type
+    if (type === 'turn/end') break
+    if (type === 'turn/start') {
+      openTurn = turnOf(events[index])
+      openTurnIndex = index
+      break
+    }
+  }
+
+  // The next turn to begin after our message. Activity on a turn *other* than
+  // the one already open is a turn that began after us, so it counts even if a
+  // `turn/start` was not observed; activity on the open turn belongs to it.
+  let nextTurn: number | null = null
+  let nextTurnIndex = -1
+  for (let index = promptIndex + 1; index < events.length; index += 1) {
+    const event = events[index]
+    if (event?.type === 'turn/start') {
+      nextTurn = turnOf(event)
+      nextTurnIndex = index
+      break
+    }
+    if (event?.type === 'assistant/message' || event?.type === 'tool/call') {
+      const candidate = turnOf(event)
+      if (candidate !== null && candidate !== openTurn) {
+        nextTurn = candidate
+        nextTurnIndex = index
+        break
+      }
+    }
+  }
+
+  const owningTurn = mode === 'steer' ? (openTurn ?? nextTurn) : nextTurn
+
+  // Anchoring the slice on the previous turn boundary is only right for a
+  // steered message, which joins the open turn. A queued message sits *inside*
+  // the span of the turn that was already running, so its own content begins at
+  // its own turn's start — anchoring on the boundary would fold that running
+  // turn's reply into ours.
+  let from: number
+  if (mode === 'steer' && openTurnIndex >= 0) {
+    from = openTurnIndex + 1
+  } else if (nextTurn === owningTurn && nextTurnIndex >= 0) {
+    from = nextTurnIndex
+  } else {
+    from = 0
+    for (let index = promptIndex - 1; index >= 0; index -= 1) {
+      const type = events[index]?.type
+      if (type === 'turn/end' || type === 'turn/start') {
+        from = index + 1
+        break
+      }
+    }
+  }
+
+  let endIndex = -1
+  if (owningTurn !== null) {
+    for (let index = promptIndex + 1; index < events.length; index += 1) {
+      const event = events[index]
+      if (event?.type === 'turn/end' && turnOf(event) === owningTurn) {
+        endIndex = index
+        break
+      }
+    }
+  }
+
+  return {
+    promptIndex,
+    from,
+    to: endIndex >= 0 ? endIndex + 1 : events.length,
+    owningTurn,
+    settled: endIndex >= 0,
+  }
+}
+
+/** Project one located turn onto the caller-facing result. */
+function summarizeTurn(
+  events: readonly DshSessionEvent[],
+  location: TurnLocation,
+): Omit<TurnResult, 'timedOut'> {
+  if (location.promptIndex < 0) {
+    return { reply: '', toolCalls: [], turn: null, turnEndReason: null, aborted: false }
+  }
+
+  const replies: string[] = []
+  const toolCalls: ToolCallInfo[] = []
+  let turn = location.owningTurn
+  let turnEndReason: unknown = null
+
+  for (const event of events.slice(location.from, location.to)) {
+    if (event.type === 'assistant/message') {
+      if (turn === null) turn = turnOf(event)
+      const data = event.data as { message?: { content?: unknown } } | undefined
+      const text = textOfBlocks(data?.message?.content)
+      if (text.trim() !== '') replies.push(text)
+    } else if (event.type === 'tool/call') {
+      if (turn === null) turn = turnOf(event)
+      const data = event.data as { name?: string; arguments?: string; callId?: string } | undefined
+      toolCalls.push({
+        name: typeof data?.name === 'string' ? data.name : 'unknown',
+        arguments: typeof data?.arguments === 'string' ? data.arguments : '',
+        ...(typeof data?.callId === 'string' ? { callId: data.callId } : {}),
+      })
+    } else if (event.type === 'turn/end') {
+      turnEndReason = (event.data as { reason?: unknown } | undefined)?.reason ?? null
+    }
+  }
+
+  return {
+    reply: replies.join('\n\n'),
+    toolCalls,
+    turn,
+    turnEndReason,
+    aborted: isAbortedReason(turnEndReason),
   }
 }

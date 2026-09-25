@@ -147,7 +147,7 @@ export async function startListener(input: {
 }
 
 /** The slice of `ctx.webServer` this plugin uses. */
-interface WebServerLike {
+export interface WebServerLike {
   register(route: {
     kind: 'exact' | 'prefix'
     path: string

@@ -8,6 +8,7 @@ import {
   mountOnWebServer,
   startListener,
   type EndpointHandle,
+  type WebServerLike,
 } from './mcp/http.js'
 import { resolveToken } from './mcp/token.js'
 import type { ConnectionInfo } from './mcp/tools.js'
@@ -38,15 +39,6 @@ export type {
 } from './dsh/driver.js'
 export type { Config as DshAsMcpConfig }
 
-/** The slice of `ctx.webServer` this plugin uses. */
-interface WebServerLike {
-  register(route: {
-    kind: 'exact' | 'prefix'
-    path: string
-    handler: (req: never, res: never) => void | Promise<void>
-  }): () => void
-}
-
 /**
  * Expose this DeepSeek Harness as an MCP server.
  *
@@ -72,7 +64,7 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
   })
 
   const requestHandler = createRequestHandler({
-    deps: { driver, config, connection },
+    deps: { driver, config, connection, log },
     token,
     log,
   })

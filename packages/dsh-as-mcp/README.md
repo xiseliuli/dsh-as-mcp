@@ -187,11 +187,14 @@ key named, because a silently ignored typo means your override is not being appl
   which service is missing and which bundle provides it. Declaring `inject` would make the
   loader refuse to mount the plugin instead, which is a worse answer for a capability bridge.
 - **Waiting for a turn.** The harness exposes no per-message "await this turn" call —
-  `sessionController.prompt()` returns as soon as the message is queued. So `session_prompt`
-  arms a durable `turn/end` listener *before* prompting, and additionally treats a
-  `running → idle` status transition as settlement for a profile that does not surface
-  session events to this context. Turns on one session are serialized, so two concurrent
-  callers cannot interleave prompts and then disagree about which reply is theirs.
+  `sessionController.prompt()` returns as soon as the message is queued. So `session_prompt` polls
+  the durable session log for a `user/message` whose `source.rpcId` equals the `requestId` it
+  passed to `prompt()` — the same correlation the session controller's own idempotency check uses
+  — and then waits for *that* turn to close. Attribution is what makes this correct rather than
+  plausible: a queued prompt's log entry sits inside the span of the turn that was already
+  running, so a `turn/end` appearing after our message is usually someone else's turn, not ours.
+  Turns on one session are additionally serialized, so two concurrent callers cannot interleave
+  prompts and then disagree about which reply is theirs.
 - **Filesystem.** `workspace_create` and `file_write` use `node:fs` `mkdir` for parent
   directories only; the harness filesystem service deliberately exposes no `mkdir`. Every read
   and write goes through `ctx.fs`, so the same path rules and sandboxing the DSH agent lives

@@ -70,7 +70,7 @@ export async function boot(driver: McpDriver, config: Config = testConfig()): Pr
     mountedOnWebServer: false,
   })
   const requestHandler = createRequestHandler({
-    deps: { driver, config, connection },
+    deps: { driver, config, connection, log: silentLog },
     token: TOKEN,
     log: silentLog,
   })

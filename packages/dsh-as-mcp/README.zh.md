@@ -175,10 +175,12 @@ workspace_create { path: "/Users/me/project" }
   接缝的裸 CLI profile 里加载，然后由每个工具明确报出缺少哪个服务、该由哪个 bundle 提供。
   如果声明 `inject`，loader 会直接拒绝挂载插件——对一个能力桥来说这是更差的答案。
 - **如何等一轮结束。** harness 没有提供「等待这一条消息对应那一轮」的 API——
-  `sessionController.prompt()` 在消息入队后就立即返回。所以 `session_prompt` 会在 prompt
-  **之前**先挂上持久的 `turn/end` 监听，并额外把 `running → idle` 的状态跃迁视作结束，以覆盖
-  那个不向本 context 暴露会话事件的 profile。同一会话上的轮次是串行的，因此两个并发调用方
-  不会把 prompt 交错在一起、然后对「哪条回复属于谁」产生分歧。
+  `sessionController.prompt()` 在消息入队后就立即返回。所以 `session_prompt` 会轮询持久会话
+  日志，找 `source.rpcId` 等于它传给 `prompt()` 的 `requestId` 的那条 `user/message`——这正是
+  session controller 自己做幂等检查时用的关联方式——然后等**那一轮**关闭。这个归属判断才是
+  正确性的来源，而不是「看起来合理」：排队中的 prompt 在日志里是落在**正在跑的那一轮**的区间
+  内部的，所以出现在我们消息之后的 `turn/end` 通常属于别人，不属于我们。同一会话上的轮次另外
+  还做了串行化，因此两个并发调用方不会把 prompt 交错在一起、然后对「哪条回复属于谁」产生分歧。
 - **文件系统。** 只有 `workspace_create` 和 `file_write` 为创建父目录用到 `node:fs` 的
   `mkdir`；harness 的文件系统服务有意不暴露 `mkdir`。其余读写一律走 `ctx.fs`，所以 DSH agent
   所处的路径规则与沙箱同样约束调用方。

@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import type { Config } from '../config.js'
 import type { DshDriver } from '../dsh/driver.js'
+import type { DshLogger } from '../dsh/types.js'
 
 /** Where external agents should connect, reported by `dsh_info`. */
 export interface ConnectionInfo {
@@ -21,6 +22,7 @@ export interface ToolDeps {
   readonly driver: McpDriver
   readonly config: Config
   readonly connection: () => ConnectionInfo
+  readonly log: DshLogger
 }
 
 /**
@@ -51,16 +53,25 @@ function ok(value: unknown): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] }
 }
 
-/** Wrap a tool body so a harness failure becomes a readable tool error, not a transport error. */
-function guard<A>(name: string, body: (args: A) => Promise<CallToolResult>) {
+/**
+ * Wrap a tool body so a harness failure becomes a readable tool error rather
+ * than a transport error.
+ *
+ * The caller is handed the message alone: a stack trace would leak this host's
+ * paths into another agent's context and spend its attention on frames it
+ * cannot act on. The full error, stack included, goes to the DSH log instead.
+ */
+function guard<A>(name: string, log: DshLogger, body: (args: A) => Promise<CallToolResult>) {
   return async (args: A): Promise<CallToolResult> => {
     try {
       return await body(args)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const detail = error instanceof Error && error.stack !== undefined ? `\n${error.stack}` : ''
+      log.warn(`[dsh-as-mcp] %s failed:`, name, error)
       return {
-        content: [{ type: 'text', text: `${name} failed: ${message}${detail}` }],
+        content: [{
+          type: 'text',
+          text: `${name} failed: ${error instanceof Error ? error.message : String(error)}`,
+        }],
         isError: true,
       }
     }
@@ -74,7 +85,7 @@ function guard<A>(name: string, body: (args: A) => Promise<CallToolResult>) {
  * runs on every call; keep the bodies thin and push work into {@link DshDriver}.
  */
 export function registerTools(server: McpServer, deps: ToolDeps): void {
-  const { driver, config, connection } = deps
+  const { driver, config, connection, log } = deps
   const enabled = config.tools
 
   server.registerTool(
@@ -88,7 +99,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    guard('dsh_info', async () => {
+    guard('dsh_info', log, async () => {
       const info = connection()
       return ok({
         endpoint: info.url,
@@ -124,7 +135,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { openWorldHint: false },
       },
-      guard('workspace_create', async (args) => ok(await driver.createWorkspace({
+      guard('workspace_create', log, async (args) => ok(await driver.createWorkspace({
         path: args.path,
         ...(args.title === undefined ? {} : { title: args.title }),
         ...(args.createDirectory === undefined ? {} : { createDirectory: args.createDirectory }),
@@ -139,7 +150,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         inputSchema: z.object({}),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
-      guard('workspace_list', async () => ok({ workspaces: await driver.listWorkspaces() })),
+      guard('workspace_list', log, async () => ok({ workspaces: await driver.listWorkspaces() })),
     )
   }
 
@@ -161,7 +172,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { openWorldHint: false },
       },
-      guard('session_create', async (args) => ok(await driver.createSession({
+      guard('session_create', log, async (args) => ok(await driver.createSession({
         ...(args.workspaceId === undefined ? {} : { workspaceId: args.workspaceId }),
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
         ...(args.agentPreset === undefined ? {} : { agentPreset: args.agentPreset }),
@@ -180,7 +191,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
-      guard('session_list', async (args) => ok({ sessions: await driver.listSessions(args.limit ?? 20) })),
+      guard('session_list', log, async (args) => ok({ sessions: await driver.listSessions(args.limit ?? 20) })),
     )
 
     server.registerTool(
@@ -210,7 +221,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { openWorldHint: true },
       },
-      guard('session_prompt', async (args) => ok(await driver.promptSession({
+      guard('session_prompt', log, async (args) => ok(await driver.promptSession({
         sessionId: args.sessionId,
         prompt: args.prompt,
         mode: args.mode ?? 'queue',
@@ -230,7 +241,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
-      guard('session_messages', async (args) => ok({
+      guard('session_messages', log, async (args) => ok({
         messages: await driver.readTranscript(args.sessionId, args.limit ?? 50),
       })),
     )
@@ -243,7 +254,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         inputSchema: z.object({ sessionId: z.string() }),
         annotations: { openWorldHint: false },
       },
-      guard('session_cancel', async (args) => ok(driver.cancelSession(args.sessionId))),
+      guard('session_cancel', log, async (args) => ok(driver.cancelSession(args.sessionId))),
     )
   }
 
@@ -261,7 +272,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
-      guard('file_read', async (args) => ok(await driver.readFile({
+      guard('file_read', log, async (args) => ok(await driver.readFile({
         path: args.path,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
         maxBytes: config.limits.maxReadBytes,
@@ -286,7 +297,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { openWorldHint: false },
       },
-      guard('file_write', async (args) => ok(await driver.writeFile({
+      guard('file_write', log, async (args) => ok(await driver.writeFile({
         path: args.path,
         content: args.content,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
@@ -305,7 +316,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
-      guard('file_list', async (args) => ok(await driver.listDirectory({
+      guard('file_list', log, async (args) => ok(await driver.listDirectory({
         path: args.path,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
       }))),
@@ -328,7 +339,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { openWorldHint: true },
       },
-      guard('shell_run', async (args) => ok(await driver.runShell({
+      guard('shell_run', log, async (args) => ok(await driver.runShell({
         command: args.command,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
         timeoutMs: args.timeoutMs ?? config.limits.shellTimeoutMs,

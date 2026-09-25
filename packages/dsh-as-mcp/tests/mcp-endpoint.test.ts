@@ -101,6 +101,9 @@ describe('MCP Streamable HTTP endpoint', () => {
       const { isError, text } = await callTool(failing.url, 'workspace_list', {})
       expect(isError).toBe(true)
       expect(text).toContain('harness exploded')
+      // The stack goes to the DSH log, not into another agent's context.
+      expect(text).not.toMatch(/\n\s+at /)
+      expect(text).not.toContain('driver.ts')
     } finally {
       await failing.stop()
     }
@@ -146,6 +149,7 @@ describe('MCP Streamable HTTP endpoint', () => {
         driver: stubDriver(),
         config,
         connection: () => ({ url: first.url, token: 'x', tokenSource: 'test', mountedOnWebServer: false }),
+        log: silentLog,
       },
       token: 'x',
       log: silentLog,
