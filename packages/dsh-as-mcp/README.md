@@ -344,6 +344,21 @@ and loads the plugin into a real `@deepseek-ai/cordis` context — with `resolve
 config validation — so the wire protocol, the bridge, and the loader contract are all
 exercised rather than mocked.
 
+Two scripts run against a **live** endpoint, which is a different thing:
+
+```bash
+node scripts/smoke.mjs       # handshake, tools/list, dsh_info — is the wire up?
+node scripts/exercise.mjs    # ~40 checks: create a workspace, start a session, have the
+                             # DSH agent write code, read it back off disk, run it, check
+                             # the transcript, and confirm the failure paths are legible
+```
+
+`smoke.mjs` answers "does this speak MCP". `exercise.mjs` answers "can an outside agent
+actually drive a DSH instance through it". It is the only check that catches a whole class of
+bug a green unit suite misses — a test stub more forgiving than the harness service it stands
+in for. That class produced two real failures here, both in a primary use case, so run it after
+any change to the driver.
+
 ## License
 
 MIT

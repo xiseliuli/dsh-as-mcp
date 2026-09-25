@@ -226,7 +226,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           + 'message and return immediately.',
         inputSchema: z.object({
           sessionId: z.string().describe('Session id from session_create or session_list.'),
-          prompt: z.string().min(1).describe('The task or question for the DSH agent.'),
+          // `.trim()` before `.min(1)`: the harness rejects whitespace-only
+          // content, so letting it through here would only move the failure
+          // deeper, after a session has been touched.
+          prompt: z.string().trim().min(1).describe('The task or question for the DSH agent.'),
           mode: z
             .enum(['queue', 'steer'])
             .optional()

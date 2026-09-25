@@ -347,24 +347,38 @@ export class DshDriver {
     agentPreset?: string
     provider?: string
     model?: string
-  }): Promise<{ sessionId: string; cwd?: string; agentPreset?: string; model?: string }> {
+  }): Promise<{
+    sessionId: string
+    cwd?: string
+    agentPreset?: string
+    model?: string
+    /** Set when the session was created but its requested model was not applied. */
+    modelSelectionError?: string
+  }> {
     const controller = this.requireSessionController()
 
     const workspaceId = request.workspaceId
-    let cwd = request.cwd
+    // Resolved to an absolute path here: the session header requires one, and a
+    // relative directory would otherwise be accepted by the call and rejected
+    // later by the harness.
+    let cwd = request.cwd === undefined ? undefined : resolveAbsolute(request.cwd)
     if (workspaceId === undefined && cwd === undefined) {
       throw new Error('provide either workspaceId or cwd when creating a session')
     }
     if (workspaceId !== undefined) {
       const workspace = this.requireWorkspaceRegistry().get(workspaceId)
       if (workspace === undefined) throw new Error(`unknown workspaceId: ${workspaceId}`)
+      // Kept for the reply only. It must not be forwarded to `create`: the
+      // harness rejects `workspaceId` and `cwd` together and resolves the
+      // directory from the workspace itself, so passing both — which is what
+      // deriving `cwd` here and passing it on did — fails every call that names
+      // a workspace, i.e. the primary path.
       cwd = workspace.path
     }
 
     const agentPreset = optional(request.agentPreset) ?? optional(this.config.session.agentPreset)
     const created = await controller.create({
-      ...(workspaceId === undefined ? {} : { workspaceId }),
-      ...(cwd === undefined ? {} : { cwd }),
+      ...(workspaceId === undefined ? { cwd: cwd as string } : { workspaceId }),
       ...(agentPreset === undefined ? {} : { agentPreset }),
     })
     this.ownedSessions.add(created.sessionId)
@@ -372,9 +386,26 @@ export class DshDriver {
     const provider = optional(request.provider) ?? optional(this.config.session.provider)
     const model = optional(request.model) ?? optional(this.config.session.model)
     let selected: string | undefined
+    let modelSelectionError: string | undefined
     if (provider !== undefined && model !== undefined) {
-      const result = await controller.selectModel({ sessionId: created.sessionId, provider, model })
-      selected = `${result.selected.provider}/${result.selected.model}`
+      try {
+        const result = await controller.selectModel({ sessionId: created.sessionId, provider, model })
+        selected = `${result.selected.provider}/${result.selected.model}`
+      } catch (error) {
+        // The session exists and is usable on its default route, so failing the
+        // whole call here would be the worst of both: the caller is told nothing
+        // happened while a live session sits in the DSH UI. The essential job —
+        // creating the session — succeeded, so it is reported as such, with the
+        // model problem stated plainly enough to act on.
+        modelSelectionError = error instanceof Error ? error.message : String(error)
+        this.log.warn(
+          '[dsh-as-mcp] session %s was created but the requested model %s/%s could not be selected: %s',
+          created.sessionId,
+          provider,
+          model,
+          modelSelectionError,
+        )
+      }
     } else if (provider !== undefined || model !== undefined) {
       this.log.warn('[dsh-as-mcp] provider and model must be set together; ignoring partial selection')
     }
@@ -384,6 +415,7 @@ export class DshDriver {
       ...(cwd === undefined ? {} : { cwd }),
       ...(created.agentPreset === undefined ? {} : { agentPreset: created.agentPreset }),
       ...(selected === undefined ? {} : { model: selected }),
+      ...(modelSelectionError === undefined ? {} : { modelSelectionError }),
     }
   }
 
@@ -537,7 +569,12 @@ export class DshDriver {
     const info = await fs.stat(target)
     if (info?.type === 'directory') throw new Error(`${target.displayPath} is a directory; use file_list`)
 
-    const bytes = await fs.readBytes(target, undefined, request.maxBytes + 1)
+    // One byte past the cap, so a file exactly at the cap reads whole and one
+    // byte more proves truncation. `readByteRange` is the read that can do this:
+    // `readBytes` REJECTS with `FS_TOO_LARGE` when the file exceeds its cap
+    // rather than truncating, so using it here made `truncated` unreachable and
+    // turned every file over the cap into an error.
+    const bytes = await fs.readByteRange(target, { offset: 0, length: request.maxBytes + 1 })
     const truncated = bytes.byteLength > request.maxBytes
     const slice = truncated ? bytes.subarray(0, request.maxBytes) : bytes
     return {
@@ -706,18 +743,40 @@ export function locateTurn(
     }
   }
 
-  const owningTurn = mode === 'steer' ? (openTurn ?? nextTurn) : nextTurn
+  // Whether the open turn had already produced output before our message. If it
+  // had, our message arrived while that turn was mid-answer, so it cannot be the
+  // one that answers us and a later `turn/start` must exist. If it had not, the
+  // open turn is one our own message just started — DSH opens the turn before
+  // persisting the `user/message`, so this is the ordinary idle-session shape.
+  const openTurnHadOutput =
+    openTurnIndex >= 0
+    && events
+      .slice(openTurnIndex + 1, promptIndex)
+      .some((entry) => entry?.type === 'assistant/message' || entry?.type === 'tool/call')
+
+  // The next turn is a *preference*, not a requirement. Requiring one made
+  // `owningTurn` null for the idle-session shape, which made `settled`
+  // permanently false, which made every waiting `session_prompt` sit until its
+  // timeout and then report `timedOut: true` on a turn that had in fact
+  // completed. When no later turn begins, the open turn is the owner — unless it
+  // was already answering someone else.
+  const owningTurn =
+    mode === 'steer'
+      ? (openTurn ?? nextTurn)
+      : (nextTurn ?? (openTurnHadOutput ? null : openTurn))
 
   // Anchoring the slice on the previous turn boundary is only right for a
   // steered message, which joins the open turn. A queued message sits *inside*
   // the span of the turn that was already running, so its own content begins at
-  // its own turn's start — anchoring on the boundary would fold that running
-  // turn's reply into ours.
+  // the message itself — an earlier reply in that same turn predates us and is
+  // not ours to report.
   let from: number
   if (mode === 'steer' && openTurnIndex >= 0) {
     from = openTurnIndex + 1
-  } else if (nextTurn === owningTurn && nextTurnIndex >= 0) {
+  } else if (nextTurn !== null && nextTurn === owningTurn && nextTurnIndex >= 0) {
     from = nextTurnIndex
+  } else if (owningTurn !== null && owningTurn === openTurn) {
+    from = promptIndex
   } else {
     from = 0
     for (let index = promptIndex - 1; index >= 0; index -= 1) {

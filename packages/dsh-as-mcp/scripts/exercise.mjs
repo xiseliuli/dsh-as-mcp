@@ -20,7 +20,7 @@
  * @module dsh-as-mcp/scripts/exercise
  */
 
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -231,8 +231,16 @@ section('surface')
   }
 }
 
-const scratch = await mkdtemp(join(tmpdir(), 'dsh-as-mcp-exercise-'))
+// A FIXED scratch path, not a fresh temp directory per run. Registering a
+// workspace is permanent — the harness offers no unregister — so `mkdtemp` here
+// would leave one dead entry in the user's DSH workspace list per run, each
+// pointing at a directory that no longer exists. A stable path means
+// `workspace_create` is idempotent across runs and exactly one registration ever
+// appears. The directory itself is deleted first so the "create a missing
+// directory" path is still exercised every time.
+const scratch = option('dir', join(tmpdir(), 'dsh-as-mcp-exercise'))
 const projectPath = join(scratch, 'demo-project')
+await rm(projectPath, { recursive: true, force: true })
 const codePath = join(projectPath, 'fizzbuzz.mjs')
 let workspaceId
 let sessionId
@@ -370,8 +378,10 @@ try {
 } catch (error) {
   check(false, 'run aborted', error instanceof Error ? error.message : String(error))
 } finally {
-  if (!keep) await rm(scratch, { recursive: true, force: true })
-  else process.stdout.write(`\n${dim(`scratch kept at ${scratch}`)}\n`)
+  // The project directory is removed either way; the workspace registration is
+  // left in place so the next run reuses it rather than adding another.
+  if (!keep) await rm(projectPath, { recursive: true, force: true })
+  else process.stdout.write(`\n${dim(`artifacts kept at ${projectPath}`)}\n`)
 }
 
 process.stdout.write(

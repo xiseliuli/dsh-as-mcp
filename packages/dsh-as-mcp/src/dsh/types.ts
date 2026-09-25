@@ -159,7 +159,19 @@ export interface DshFileSystem {
   processPath(target: DshFsTarget): string
   stat(target: DshFsTarget, signal?: AbortSignal): Promise<DshFsInfo | undefined>
   readText(target: DshFsTarget, signal?: AbortSignal): Promise<string>
-  readBytes(target: DshFsTarget, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array>
+  /**
+   * Read one byte window of a file.
+   *
+   * Deliberately not `readBytes`: that one *rejects* with `FS_TOO_LARGE` when the
+   * file exceeds its cap "instead of returning a truncated result", so it cannot
+   * be used to read the head of a large file. The window is the bound here, not
+   * the file, which is exactly the semantics a bounded read needs.
+   */
+  readByteRange(
+    target: DshFsTarget,
+    range: { offset: number; length: number },
+    signal?: AbortSignal,
+  ): Promise<Uint8Array>
   listDir(target: DshFsTarget, signal?: AbortSignal): Promise<readonly DshFsDirEntry[]>
   writeText(target: DshFsTarget, content: string, expected?: unknown, signal?: AbortSignal): Promise<{
     readonly operation: 'create' | 'update'

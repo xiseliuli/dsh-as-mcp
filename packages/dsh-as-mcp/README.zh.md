@@ -315,6 +315,18 @@ pnpm test        # vitest
 `@deepseek-ai/cordis` context（配置校验由 `resolveConfig` 执行），因此线协议、桥接脚本和
 loader 契约都是被真正跑过的，不是 mock 出来的。
 
+另有两个脚本针对**运行中的端点**，这是另一回事：
+
+```bash
+node scripts/smoke.mjs       # 握手、tools/list、dsh_info —— 线通不通？
+node scripts/exercise.mjs    # 约 40 项断言：建工作区、开会话、让 DSH agent 写代码、
+                             # 从磁盘读回来、运行它、检查对话记录，并确认失败路径可读
+```
+
+`smoke.mjs` 回答"这玩意儿会说 MCP 吗"，`exercise.mjs` 回答"外部 agent 真的能通过它驱动一个
+DSH 实例吗"。它是唯一能抓住某一整类 bug 的检查——**测试桩比它所替代的 harness 服务更宽容**。
+这类 bug 在本项目里造成过两次真实故障，且都落在主路径上，所以改动驱动后务必跑一遍。
+
 ## 许可证
 
 MIT
