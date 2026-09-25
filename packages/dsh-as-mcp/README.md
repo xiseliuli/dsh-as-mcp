@@ -356,8 +356,20 @@ node scripts/exercise.mjs    # ~40 checks: create a workspace, start a session, 
 `smoke.mjs` answers "does this speak MCP". `exercise.mjs` answers "can an outside agent
 actually drive a DSH instance through it". It is the only check that catches a whole class of
 bug a green unit suite misses — a test stub more forgiving than the harness service it stands
-in for. That class produced two real failures here, both in a primary use case, so run it after
-any change to the driver.
+in for. That class produced four real failures here, three in a primary use case, so run it
+after any change to the driver. `docs/STUB-FIDELITY-AUDIT.md` is the audit that enumerated the
+class; it is worth reading before writing a double for a harness service.
+
+Two rules this codebase learned the hard way:
+
+- **A double must enforce the service's real preconditions.** A stub that returns `undefined`
+  where the real call *rejects*, or that accepts both arguments where the real one rejects the
+  pair, converts a production failure into a green test. Where a double cannot model a service,
+  the missing double is itself the finding — the filesystem and shell seams had none, and the
+  worst bug lived there.
+- **A test can lock a bug in.** One asserted that a `turn/start` *before* our message meant the
+  turn was not ours; a real session log showed that is exactly the ordinary shape, and the
+  assertion kept every waiting `session_prompt` timing out on turns that had completed.
 
 ## License
 

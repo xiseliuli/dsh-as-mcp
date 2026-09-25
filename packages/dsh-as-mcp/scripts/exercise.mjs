@@ -287,7 +287,11 @@ try {
     ].join(' ')
     const outcome = await must('session_prompt', { sessionId, prompt, timeoutMs: 300_000 })
     const turn = outcome.turn ?? {}
-    check(turn.timedOut !== true, 'the turn settled before the timeout', turn.turnEndReason ?? '')
+    check(
+      turn.timedOut !== true,
+      'the turn settled before the timeout',
+      typeof turn.turnEndReason === 'string' ? turn.turnEndReason : JSON.stringify(turn.turnEndReason),
+    )
     check(typeof turn.reply === 'string' && turn.reply.trim() !== '', 'the agent replied', `${(turn.reply ?? '').length} chars`)
     check((turn.toolCalls ?? []).length > 0, 'the agent used its own tools', `${(turn.toolCalls ?? []).length} calls`)
     const names = [...new Set((turn.toolCalls ?? []).map((call) => call.name))]
