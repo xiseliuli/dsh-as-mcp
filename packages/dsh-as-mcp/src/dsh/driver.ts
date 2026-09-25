@@ -259,7 +259,15 @@ export class DshDriver {
   private sandboxMode(): string | undefined {
     const policy = serviceOf<DshSandboxPolicy>(this.ctx, 'sandboxPolicy')
     if (policy === undefined) return undefined
-    if (typeof policy.resolve === 'function') return policy.resolve().mode
+    if (typeof policy.resolve === 'function') {
+      try {
+        return policy.resolve().mode
+      } catch {
+        // Fall through to the static default rather than failing the call. This
+        // guard exists to honour a policy the operator stated, not to make
+        // directory creation depend on the policy service being reachable.
+      }
+    }
     return policy.defaultMode
   }
 
