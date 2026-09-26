@@ -117,10 +117,18 @@ its own tools, and can spawn subagents. `file_*` and `shell_run` are for when yo
 something yourself without involving the agent.
 
 `dsh_tool_call` is the third option: it runs one of DSH's *own* tools without spending a model
-turn to decide to call it. Call `dsh_tool_list` first — it reports exactly what is permitted,
-and a name it does not report is refused. Pass a `sessionId` to run under that session's agent,
-policy and working directory; omit it to run against the deployment default, the same scope
-`file_*` and `shell_run` use.
+turn to decide to call it. Call `dsh_tool_list` first — it reports exactly what is permitted, and
+a name it does not report is refused. Both require a `sessionId`, because that session's agent
+*is* the policy: it is what makes the harness apply a sandbox, run guards, and file the call under
+a transcript.
+
+There is deliberately no session-less form. DSH registers a tool into the scope of the context
+that registers it, and every tool package ships inside an agent preset, so the global layer is
+empty — an unscoped listing really does return zero tools, and an unscoped call answers
+`unknown tool`. A `dsh_tool_list` without a session therefore **fails loudly** rather than
+reporting an empty toolbox, which would read as "nothing is permitted". For the agentless path
+use `file_read` / `file_write` / `file_list` / `shell_run`, which resolve the deployment policy
+directly and need no session.
 
 The permitted set is an **allow-list**, and it is deliberately narrow. Everything absent is
 refused *and* hidden from `dsh_tool_list`. The omissions that matter:

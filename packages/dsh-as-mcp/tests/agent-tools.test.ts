@@ -1,10 +1,11 @@
 /**
  * `dsh_tool_list` / `dsh_tool_call`: driving the harness's own toolbox.
  *
- * The property under test is not "does execute() get called" — it is that the
- * allow-list is a real boundary. A caller can name any tool it likes, so the list
- * is re-checked at execution and applied to the *listing* as well, or a caller
- * could enumerate what it may not call and then try it.
+ * Two properties are under test. First, the allow-list is a real boundary — a
+ * caller can name any tool it likes, so the list is re-checked at execution and
+ * applied to the *listing* too, or a caller could enumerate what it may not call
+ * and then call it anyway. Second, a session is mandatory: the agent is what
+ * supplies the scope, and there is no unscoped toolbox to fall back to.
  */
 
 import { Context } from '@deepseek-ai/cordis'
@@ -61,26 +62,29 @@ function fakeTools(options: { visible?: string[]; fail?: boolean } = {}) {
   }
 }
 
-/** A driver over doubles, with an optional agent-resolution behaviour. */
+/**
+ * A driver over doubles.
+ *
+ * A session resolver is always present: every tool call needs a scope, so a test
+ * that forgot one would be exercising an error path by accident.
+ */
 function driverWith(input: {
   tools?: unknown
   resolveAgent?: (sessionId: string) => Promise<unknown>
   config?: Partial<Config['tools']> & { allow?: string[]; deny?: string[] }
-}): DshDriver {
+} = {}): DshDriver {
   const ctx = new Context()
   contexts.push(ctx)
   ctx.provide('tools', input.tools ?? fakeTools().tools)
-  if (input.resolveAgent !== undefined) {
-    ctx.provide('sessionController', {
-      resolveAgent: input.resolveAgent,
-      create: async () => ({ sessionId: 's' }),
-      list: async () => ({ items: [] }),
-      selectModel: async () => ({ selected: { provider: 'p', model: 'm' } }),
-      prompt: async () => ({ accepted: true }),
-      cancel: () => ({ accepted: true }),
-      inspect: async () => ({ events: [] }),
-    })
-  }
+  ctx.provide('sessionController', {
+    resolveAgent: input.resolveAgent ?? (async () => ({ agent: AGENT })),
+    create: async () => ({ sessionId: 's' }),
+    list: async () => ({ items: [] }),
+    selectModel: async () => ({ selected: { provider: 'p', model: 'm' } }),
+    prompt: async () => ({ accepted: true }),
+    cancel: () => ({ accepted: true }),
+    inspect: async () => ({ events: [] }),
+  })
   const base = testConfig()
   const config: Config = {
     ...base,
@@ -94,11 +98,36 @@ function driverWith(input: {
 }
 
 const AGENT = { id: 'agent-1' }
+const SESSION = 'session-1'
+
+describe('the scope requirement', () => {
+  it('refuses to act without a session instead of reporting an empty toolbox', async () => {
+    // Measured against the live harness: an unscoped `schemas()` returns zero
+    // tools and an unscoped `execute` answers `unknown tool`, because tools are
+    // registered into the scope of the context that registers them and every tool
+    // package ships inside an agent preset. Returning `[]` here would read as
+    // "nothing is permitted" — a wrong answer where an error belongs.
+    const driver = driverWith()
+    await expect(driver.listAgentTools({ sessionId: '' }))
+      .rejects.toThrow(/sessionId is required/)
+    await expect(driver.listAgentTools({ sessionId: '' }))
+      .rejects.toThrow(/no\s+(?:deployment-wide|agentless)/i)
+    await expect(driver.callAgentTool({ name: 'read', sessionId: '', timeoutMs: 1_000 }))
+      .rejects.toThrow(/sessionId is required/)
+  })
+
+  it('names the no-session alternatives so the error is actionable', async () => {
+    const driver = driverWith()
+    await expect(driver.callAgentTool({ name: 'read', sessionId: '', timeoutMs: 1_000 }))
+      .rejects.toThrow(/session_create/)
+    await expect(driver.callAgentTool({ name: 'read', sessionId: '', timeoutMs: 1_000 }))
+      .rejects.toThrow(/shell_run/)
+  })
+})
 
 describe('listAgentTools', () => {
   it('lists only names the allow-list permits', async () => {
-    const tools = fakeTools()
-    const listed = await driverWith({ tools: tools.tools }).listAgentTools({})
+    const listed = await driverWith().listAgentTools({ sessionId: SESSION })
     const names = listed.tools.map((tool) => tool.name)
 
     // The deterministic set is there…
@@ -113,19 +142,20 @@ describe('listAgentTools', () => {
     expect(names).not.toContain('ask_user_question')
     expect(names).not.toContain('create_goal')
 
-    // Sorted, so a caller can read it.
     expect(names).toEqual([...names].sort((left, right) => left.localeCompare(right)))
+    expect(listed.sessionId).toBe(SESSION)
   })
 
   it('carries the schema each tool reports, so the caller can call it correctly', async () => {
-    const listed = await driverWith({}).listAgentTools({})
+    const listed = await driverWith().listAgentTools({ sessionId: SESSION })
     const read = listed.tools.find((tool) => tool.name === 'read')
     expect(read).toMatchObject({ name: 'read', description: 'read tool' })
     expect(read?.parameters).toEqual({ type: 'object' })
   })
 
   it('lets `deny` subtract from the default without restating it', async () => {
-    const listed = await driverWith({ config: { deny: ['bash', 'pwsh'] } }).listAgentTools({})
+    const listed = await driverWith({ config: { deny: ['bash', 'pwsh'] } })
+      .listAgentTools({ sessionId: SESSION })
     const names = listed.tools.map((tool) => tool.name)
     expect(names).not.toContain('bash')
     expect(names).not.toContain('pwsh')
@@ -133,13 +163,14 @@ describe('listAgentTools', () => {
   })
 
   it('lets a non-empty `allow` replace the default entirely', async () => {
-    // The deliberate widening path: name exactly what you want, get exactly that.
-    const listed = await driverWith({ config: { allow: ['web_search', 'workflow'] } }).listAgentTools({})
+    const listed = await driverWith({ config: { allow: ['web_search', 'workflow'] } })
+      .listAgentTools({ sessionId: SESSION })
     expect(listed.tools.map((tool) => tool.name)).toEqual(['web_search', 'workflow'])
   })
 
   it('refuses a deny entry that is also in an explicit allow', async () => {
-    const listed = await driverWith({ config: { allow: ['read', 'bash'], deny: ['bash'] } }).listAgentTools({})
+    const listed = await driverWith({ config: { allow: ['read', 'bash'], deny: ['bash'] } })
+      .listAgentTools({ sessionId: SESSION })
     expect(listed.tools.map((tool) => tool.name)).toEqual(['read'])
   })
 
@@ -154,14 +185,12 @@ describe('listAgentTools', () => {
       },
     })
 
-    const listed = await driver.listAgentTools({ sessionId: 'session-9' })
+    await driver.listAgentTools({ sessionId: 'session-9' })
 
     expect(seen).toEqual(['session-9'])
     // The agent is the scope key: the harness uses it to hide tools the
     // session's own policy restricts away, which this plugin does not reimplement.
     expect(tools.scopes).toEqual([AGENT])
-    expect(listed.sessionId).toBe('session-9')
-    expect(listed.scopeError).toBeUndefined()
   })
 
   it('reports a session it could not scope instead of silently going global', async () => {
@@ -174,7 +203,8 @@ describe('listAgentTools', () => {
     const listed = await driver.listAgentTools({ sessionId: 'missing' })
 
     expect(listed.scopeError).toMatch(/could not be scoped/)
-    // Unscoped rather than wrong: the global view is still the deployment default.
+    // Unscoped rather than wrong: the call still reports the failure instead of
+    // pretending the empty list is an answer.
     expect(tools.scopes).toEqual([undefined])
   })
 })
@@ -185,6 +215,7 @@ describe('callAgentTool', () => {
     const result = await driverWith({ tools: tools.tools }).callAgentTool({
       name: 'read',
       args: { file_path: '/a.txt' },
+      sessionId: SESSION,
       timeoutMs: 1_000,
     })
 
@@ -200,9 +231,9 @@ describe('callAgentTool', () => {
     const tools = fakeTools()
     const driver = driverWith({ tools: tools.tools })
 
-    await expect(driver.callAgentTool({ name: 'run_code', args: {}, timeoutMs: 1_000 }))
+    await expect(driver.callAgentTool({ name: 'run_code', args: {}, sessionId: SESSION, timeoutMs: 1_000 }))
       .rejects.toThrow(/is not exposed by this endpoint/)
-    await expect(driver.callAgentTool({ name: 'cordis_run', args: {}, timeoutMs: 1_000 }))
+    await expect(driver.callAgentTool({ name: 'cordis_run', args: {}, sessionId: SESSION, timeoutMs: 1_000 }))
       .rejects.toThrow(/is not exposed/)
     // And nothing reached the harness.
     expect(tools.calls).toHaveLength(0)
@@ -213,6 +244,7 @@ describe('callAgentTool', () => {
     const result = await driverWith({ tools: tools.tools, config: { allow: ['workflow'] } }).callAgentTool({
       name: 'workflow',
       args: { script: 'return 1' },
+      sessionId: SESSION,
       timeoutMs: 1_000,
     })
     expect(result.ok).toBe(true)
@@ -226,6 +258,7 @@ describe('callAgentTool', () => {
     const result = await driverWith({ tools: tools.tools }).callAgentTool({
       name: 'write',
       args: { file_path: '/a.txt', content: 'x' },
+      sessionId: SESSION,
       timeoutMs: 1_000,
     })
 
@@ -236,12 +269,12 @@ describe('callAgentTool', () => {
 
   it('runs under the named session agent, so its policy and transcript apply', async () => {
     const tools = fakeTools()
-    const driver = driverWith({
-      tools: tools.tools,
-      resolveAgent: async () => ({ agent: AGENT }),
+    await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'read',
+      args: { file_path: '/b.txt' },
+      sessionId: 'session-3',
+      timeoutMs: 1_000,
     })
-
-    await driver.callAgentTool({ name: 'read', args: { file_path: '/b.txt' }, sessionId: 'session-3', timeoutMs: 1_000 })
 
     expect(tools.calls[0]?.agent).toBe(AGENT)
   })
@@ -255,7 +288,7 @@ describe('callAgentTool', () => {
         return { isError: false as const, value: null, content: [] }
       },
     }
-    await driverWith({ tools }).callAgentTool({ name: 'read', timeoutMs: 1_000 })
+    await driverWith({ tools }).callAgentTool({ name: 'read', sessionId: SESSION, timeoutMs: 1_000 })
     expect(received).toBeInstanceOf(AbortSignal)
     expect(received?.aborted).toBe(false)
   })
@@ -269,7 +302,9 @@ describe('callAgentTool', () => {
         content: [{ type: 'text', text: 'shot' }, { type: 'image' }],
       }),
     }
-    const result = await driverWith({ tools }).callAgentTool({ name: 'read_image', timeoutMs: 1_000 })
+    const result = await driverWith({ tools }).callAgentTool({
+      name: 'read_image', sessionId: SESSION, timeoutMs: 1_000,
+    })
     expect(result.text).toBe('shot\n[image]')
   })
 
@@ -277,7 +312,7 @@ describe('callAgentTool', () => {
     const ctx = new Context()
     contexts.push(ctx)
     const driver = new DshDriver(ctx, () => testConfig())
-    await expect(driver.callAgentTool({ name: 'read', timeoutMs: 1_000 }))
+    await expect(driver.callAgentTool({ name: 'read', sessionId: SESSION, timeoutMs: 1_000 }))
       .rejects.toThrow(/provides no tools service/)
   })
 })

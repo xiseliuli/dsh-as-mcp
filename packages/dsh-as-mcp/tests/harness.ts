@@ -37,7 +37,7 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
     listDirectory: async ({ path }) => ({ path, entries: [] }),
     // Present so the new group's tools can be registered; a test that exercises
     // them supplies its own driver.
-    listAgentTools: async () => ({ tools: [] }),
+    listAgentTools: async ({ sessionId }) => ({ tools: [], sessionId }),
     callAgentTool: async ({ name }) => ({ name, ok: true, text: '' }),
     runShell: async () => ({
       exitCode: 0,

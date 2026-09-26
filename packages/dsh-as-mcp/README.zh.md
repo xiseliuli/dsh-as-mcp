@@ -113,8 +113,15 @@ workspace_create { path: "/Users/me/project" }
 还能派生子 agent。`file_*` 和 `shell_run` 用在你想自己动手、不想经过 agent 的场合。
 
 `dsh_tool_call` 是第三种选择：直接运行 DSH **自己**的某个工具，不必先花一轮模型去决定要调用它。
-先调 `dsh_tool_list`——它报告的正是被允许的集合，没报告的名字一律拒绝。传 `sessionId` 就以该会话的
-agent、策略和工作目录运行；不传则走部署默认，与 `file_*`、`shell_run` 同一个作用域。
+先调 `dsh_tool_list`——它报告的正是被允许的集合，没报告的名字一律拒绝。两者都**必须**传
+`sessionId`：该会话的 agent **就是**策略本身，是它让 harness 施加沙箱、跑 guard、并把调用归档到
+某份会话记录里。
+
+这里刻意没有"不带会话"的形式。DSH 把工具注册进**注册它的那个 context 的作用域**，而每个工具包都
+装在 agent preset 内，所以全局层本来就是空的——不带作用域的列举确实返回零个工具，不带作用域的调用
+会答 `unknown tool`。因此不带会话的 `dsh_tool_list` 会**直接报错**，而不是返回一个空工具箱（那会被
+读成"什么都不允许"）。要走不涉及 agent 的路径，请用 `file_read`／`file_write`／`file_list`／
+`shell_run`，它们直接解析部署策略，不需要会话。
 
 允许集是**白名单**，而且刻意很窄。不在名单里的一律**拒绝且不出现在 `dsh_tool_list` 中**。要紧的几项遗漏：
 

@@ -385,7 +385,19 @@ try {
 
   section('agent tools')
   {
-    const listed = await must('dsh_tool_list')
+    // A session is mandatory. DSH registers tools into the scope of the context
+    // that registers them, and every tool package ships inside an agent preset, so
+    // the global layer is empty: an unscoped listing is `[]` and an unscoped call
+    // answers `unknown tool`. Asking without one must therefore FAIL LOUDLY rather
+    // than report an empty toolbox, which would read as "nothing is permitted".
+    const unscoped = await tool('dsh_tool_list', {})
+    check(!unscoped.ok, 'dsh_tool_list without a session is refused', (unscoped.error ?? '').slice(0, 70))
+    check(
+      (unscoped.error ?? '').includes('sessionId is required'),
+      'and says why, instead of returning an empty list',
+    )
+
+    const listed = await must('dsh_tool_list', { sessionId })
     const names = (listed.tools ?? []).map((entry) => entry.name)
     check(names.length > 0, 'dsh_tool_list reports a permitted set', `${names.length} tools`)
     check(names.includes('read'), 'a deterministic tool is permitted', 'read')
@@ -405,11 +417,15 @@ try {
     // A real write/read pair through the real pipeline, which is what makes this
     // more than a listing test: pre-policy, guards and the fs seam all ran.
     const target = join(projectPath, 'agent-tool.txt')
-    const wrote = await tool('dsh_tool_call', { name: 'write', args: { file_path: target, content: 'via dsh_tool_call' } })
+    const wrote = await tool('dsh_tool_call', {
+      name: 'write',
+      args: { file_path: target, content: 'via dsh_tool_call' },
+      sessionId,
+    })
     check(wrote.ok, 'dsh_tool_call runs a permitted tool', (wrote.error ?? 'ok').slice(0, 60))
     check(existsSync(target), 'the file exists on disk', target)
 
-    const read = await tool('dsh_tool_call', { name: 'read', args: { file_path: target } })
+    const read = await tool('dsh_tool_call', { name: 'read', args: { file_path: target }, sessionId })
     check(read.ok, 'the result comes back through the same tool', (read.error ?? 'ok').slice(0, 60))
     check(
       typeof read.payload?.text === 'string' && read.payload.text.includes('via dsh_tool_call'),
@@ -417,25 +433,19 @@ try {
     )
 
     // Refused on call even though the harness itself registers it.
-    const escape = await tool('dsh_tool_call', { name: 'run_code', args: { code: 'return 1' } })
+    const escape = await tool('dsh_tool_call', { name: 'run_code', args: { code: 'return 1' }, sessionId })
     check(!escape.ok, 'run_code is refused on call, not merely hidden', (escape.error ?? '').slice(0, 60))
 
-    const unknown = await tool('dsh_tool_call', { name: 'definitely_not_a_tool', args: {} })
+    const unknown = await tool('dsh_tool_call', { name: 'definitely_not_a_tool', args: {}, sessionId })
     check(!unknown.ok, 'an unknown tool name is refused', (unknown.error ?? '').slice(0, 60))
 
-    // Scoped to a session, the same call runs under that session's policy and
-    // lands in that session transcript rather than the deployment default.
-    if (sessionId !== undefined) {
-      const scoped = await tool('dsh_tool_list', { sessionId })
-      check(scoped.ok, 'dsh_tool_list accepts a sessionId', (scoped.error ?? 'ok').slice(0, 60))
-      check(
-        (scoped.payload?.tools ?? []).length > 0,
-        'a session-scoped listing still resolves tools',
-        `${(scoped.payload?.tools ?? []).length}`,
-      )
-      const scopedCall = await tool('dsh_tool_call', { name: 'read', args: { file_path: target }, sessionId })
-      check(scopedCall.ok, 'dsh_tool_call runs under a session scope', (scopedCall.error ?? 'ok').slice(0, 60))
-    }
+    const ghost = await tool('dsh_tool_list', { sessionId: 'not-a-real-session' })
+    check(ghost.ok, 'an unresolvable session is reported, not thrown', (ghost.error ?? 'ok').slice(0, 40))
+    check(
+      typeof ghost.payload?.scopeError === 'string',
+      'and carries a scopeError naming the cause',
+      (ghost.payload?.scopeError ?? 'none').slice(0, 60),
+    )
   }
 } catch (error) {
   check(false, 'run aborted', error instanceof Error ? error.message : String(error))

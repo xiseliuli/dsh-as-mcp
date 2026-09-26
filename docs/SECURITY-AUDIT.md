@@ -334,6 +334,15 @@ exposes; under `workspace-write` they remain fenced by the same fs/sandbox seam.
 a strictly read-only bridge must set `tools.agentTools: false` — the allow-list cannot express "read
 only", because some permitted tools are dual-use.
 
+A session is **mandatory**, established by measurement rather than reading: DSH registers a tool into
+the scope of the context that registers it (`ToolRuntime.register` → `layers.effect(ctx, …)`) and every
+tool package ships inside an agent preset, so the process-global layer is empty. Unscoped,
+`schemas()` returns zero tools and `execute` answers `unknown tool`. An optional `sessionId` would
+therefore have produced an empty list that reads as "nothing is permitted" — a wrong answer where an
+error belongs — so the argument is required and its absence is a legible failure. The audit records
+this because the first implementation *did* treat it as optional and documented a "deployment default"
+that does not exist; the live exercise caught it (`0 tools` unscoped vs `15` scoped).
+
 Related, and unchanged by this surface: `dsh_tool_call` honours `approval.policy: allow` when scoped to
 a plugin-owned session, exactly as `session_prompt` does. That does not widen anything (the same
 argument as F2), but it means the `allow` policy should be read as covering this group too.

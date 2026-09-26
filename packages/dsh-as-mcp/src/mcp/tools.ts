@@ -67,6 +67,19 @@ function ok(value: unknown): CallToolResult {
 }
 
 /**
+ * A harness tool that ran and failed, as a protocol-level tool error.
+ *
+ * The payload still carries the whole outcome, so a caller that reads it loses
+ * nothing; `isError` is set because the protocol is where a model looks to learn
+ * that a call did not succeed. Leaving it unset would bury `ok: false` inside a
+ * JSON body the model may treat as a success.
+ */
+function toolOutcome(value: { ok: boolean }): CallToolResult {
+  const result = ok(value)
+  return value.ok ? result : { ...result, isError: true }
+}
+
+/**
  * Wrap a tool body so a harness failure becomes a readable tool error rather
  * than a transport error.
  *
@@ -385,17 +398,17 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       {
         title: "List this DSH instance's own agent tools",
         description:
-          'List the tools this DSH instance can run directly, with the same schema its own agent sees. '
-          + 'Only the permitted names are shown; the rest are neither listed nor callable. Pass a sessionId to '
-          + 'see the toolbox as that session narrows it.',
+          'List the tools one DSH session can run, with the same schema its own agent sees. Only the permitted '
+          + 'names are shown; the rest are neither listed nor callable. A sessionId is required because DSH '
+          + 'registers tools inside an agent scope — there is no deployment-wide toolbox.',
         inputSchema: z.object({
-          sessionId: z.string().optional()
-            .describe('Scope the listing to one session and its policy. Omit for the deployment default.'),
+          sessionId: z.string().min(1)
+            .describe('The session whose agent and policy scope the listing. Required.'),
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
       guard('dsh_tool_list', log, async (args) => ok(await driver.listAgentTools({
-        ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
+        sessionId: args.sessionId,
       }))),
     )
 
@@ -406,23 +419,24 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         description:
           'Run a tool from dsh_tool_list directly, through the same pipeline the DSH agent uses — pre-policy, '
           + 'guards, sandbox and approval all still apply — without spending a model turn to decide to call it. '
-          + 'Use dsh_tool_list first: a name that is not listed is refused. Prefer session_prompt when the task '
-          + 'needs judgement; use this for deterministic calls.',
+          + 'Use dsh_tool_list first: a name that is not listed is refused. The call runs as the given '
+          + 'session agent, which is what supplies the policy. Prefer session_prompt when the task needs '
+          + 'judgement; use this for deterministic calls.',
         inputSchema: z.object({
           name: z.string().trim().min(1).describe('Tool name, exactly as dsh_tool_list reports it.'),
           args: z.record(z.string(), z.unknown()).optional()
             .describe('Arguments object matching the schema that tool reports.'),
-          sessionId: z.string().optional()
-            .describe('Run as this session agent, under its policy and cwd. Omit for the deployment default.'),
+          sessionId: z.string().min(1)
+            .describe('The session whose agent runs the call, under its policy and working directory. Required.'),
           timeoutMs: z.number().int().positive().max(600_000).optional()
             .describe('Abort the call after this many milliseconds.'),
         }),
         annotations: { openWorldHint: true },
       },
-      guard('dsh_tool_call', log, async (args) => ok(await driver.callAgentTool({
+      guard('dsh_tool_call', log, async (args) => toolOutcome(await driver.callAgentTool({
         name: args.name,
         ...(args.args === undefined ? {} : { args: args.args }),
-        ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
+        sessionId: args.sessionId,
         timeoutMs: args.timeoutMs ?? getConfig().limits.shellTimeoutMs,
       }))),
     )

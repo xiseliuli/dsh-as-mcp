@@ -644,11 +644,15 @@ export class DshDriver {
    * scope is the harness's: `schemas(agent)` already hides tools the session's own
    * policy restricts away, so a caller under a narrower preset sees a narrower
    * toolbox without this plugin reimplementing that model.
+   *
+   * A session is mandatory because the second filter *is* the agent: without one
+   * there is no scope to resolve, and the harness answers with an empty toolbox
+   * rather than the deployment default.
    */
-  async listAgentTools(request: { sessionId?: string }): Promise<{
+  async listAgentTools(request: { sessionId: string }): Promise<{
     tools: { name: string; description: string; parameters: Record<string, unknown> }[]
-    sessionId?: string
-    /** Set when a session was named but could not be scoped to an agent. */
+    sessionId: string
+    /** Set when the session could not be resolved to an agent. */
     scopeError?: string
   }> {
     const registry = this.requireToolRegistry()
@@ -665,7 +669,7 @@ export class DshDriver {
       .sort((left, right) => left.name.localeCompare(right.name))
     return {
       tools,
-      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+      sessionId: request.sessionId,
       ...(scopeError === undefined ? {} : { scopeError }),
     }
   }
@@ -676,11 +680,15 @@ export class DshDriver {
    * The allow-list is re-checked here rather than trusted from the listing: a
    * caller can name any tool it likes, and `execute` would happily run one that
    * was never advertised.
+   *
+   * Running as the session's agent is not a convenience — it is what supplies the
+   * policy. The harness applies the owning agent's sandbox, guards and approval,
+   * and records the call in that session's transcript.
    */
   async callAgentTool(request: {
     name: string
     args?: unknown
-    sessionId?: string
+    sessionId: string
     signal?: AbortSignal
     timeoutMs: number
   }): Promise<{
@@ -738,19 +746,31 @@ export class DshDriver {
   }
 
   /**
-   * Resolve the scope a tool call runs under.
+   * Resolve the session whose agent scopes a tool call.
    *
-   * A named session scopes the call to that session's live agent, so the harness
-   * applies that session's policy and the call appears in its transcript. Without
-   * one, the call is agentless and the harness falls back to the deployment
-   * default — the same resolution this plugin's own `file_*` and `shell_run`
-   * already use.
+   * The agent is the policy: it is what makes the harness apply a sandbox, run
+   * guards, and file the call under a session transcript. There is no unscoped
+   * fallback — see the guard in the body for why one cannot exist.
    */
-  private async resolveScope(sessionId?: string): Promise<{
+  private async resolveScope(sessionId: string): Promise<{
     agent?: DshAgentHandle
     scopeError?: string
   }> {
-    if (sessionId === undefined) return {}
+    if (typeof sessionId !== 'string' || sessionId === '') {
+      // There is no agentless toolbox to fall back to, so a missing session is an
+      // error rather than an empty result. Tools are registered into the scope of
+      // the context that registers them (`ToolRuntime.register` →
+      // `layers.effect(ctx, …)`), and every tool package ships inside an agent
+      // preset, so the global layer is empty by construction: an unscoped
+      // `schemas()` really does report zero tools, and an unscoped `execute`
+      // answers `unknown tool`. Measured, not assumed.
+      throw new Error(
+        'sessionId is required: DSH registers its tools inside an agent scope, so there is no '
+        + 'deployment-wide toolbox to act on. Pass the session that should own this call — create '
+        + 'one with session_create — or use file_read/file_write/file_list/shell_run, which resolve '
+        + 'the deployment policy directly and need no session.',
+      )
+    }
     const controller = this.requireSessionController()
     if (typeof controller.resolveAgent !== 'function') {
       return { scopeError: 'this DSH profile cannot resolve a session to an agent; the call ran unscoped' }
