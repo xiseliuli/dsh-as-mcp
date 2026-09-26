@@ -178,12 +178,14 @@ section('surface')
 {
   const { tools } = await rpc('tools/list')
   const names = tools.map((entry) => entry.name).sort()
+  // Sorted, because `names` is sorted above — so this list must be in collation
+  // order, not registration order.
   const expected = [
     'dsh_info',
-    'file_list',
-    'file_read',
     'dsh_tool_call',
     'dsh_tool_list',
+    'file_list',
+    'file_read',
     'file_write',
     'session_cancel',
     'session_create',
