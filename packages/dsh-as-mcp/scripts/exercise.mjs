@@ -394,9 +394,14 @@ try {
     // than report an empty toolbox, which would read as "nothing is permitted".
     const unscoped = await tool('dsh_tool_list', {})
     check(!unscoped.ok, 'dsh_tool_list without a session is refused', (unscoped.error ?? '').slice(0, 70))
+    // The schema marks the argument required, so this is rejected before the
+    // driver runs — which is the point: it fails loudly instead of returning `[]`,
+    // an empty toolbox that would read as "nothing is permitted". The *reason* a
+    // session is needed lives in the tool description, where a client reads it
+    // before calling rather than only after getting it wrong.
     check(
-      (unscoped.error ?? '').includes('sessionId is required'),
-      'and says why, instead of returning an empty list',
+      /sessionId/i.test(unscoped.error ?? ''),
+      'and names the argument rather than returning an empty list',
     )
 
     const listed = await must('dsh_tool_list', { sessionId })
