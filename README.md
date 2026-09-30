@@ -79,7 +79,12 @@ endpoint over HTTP:
 }
 ```
 
-`dsh-as-mcp --help` prints the endpoint and token state it will use.
+`dsh-as-mcp --help` prints the endpoint and token state it will use. The bridge sends a token
+read from the token file to loopback endpoints only; pointing `DSH_AS_MCP_URL` off-host requires
+setting `DSH_AS_MCP_TOKEN` explicitly, so a copied client config cannot quietly exfiltrate the
+machine-local credential. "Loopback" means an exact match — `localhost`, `::1`, or a literal
+`127.x.x.x` address — so a name such as `127.0.0.1.example.com` is treated as the remote host it
+is. A scheme is optional: `127.0.0.1:8790/mcp` is accepted and understood.
 
 Start with **`dsh_info`**. It reports the endpoint, where its token comes from, which tool groups are enabled,
 and — importantly — which harness services the current profile actually provides, so a client
@@ -150,15 +155,19 @@ the default with `agentTools.deny`.
 This endpoint is remote control of a coding agent that has shell access. Treat the token like
 an SSH key — and note that the plugin does too: no tool returns its value. `dsh_info` reports
 where the token comes from (a file path or the composition), never the literal, so a calling
-agent's transcript never accumulates the credential.
+agent's transcript never accumulates the credential. A pinned token shorter than 16 characters
+draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
 
 - The listener binds to `127.0.0.1` and every request is bearer-checked, including requests on
   a route mounted on DSH's own web server. That check is the *only* gate there: an exact route
   registered on the web server is matched **before** DSH's authorization fence — anything
   unmatched is handed to that fence as a fallback (`webserver/src/index.ts:222-227`) — so with
   `http.mountOnWebServer: true` the endpoint does not inherit your browser session's
-  protection, it enforces its own. Setting `http.host: 0.0.0.0` exposes that same power to your
-  network; do it only behind your own gateway.
+  protection, it enforces its own. One caveat on DSH Desktop: when ordinary browser access is
+  disabled there, the web server additionally refuses requests that do not carry the renderer
+  header, so the mounted path is unreachable for a plain MCP client — use the plugin-owned
+  listener. Setting `http.host: 0.0.0.0` exposes that same power to your network; the plugin
+  warns at bind time, and you should do it only behind your own gateway.
 - **The token is the entire security boundary, and that boundary is your user account.** There
   is no path sandbox. Once a caller holds the token, `file_read`/`file_write`/`file_list` reach
   anything the DSH process can reach, and `shell_run` runs arbitrary commands as you — because
@@ -332,6 +341,7 @@ key named, because a silently ignored typo means your override is not being appl
     limits:
       maxReadBytes: 1048576
       shellTimeoutMs: 120000
+      agentToolTimeoutMs: 120000
     approval:
       policy: inherit        # inherit | allow
 ```
@@ -342,6 +352,10 @@ Where the host mounts a settings service — DSH Desktop and `dsh web` both do �
 contributes an **MCP server** section to the settings panel. It edits the same `dsh-as-mcp`
 namespace the configuration above fills, so the panel and the file are two views of one
 value, not two copies.
+
+The panel covers every setting including the `agentTools.allow` and `agentTools.deny` lists,
+which are edited as comma-separated text. Both are ordinary `string[]` values, so an entry with a
+comma in it cannot be expressed here; use the configuration file for that.
 
 Every change applies **live**:
 
@@ -400,10 +414,18 @@ two you have.
   plausible: a queued prompt's log entry sits inside the span of the turn that was already
   running, so a `turn/end` appearing after our message is usually someone else's turn, not ours.
   Turns on one session are additionally serialized, so two concurrent callers cannot interleave
-  prompts and then disagree about which reply is theirs.
-- **Filesystem.** `workspace_create` and `file_write` use `node:fs` `mkdir` for parent
-  directories only; the harness filesystem service deliberately exposes no `mkdir`. Every read
-  and write goes through `ctx.fs`, so the same path rules and sandboxing the DSH agent lives
+  prompts and then disagree about which reply is theirs. The serialization covers the whole wait,
+  not just the submission: a second `session_prompt` to a session whose first wait is still open
+  does not even submit its message until that wait settles (up to its timeout), and a `steer` sent
+  while another MCP wait is in flight is deferred until it, which turns it into a queued prompt.
+  Callers that only want to queue a message should prefer `session_messages` polling over holding
+  a long wait open.
+- **Filesystem.** Only `workspace_create` touches `node:fs` `mkdir` — the directory it creates
+  *is* the new sandbox root, so by definition it sits outside every root that exists before it,
+  which is why the call cannot go through the filesystem seam and is instead gated on the
+  read-only policy. The harness filesystem service deliberately exposes no `mkdir`; `file_write`
+  relies on the seam's atomic write, which creates parents inside the fence. Every read and
+  write goes through `ctx.fs`, so the same path rules and sandboxing the DSH agent lives
   under apply to the caller.
 - **No session deletion.** The harness offers `archiveSession`/`unarchiveSession` but no
   delete, so neither does this plugin.

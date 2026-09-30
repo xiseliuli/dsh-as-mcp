@@ -160,6 +160,8 @@ export function buildSettingsSchema(z: SchemasteryLike): SchemaNode {
         .description('Bytes file_read returns before truncating.'),
       shellTimeoutMs: z.number().default(DEFAULT_LIMITS.shellTimeoutMs)
         .description('Default timeout for shell_run.'),
+      agentToolTimeoutMs: z.number().default(DEFAULT_LIMITS.agentToolTimeoutMs)
+        .description('Default timeout for dsh_tool_call.'),
     }).description('Bounds on one external call.'),
     approval: z.object({
       policy: z.union([z.const('inherit'), z.const('allow')])

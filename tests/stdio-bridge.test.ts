@@ -27,6 +27,20 @@ async function runBridge(input: {
 
   const collected = new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`bridge timed out; stderr:\n${stderr}`)), 20_000)
+    // stderr is wired before the early return below. Attaching it after made
+    // `expect(stderr).not.toContain(...)` in the exit-status-only tests vacuously
+    // true — stderr stayed '' no matter what the child printed.
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+    child.on('error', reject)
+    // Nothing to wait for: the caller only wants the exit status.
+    if (input.expectLines === 0) {
+      clearTimeout(timer)
+      resolve()
+      return
+    }
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
       buffer += chunk
@@ -42,11 +56,6 @@ async function runBridge(input: {
         resolve()
       }
     })
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (chunk: string) => {
-      stderr += chunk
-    })
-    child.on('error', reject)
   })
 
   for (const line of input.lines) child.stdin.write(`${line}\n`)
@@ -170,3 +179,96 @@ describe('stdio ⇄ HTTP bridge', () => {
     expect(text).toContain('Token:    set')
   })
 })
+
+describe('the bridge does not exfiltrate the persisted token', () => {
+  /** A scratch DSH_HOME whose token file holds the test token. */
+  async function homeWithTokenFile(): Promise<string> {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-as-mcp-home-'))
+    await mkdir(join(home, 'dsh-as-mcp'), { recursive: true })
+    await writeFile(join(home, 'dsh-as-mcp', 'token'), `${TOKEN}\n`, { mode: 0o600 })
+    return home
+  }
+
+  it('refuses to run when the file token would be sent off-host', async () => {
+    const home = await homeWithTokenFile()
+    const child = spawn(process.execPath, [bridgePath], {
+      env: {
+        ...process.env,
+        DSH_AS_MCP_URL: 'http://example.invalid:8790/mcp',
+        DSH_HOME: home,
+        DSH_AS_MCP_TOKEN: '',
+      },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+    const code = await new Promise<number | null>((resolve) => child.on('close', resolve))
+
+    // A copied or generated client config with an off-host URL must not be able
+    // to silently send the machine-local credential there.
+    expect(code).not.toBe(0)
+    expect(stderr).toContain('non-loopback')
+  })
+
+  it('proceeds when the token was set explicitly, even for an off-host URL', async () => {
+    // The opt-in path must not depend on reaching the remote: with an explicit
+    // token the guard lets the bridge run, and an immediately-closed stdin means
+    // it exits cleanly without the guard's refusal.
+    const home = await homeWithTokenFile()
+    const { code, stderr } = await runBridge({
+      env: {
+        ...process.env,
+        DSH_AS_MCP_URL: 'http://example.invalid:8790/mcp',
+        DSH_HOME: home,
+        DSH_AS_MCP_TOKEN: TOKEN,
+      },
+      lines: [],
+      expectLines: 0,
+    })
+    expect(code).toBe(0)
+    expect(stderr).not.toContain('non-loopback')
+  })
+
+  /**
+   * The guard's host test, driven through the process rather than by importing
+   * it, because what matters is whether the token travels.
+   *
+   * A loopback target exits 0: the bridge is lazy, reaching stdin without
+   * opening a connection, so a closed port is never touched. The signal is
+   * therefore stderr, not the status code.
+   */
+  it.each([
+    ['http://127.0.0.1:8790/mcp', true],
+    ['127.0.0.1:8790/mcp', true],
+    ['localhost:8790/mcp', true],
+    ['http://localhost.:8790/mcp', true],
+    ['http://[::1]:8790/mcp', true],
+    ['http://127.5.5.5:8790/mcp', true],
+    // The domain-shaped cases are the point of the exact match: a `127.` prefix
+    // test accepted every one of these and sent the machine-local token to a host
+    // whose DNS the attacker controls.
+    ['http://127.0.0.1.attacker.example:8790/mcp', false],
+    ['http://127.evil.example:8790/mcp', false],
+    ['http://128.0.0.1:8790/mcp', false],
+    ['http://example.com:8790/mcp', false],
+    ['not a url', false],
+  ])('treats %s as loopback: %s', async (target, loopback) => {
+    const home = await homeWithTokenFile()
+    const { stderr, code } = await runBridge({
+      env: { ...process.env, DSH_AS_MCP_URL: target, DSH_HOME: home, DSH_AS_MCP_TOKEN: '' },
+      lines: [],
+      expectLines: 0,
+    })
+    if (loopback) {
+      expect(stderr).not.toContain('non-loopback')
+      expect(code).toBe(0)
+      return
+    }
+    expect(stderr).toContain('non-loopback')
+    expect(code).toBe(1)
+  })
+})
+

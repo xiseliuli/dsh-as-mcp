@@ -3,8 +3,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Config, normalizeConfig, optional, type Config as DshAsMcpConfig } from './config.js'
 import { DshDriver } from './dsh/driver.js'
 import { eventsOf, loggerOf, serviceOf } from './dsh/types.js'
+import { describeTokenSource } from './mcp/token.js'
 import {
+  advertisedHost,
   createRequestHandler,
+  isLoopbackHost,
   mountOnWebServer,
   registerStatusRoute,
   startListener,
@@ -71,6 +74,8 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
   let unmountFromWebServer: (() => void) | undefined
   let boundSignature = ''
   let listenError: string | null = null
+  /** Set once the plugin is being torn down; every await in a reconcile re-checks it. */
+  let disposed = false
 
   const binding = installSettings({
     ctx,
@@ -100,10 +105,17 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
 
   const status = (): EndpointStatus => {
     const current = getConfig()
-    const advertisedHost = current.http.host === '0.0.0.0' ? '127.0.0.1' : current.http.host
+    // What to report when nothing is listening depends on where the endpoint
+    // actually lives: mounted on the DSH web server it is reachable only at
+    // `<path>` there — the web server's host and port are not ours to know —
+    // so the string must not read as a dialable URL.
+    const url = listener?.url
+      ?? (unmountFromWebServer !== undefined
+        ? `${current.http.path} (served by the DSH web server; the plugin listener is disabled)`
+        : `http://${advertisedHost(current.http.host)}:${current.http.port}${current.http.path}`)
     return {
       listening: listener !== undefined,
-      url: listener?.url ?? `http://${advertisedHost}:${current.http.port}${current.http.path}`,
+      url,
       mountedOnWebServer: unmountFromWebServer !== undefined,
       error: listenError,
       tokenSource: effectiveToken().source,
@@ -142,50 +154,104 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
     current.http.mountOnWebServer,
   ].join('|')
 
-  /** Move the endpoint to match the current configuration. */
-  const reconcile = async (): Promise<void> => {
-    const current = getConfig()
-    const signature = signatureOf(current)
-    if (signature === boundSignature) return
-    boundSignature = signature
+  /**
+   * Move the endpoint to match the current configuration.
+   *
+   * Runs are serialized through a promise chain and re-check `disposed` after
+   * every await. Both properties are load-bearing: settings edits arrive as one
+   * `onChange` per field, so two reconciles genuinely overlap, and an overlapping
+   * run used to assign `listener` after the previous run's teardown — leaking a
+   * bound server on the old port while `status()` reported the new one. A
+   * teardown that sampled `listener` before an in-flight reconcile assigned it
+   * leaked that listener past plugin unload.
+   */
+  const reconcileNow = async (): Promise<void> => {
+    try {
+      const current = getConfig()
+      const signature = signatureOf(current)
+      if (signature === boundSignature) return
 
-    unmountFromWebServer?.()
-    unmountFromWebServer = undefined
-    const previous = listener
-    listener = undefined
-    await previous?.dispose()
+      unmountFromWebServer?.()
+      unmountFromWebServer = undefined
+      const previous = listener
+      listener = undefined
+      await previous?.dispose()
+      if (disposed) return
 
-    if (current.http.enabled) {
-      try {
-        listener = await startListener({ config: current, handler: requestHandler.handle, log })
-        listenError = null
-      } catch (error) {
-        listenError = error instanceof Error ? error.message : String(error)
-        log.error(
-          `[dsh-as-mcp] could not listen on ${current.http.host}:${current.http.port} — ${listenError}. `
-          + 'Set http.port to a free port, or http.enabled=false to only mount on the DSH web server.',
-        )
+      if (current.http.enabled) {
+        try {
+          const started = await startListener({ config: current, handler: requestHandler.handle, log })
+          // The plugin may have been torn down while the bind was in flight;
+          // dismantle what was just started rather than leaving it behind.
+          if (disposed) {
+            await started.dispose()
+            return
+          }
+          listener = started
+          listenError = null
+          if (!isLoopbackHost(current.http.host)) {
+            log.warn(
+              '[dsh-as-mcp] http.host %s is not a loopback address: the bearer token is the only '
+              + 'admission control on this endpoint. Keep it behind a gateway you trust.',
+              current.http.host,
+            )
+          }
+        } catch (error) {
+          if (disposed) return
+          listenError = error instanceof Error ? error.message : String(error)
+          log.error(
+            `[dsh-as-mcp] could not listen on ${current.http.host}:${current.http.port} — ${listenError}. `
+            + 'Set http.port to a free port, or http.enabled=false to only mount on the DSH web server.',
+          )
+        }
       }
-    }
 
-    if (current.http.mountOnWebServer) {
-      const webServer = serviceOf<WebServerLike>(ctx, 'webServer')
-      if (webServer === undefined) {
-        log.warn('[dsh-as-mcp] http.mountOnWebServer is set but this profile has no webServer service')
-      } else {
-        unmountFromWebServer = mountOnWebServer({
-          webServer,
-          path: current.http.path,
-          handler: requestHandler.handle,
-          log,
-        })
+      if (current.http.mountOnWebServer) {
+        if (disposed) return
+        const webServer = serviceOf<WebServerLike>(ctx, 'webServer')
+        if (webServer === undefined) {
+          log.warn('[dsh-as-mcp] http.mountOnWebServer is set but this profile has no webServer service')
+        } else {
+          unmountFromWebServer = mountOnWebServer({
+            webServer,
+            path: current.http.path,
+            handler: requestHandler.handle,
+            log,
+          })
+        }
+      }
+
+      // Marked bound only now, once the run reached its end. Assigning this up
+      // front made a reconcile that threw part-way — a web-server route already
+      // taken, say — record its config as successfully applied, so every later
+      // run with that same config returned at the guard above and the endpoint
+      // stayed half-configured until an unrelated edit changed the signature.
+      // A failure now leaves the old signature in place so the next run retries.
+      boundSignature = signature
+    } catch (error) {
+      // A reconciliation failure must degrade to state and log, never to an
+      // unhandled rejection: DSH exits the process on one, and `onChange` fires
+      // this with no caller watching.
+      if (!disposed) {
+        log.error(
+          '[dsh-as-mcp] endpoint reconciliation failed: %s',
+          error instanceof Error ? error.message : String(error),
+        )
       }
     }
   }
 
-  ctx.effect(() => {
-    let disposed = false
+  /** One reconcile at a time, in submission order. */
+  let reconcileTail: Promise<void> = Promise.resolve()
+  const reconcile = (): Promise<void> => {
+    const run = reconcileTail.then(() => reconcileNow())
+    // `reconcileNow` records its own failures, so the queue never sits on a
+    // rejection and the `void reconcile()` callers need no catch of their own.
+    reconcileTail = run.then(() => undefined)
+    return run
+  }
 
+  ctx.effect(() => {
     const initial = effectiveToken()
     if (getConfig().http.enabled || getConfig().http.mountOnWebServer) {
       log.info(
@@ -193,8 +259,32 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
         // shape and replaces it, which turned this line into "bearer ****" and lost
         // the part that says where the credential came from.
         '[dsh-as-mcp] credential source: %s. Set auth.token in the plugin row or the settings panel to pin your own value.',
-        initial.source === 'generated' ? `generated at ${fallbackToken.file}` : `read from ${initial.source}`,
+        describeTokenSource(initial),
       )
+      if (initial.source === 'ephemeral') {
+        // This endpoint cannot be authenticated by anyone: the token changes every
+        // boot and only its fingerprint is logged, and a client reading the same
+        // path gets whatever that path really is. Say so loudly — the alternative
+        // is an operator staring at a 401 with no stated cause.
+        log.warn(
+          '[dsh-as-mcp] no usable token at %s: it is not a regular file (a symlink or a special file), '
+          + 'so it was left alone and a per-process token was minted instead. That token is not '
+          + 'persisted and cannot be read from disk, so no client can present it. Remove the object '
+          + 'and restart to get a persisted token, or set auth.token to a fixed secret.',
+          initial.file,
+        )
+      }
+      if (initial.token.length < 16) {
+        // A generated token is 43 characters, so this fires only for one the
+        // operator chose. Warn rather than refuse: failing the boot over a weak
+        // secret would strand an existing deployment, and the token is still a
+        // gate — just a weaker one than the default.
+        log.warn(
+          '[dsh-as-mcp] the pinned bearer token is shorter than 16 characters. A short token is '
+          + 'brute-forceable if http.host ever leaves loopback; prefer the generated token '
+          + '(clear auth.token) or a long random secret.',
+        )
+      }
     }
 
     // The first reconcile is issued here rather than directly, because
@@ -247,15 +337,18 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
       log.info(
         '[dsh-as-mcp] credential fingerprint %s, %s',
         maskToken(token.token),
-        token.source === 'config'
-          ? 'pinned in the plugin config'
-          : `read from ${token.file}`,
+        describeTokenSource(token),
       )
     })
 
     return async () => {
       disposed = true
       binding.release()
+      // An in-flight reconcile is mid-teardown or mid-bind right now, and it
+      // re-checks `disposed` after every await — letting it settle first is what
+      // makes the `listener` read below final instead of a sample that misses a
+      // handle assigned moments later.
+      await reconcileTail
       unmountFromWebServer?.()
       unmountFromWebServer = undefined
       const current = listener

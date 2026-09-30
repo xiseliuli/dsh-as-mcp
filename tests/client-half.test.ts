@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import { GROUPS } from '../src/client/fields.js'
+import { GROUPS, formatList, parseList, readPath } from '../src/client/fields.js'
+import { normalizeConfig } from '../src/config.js'
 import { en, zh } from '../src/client/locales.js'
 
 const run = promisify(execFile)
@@ -160,5 +161,52 @@ describe('the dictionaries cover the panel', () => {
 
   it('keeps the two dictionaries in step', () => {
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort())
+  })
+})
+
+describe('every declared field points at something real', () => {
+  it('resolves each path against a fully-defaulted config', () => {
+    // The panel renders from this list and the host writes to it. A path with a
+    // typo — `limits.shellTimeout` for `shellTimeoutMs` — renders an empty
+    // control that silently discards the operator's edit, which is invisible in
+    // review and invisible in the UI. Nineteen paths make that a real risk.
+    const config = normalizeConfig({})
+    for (const group of GROUPS) {
+      for (const field of group.fields) {
+        expect(readPath(config, field.path), `no value at ${field.path.join('.')}`).not.toBeUndefined()
+      }
+    }
+  })
+
+  it('exposes the agent-tool allow-list, which was YAML-only', () => {
+    const paths = GROUPS.flatMap((group) => group.fields.map((field) => field.path.join('.')))
+    expect(paths).toContain('tools.agentTools')
+    expect(paths).toContain('agentTools.allow')
+    expect(paths).toContain('agentTools.deny')
+  })
+})
+
+describe('the list editor round-trips a host string[]', () => {
+  it('splits on commas and newlines, and trims', () => {
+    expect(parseList('read, write ,bash')).toEqual(['read', 'write', 'bash'])
+    expect(parseList('read\nwrite')).toEqual(['read', 'write'])
+  })
+
+  it('treats blank input as the empty list, which is the "use the default" spelling', () => {
+    expect(parseList('')).toEqual([])
+    expect(parseList('  , \n ')).toEqual([])
+  })
+
+  it('formats an absent value as empty rather than "undefined"', () => {
+    expect(formatList(undefined)).toBe('')
+    expect(formatList([])).toBe('')
+    expect(formatList(['read', 'bash'])).toBe('read, bash')
+  })
+
+  it('is stable, so an untouched field writes nothing', () => {
+    // `DraftInput` only commits when the displayed string changes; if formatting
+    // were lossy, every blur would rewrite the setting.
+    const names = ['read', 'bash', 'web_search']
+    expect(parseList(formatList(names))).toEqual(names)
   })
 })

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { Config } from '../config.js'
 import type { EndpointStatus } from '../status.js'
 import type { SettingsPathOp, SettingsScopeSnapshot } from './contract.js'
-import { GROUPS, pathKey, readPath, type FieldSpec, type GroupSpec } from './fields.js'
+import { GROUPS, formatList, parseList, pathKey, readPath, type FieldSpec, type GroupSpec } from './fields.js'
 
 /** The bound settings namespace, as the section consumes it. */
 export interface SectionStore {
@@ -101,7 +101,7 @@ function FieldRow({
   disabled: boolean
   onWrite(next: unknown): void
 }) {
-  const stacked = field.kind === 'text' || field.kind === 'number'
+  const stacked = field.kind === 'text' || field.kind === 'number' || field.kind === 'list'
   return (
     <label className={`dshmcp_row${stacked ? ' dshmcp_rowStack' : ''}`} data-field={pathKey(field.path)}>
       <span className="dshmcp_rowMain">
@@ -117,6 +117,20 @@ function FieldRow({
             disabled={disabled}
             onChange={(event) => {
               onWrite(event.target.checked)
+            }}
+          />
+        )}
+        {field.kind === 'list' && (
+          // Comma-separated, editing a real `string[]` on the host. The joined
+          // form is what `DraftInput` compares against, so an untouched field
+          // writes nothing.
+          <DraftInput
+            type="text"
+            value={formatList(value)}
+            disabled={disabled}
+            {...(field.placeholder === undefined ? {} : { placeholder: field.placeholder })}
+            onCommit={(next) => {
+              onWrite(parseList(next))
             }}
           />
         )}

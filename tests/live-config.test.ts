@@ -120,7 +120,7 @@ describe('configuration changes reach the next request', () => {
     await callTool(endpoint.url, 'file_read', { path: '/tmp/x' })
     expect(seen).toEqual([1024])
 
-    endpoint.set({ ...testConfig({ files: true }), limits: { maxReadBytes: 4242, shellTimeoutMs: 111 } })
+    endpoint.set({ ...testConfig({ files: true }), limits: { maxReadBytes: 4242, shellTimeoutMs: 111, agentToolTimeoutMs: 111 } })
     await callTool(endpoint.url, 'file_read', { path: '/tmp/x' })
 
     // The second call saw the raised limit, which it can only do by reading the

@@ -55,15 +55,106 @@ audit stays useful rather than reading as a list of open holes.
 | **F4** instance-wide session access | **Accepted and documented**, as the audit recommends. Both READMEs state that `session_list`/`session_messages` reach every session, that this is not an escalation because the same bytes are in `$DSH_HOME/sessions`, and that it is a privacy consequence to weigh before handing out a token. `session.scope` is not implemented. |
 | **F5** unbounded wait | **Fixed** for the schema half: `session_prompt.timeoutMs` is capped at 10 minutes. The deeper half — subscribing to session events instead of replaying the whole log every 200 ms per waiter — is not done, so the cost per wait is unchanged; only the number of indefinitely-open waits is bounded. |
 | **F6** `tokenMatches('','')` | **Fixed.** An empty expectation never matches. |
-| **F7** unserialized `reconcile()`, disposal not re-checked | **Open.** Low. |
-| **F8** dropped handler promise | **Open.** Low; no reachable trigger was found. |
+| **F7** unserialized `reconcile()`, disposal not re-checked | **Fixed.** `reconcile` runs are serialized through a promise chain, every await inside the reconcile re-checks `disposed` and dismantles a listener started anyway, and the dispose path awaits the in-flight reconcile before reading `listener`. Regression tests cover the moved bind (old port must close) and a dispose landing mid-reconcile (neither port may answer afterwards). |
+| **F8** dropped handler promise | **Fixed.** The listener catches the guard's rejection, logs it, answers 500 when headers were not sent, and ends the response otherwise — mirroring the harness web server's own "never a process exit" handling. |
+| **F10** bridge exfiltration guard defeated by a prefix host test | **Fixed.** The loopback predicate is now an exact 127.0.0.0/8 dotted quad rather than `startsWith('127.')`, which accepted `127.0.0.1.attacker.example`. Scheme-less loopback values are accepted rather than refused; anything unrecognised still fails closed. A process-level table test fails against the old predicate. |
 | **F9** `dsh_tool_call` selection surface | **Closed by design** with an allow-list enforced on both listing and execution; see F9. Not a defect — recorded because a deny-list was the obvious reading and is unsound. |
 
 The hardening notes at the end are likewise unremediated, except the deployed token-log path covered by F3.
 
+### Post-review hardening round
+
+A later review pass applied the rest of this audit's open items plus its own findings. Recorded
+here so the statuses above stay readable as history:
+
+- **Hardening notes applied:** the token directory is now created `0700`; `resolveToken` refuses
+  to read or write through a non-regular file at the token path (symlink attacks net an
+  ephemeral token and an untouched target); a pinned token shorter than 16 characters draws a
+  boot-time warning; a non-loopback `http.host` draws a warning at bind time; the stdio bridge
+  refuses to send a file-derived token to a non-loopback endpoint unless `DSH_AS_MCP_TOKEN` is
+  set explicitly.
+- **From the same review:** `file_write`'s `createDirectories: false` is now enforced (the seam
+  always created parents, so the flag was a silent no-op behind a misleading schema description);
+  `dsh_tool_call`'s default timeout moved from `limits.shellTimeoutMs` to a dedicated
+  `limits.agentToolTimeoutMs`; the advertised version is read from package.json instead of a
+  restated constant; `status().url` no longer reports a dialable-looking URL when only the
+  web-server mount is active. Still open by choice: rate limiting (no exploit path on a
+  loopback-bound endpoint; a token tarpit without real design would be security theater), F5's
+  event-subscription half, and F2's `allowedRoots`/preset-reporting remainder.
+
+### Second review round — the exfiltration guard did not hold
+
+Reviewing that hardening round found the bridge's new exfiltration guard defeated by its own host
+test, which made F10 below the most serious finding in this document. Fixed, with the case that
+beat it pinned by a test:
+
+- **F10 fixed.** The guard's loopback test was a `127.` string **prefix** match, so
+  `http://127.0.0.1.attacker.example:8790/mcp` counted as this machine and the persisted token was
+  sent there — the precise outcome the guard was added to prevent, reachable by anyone who can
+  choose the domain in a pasted client config. The test is now an exact 127.0.0.0/8 dotted quad
+  (plus `localhost` and `::1`), and a scheme-less value like `127.0.0.1:8790/mcp` is accepted
+  rather than misreported as off-host.
+- **A vacuous assertion, removed.** `runBridge` with `expectLines: 0` resolved before attaching its
+  `stderr` listener, so `stderr` was always `''`. The test asserting the explicit-token opt-in
+  prints no refusal therefore *could not fail*, whatever the bridge did. The harness now wires
+  `stderr` first; the assertion is live again and the table test above it could not have been
+  written before this was fixed.
+- **Also fixed:** the `ephemeral` token source was rendered by both boot lines as "read from
+  &lt;the token path&gt;" — a file deliberately not read, so the message sent an operator chasing a
+  401 to a file holding someone else's bytes, and nothing warned that the endpoint is
+  unauthenticatable (the token is per-process and only its fingerprint is logged). One shared
+  `describeTokenSource` now names each source, and `ephemeral` warns at boot. The settings panel
+  also gained the `tools.agentTools` switch and the `agentTools.allow`/`deny` editors — the
+  allow-list was configurable only by hand-editing YAML — and `reconcile` no longer records a
+  config as bound when the run threw part-way.
+
 ---
 
 ## Findings
+
+### F10 — The bridge's exfiltration guard was defeated by a prefix comparison (High; fixed)
+
+**Where.** `bin/mcp-stdio.mjs`, the loopback test behind "a file-derived token may only travel to
+a loopback endpoint".
+
+**Shape.** The test was:
+
+```js
+return name === 'localhost' || name === '::1' || name.startsWith('127.')
+```
+
+`startsWith('127.')` is true of any hostname beginning with those four characters, and a hostname
+is not an address. `new URL('http://127.0.0.1.attacker.example:8790/mcp').hostname` is
+`127.0.0.1.attacker.example` — a name the attacker's own DNS answers, so it resolves wherever they
+like. The guard's comment says the token must not travel off-host; the test let it travel to any
+host whose *name* was crafted to look local.
+
+**Exploit path.** No bug in DSH is needed, and no elevated access:
+
+1. The operator is given, or copies, a client config whose `DSH_AS_MCP_URL` is
+   `http://127.0.0.1.attacker.example:8790/mcp`. It reads as a loopback address, and the "127.0.0.1"
+   prefix is exactly what makes it convincing.
+2. The bridge reads `$DSH_HOME/dsh-as-mcp/token`, classifies the target as loopback, and sends the
+   machine-local bearer token to the attacker in an `Authorization` header.
+3. That token is the entire security boundary of the endpoint (see the README): with it the
+   attacker reaches `file_read`, `file_write` and `shell_run` on the operator's account — though
+   only while the endpoint is reachable from where they are, which for a `127.0.0.1` bind means
+   they must also be on the machine. The credential itself, however, is exfiltrated unconditionally
+   and may be reused later.
+
+**Why it mattered more than its window suggests.** This guard was *added by the previous review
+round*, as the fix for credential exfiltration. It shipped with a fail-open host test, so the
+control intended to prevent the exfiltration was itself the vector.
+
+**Fix.** Exact matching instead of a prefix: `localhost`, `::1`, or a literal dotted quad whose
+first octet is 127 and whose octets are all ≤ 255. A value that parses neither as-is nor with an
+`http://` prefix added is not loopback, so the guard still fails closed. Verified against eleven
+host shapes, including `127.0.0.1.attacker.example`, `127.evil.example` and `128.0.0.1`, and
+covered by a process-level table test that fails against the old prefix test.
+
+**Lesson.** A security test and a security control fail the same way. `startsWith` on a hostname
+is a string operation standing in for a semantic one, and it is worth asking of every allow-list —
+including the one guarding this very token — whether its predicate is *exact*.
 
 *(F9 below was added with the `dsh_tool_call` surface and is a design record, not a defect.)*
 

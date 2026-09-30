@@ -105,6 +105,8 @@ export interface LimitsConfig {
   maxReadBytes: number
   /** Default timeout for `shell_run`, in milliseconds. */
   shellTimeoutMs: number
+  /** Default timeout for `dsh_tool_call`, in milliseconds. */
+  agentToolTimeoutMs: number
 }
 
 /** How sessions driven by this plugin answer harness approval requests. */
@@ -323,7 +325,7 @@ export function normalizeConfig(input: unknown = {}): Config {
   rejectUnknown(session, ['agentPreset', 'provider', 'model', 'promptTimeoutMs'], 'session', issues)
 
   const limits = section(root, 'limits', 'limits', issues)
-  rejectUnknown(limits, ['maxReadBytes', 'shellTimeoutMs'], 'limits', issues)
+  rejectUnknown(limits, ['maxReadBytes', 'shellTimeoutMs', 'agentToolTimeoutMs'], 'limits', issues)
 
   const approval = section(root, 'approval', 'approval', issues)
   rejectUnknown(approval, ['policy'], 'approval', issues)
@@ -366,6 +368,7 @@ export function normalizeConfig(input: unknown = {}): Config {
     limits: {
       maxReadBytes: positiveInt(limits, 'maxReadBytes', fallback.limits.maxReadBytes, 'limits', issues),
       shellTimeoutMs: positiveInt(limits, 'shellTimeoutMs', fallback.limits.shellTimeoutMs, 'limits', issues),
+      agentToolTimeoutMs: positiveInt(limits, 'agentToolTimeoutMs', fallback.limits.agentToolTimeoutMs, 'limits', issues),
     },
     approval: {
       policy: oneOf(approval, 'policy', APPROVAL_POLICIES, fallback.approval.policy, 'approval', issues),

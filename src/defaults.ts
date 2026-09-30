@@ -97,10 +97,11 @@ export const DEFAULT_SESSION = {
   promptTimeoutMs: 15 * 60_000,
 } as const satisfies SessionConfig
 
-/** {@link LimitsConfig} defaults: 1 MiB reads, 2-minute commands. */
+/** {@link LimitsConfig} defaults: 1 MiB reads, 2-minute commands and agent tools. */
 export const DEFAULT_LIMITS = {
   maxReadBytes: 1024 * 1024,
   shellTimeoutMs: 120_000,
+  agentToolTimeoutMs: 120_000,
 } as const satisfies LimitsConfig
 
 /** {@link ApprovalConfig} defaults: never widen the harness policy implicitly. */

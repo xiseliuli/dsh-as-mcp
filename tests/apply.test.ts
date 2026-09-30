@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { Config } from '../src/config.js'
 import { DEFAULT_AGENT_TOOLS } from '../src/defaults.js'
+import { SETTINGS_NAMESPACE, type SettingsSectionHooks } from '../src/settings.js'
 import { STATUS_ROUTE } from '../src/status.js'
 import { apply, inject, name } from '../src/index.js'
 import { TOKEN, callTool, rpc } from './harness.js'
@@ -57,6 +58,7 @@ async function waitForEndpoint(url: string): Promise<void> {
 
 function pluginConfig(overrides: {
   port: number
+  host?: string
   tools?: Partial<Config['tools']>
   approval?: Config['approval']
   mountOnWebServer?: boolean
@@ -66,7 +68,7 @@ function pluginConfig(overrides: {
   return {
     http: {
       enabled: overrides.enabled ?? true,
-      host: '127.0.0.1',
+      host: overrides.host ?? '127.0.0.1',
       port: overrides.port,
       path: '/mcp',
       mountOnWebServer: overrides.mountOnWebServer ?? false,
@@ -75,7 +77,7 @@ function pluginConfig(overrides: {
     tools: { workspace: true, session: true, files: true, shell: true, agentTools: true, ...overrides.tools },
     agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 500 },
-    limits: { maxReadBytes: 1024, shellTimeoutMs: 1000 },
+    limits: { maxReadBytes: 1024, shellTimeoutMs: 1000, agentToolTimeoutMs: 1000 },
     approval: overrides.approval ?? { policy: 'inherit' },
   }
 }
@@ -117,6 +119,42 @@ function fakeWorkspaceRegistry(): {
 
 /** Every context created by a test, torn down afterwards. */
 const contexts: Context[] = []
+
+/** Poll until `ready()` holds, for the asynchronously-registered settings hooks. */
+async function until(ready: () => boolean, label: string, timeoutMs = 5_000): Promise<void> {
+  const started = Date.now()
+  while (!ready()) {
+    if (Date.now() > started + timeoutMs) throw new Error(`timed out waiting for ${label}`)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+
+/**
+ * A settings provider that hands back the hooks `apply()` registered, so a test
+ * can fire live configuration changes exactly the way the settings panel does:
+ * `setSource` with the new value, then `onChange`.
+ */
+function capturingSettingsProvider(): {
+  provider: unknown
+  hooks: () => SettingsSectionHooks<Config> | undefined
+} {
+  let captured: SettingsSectionHooks<Config> | undefined
+  return {
+    provider: {
+      installSection(
+        _owner: unknown,
+        ns: string,
+        _schema: unknown,
+        _entry: Config,
+        hooks: SettingsSectionHooks<Config>,
+      ): void {
+        if (ns !== SETTINGS_NAMESPACE) return
+        captured = hooks
+      },
+    },
+    hooks: () => captured,
+  }
+}
 
 async function bootWithContext(build: (root: Context) => Config): Promise<{ root: Context; url: string }> {
   const root = new Context()
@@ -475,6 +513,88 @@ describe('endpoint lifecycle', () => {
     await new Promise<void>((resolve) => probe.close(() => resolve()))
   })
 
+  it('moves the listener on a live bind change and closes the old port', async () => {
+    // The settings panel commits one `onChange` per field, so binds change while
+    // the plugin is running. Whatever the timing, exactly one listener may be
+    // live afterwards: a leaked old port is an endpoint the operator believes
+    // they turned off.
+    const portA = await freePort()
+    const portB = await freePort()
+    const settings = capturingSettingsProvider()
+    const root = new Context()
+    contexts.push(root)
+    root.provide('settings', settings.provider)
+    apply(root, pluginConfig({ port: portA }))
+    await until(() => settings.hooks() !== undefined, 'settings registration')
+    await waitForEndpoint(`http://127.0.0.1:${portA}/mcp`)
+
+    settings.hooks()!.setSource(() => pluginConfig({ port: portB }))
+    settings.hooks()!.onChange()
+    await waitForEndpoint(`http://127.0.0.1:${portB}/mcp`)
+
+    // The new endpoint answers, and the old one is really gone.
+    const moved = await rpc(`http://127.0.0.1:${portB}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    expect(moved.status).toBe(200)
+    await expect(fetch(`http://127.0.0.1:${portA}/mcp`, { method: 'POST', body: '{}' })).rejects.toThrow()
+  })
+
+  it('does not leak a listener when the plugin is disposed mid-reconcile', async () => {
+    // F7's sharpest shape: dispose lands while a reconcile is between its awaits.
+    // Sampling `listener` at dispose time used to let the in-flight bind assign
+    // a handle afterwards, leaving a live endpoint that outlived the plugin.
+    const portA = await freePort()
+    const portB = await freePort()
+    const settings = capturingSettingsProvider()
+    const root = new Context()
+    contexts.push(root)
+    root.provide('settings', settings.provider)
+    apply(root, pluginConfig({ port: portA }))
+    await until(() => settings.hooks() !== undefined, 'settings registration')
+    await waitForEndpoint(`http://127.0.0.1:${portA}/mcp`)
+
+    settings.hooks()!.setSource(() => pluginConfig({ port: portB }))
+    settings.hooks()!.onChange()
+    // Tear down before the move can finish; the dispose must absorb the
+    // in-flight reconcile, not race it.
+    await root.fiber.dispose()
+    contexts.splice(contexts.indexOf(root), 1)
+
+    await expect(fetch(`http://127.0.0.1:${portB}/mcp`, { method: 'POST', body: '{}' })).rejects.toThrow()
+    await expect(fetch(`http://127.0.0.1:${portA}/mcp`, { method: 'POST', body: '{}' })).rejects.toThrow()
+  })
+
+  it('warns when a pinned token is too short to resist guessing', async () => {
+    const port = await freePort()
+    const lines: string[] = []
+    const root = new Context()
+    contexts.push(root)
+    const capture =
+      (...args: unknown[]) =>
+        lines.push(args.map((argument) => String(argument)).join(' '))
+    root.logger = { debug: capture, info: capture, warn: capture, error: capture } as never
+
+    apply(root, pluginConfig({ port, token: 'short' }))
+    await waitForEndpoint(`http://127.0.0.1:${port}/mcp`)
+
+    expect(lines.some((line) => line.includes('shorter than 16 characters'))).toBe(true)
+  })
+
+  it('warns when the endpoint binds off loopback, where the token is the only gate', async () => {
+    const port = await freePort()
+    const lines: string[] = []
+    const root = new Context()
+    contexts.push(root)
+    const capture =
+      (...args: unknown[]) =>
+        lines.push(args.map((argument) => String(argument)).join(' '))
+    root.logger = { debug: capture, info: capture, warn: capture, error: capture } as never
+
+    apply(root, pluginConfig({ port, host: '0.0.0.0' }))
+    await waitForEndpoint(`http://127.0.0.1:${port}/mcp`)
+
+    expect(lines.some((line) => line.includes('not a loopback address'))).toBe(true)
+  })
+
   it('generates and persists a bearer token when none is configured', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-as-mcp-apply-'))
     const previous = process.env.DSH_HOME
@@ -490,6 +610,96 @@ describe('endpoint lifecycle', () => {
       // The token is a secret: the file must not be group- or world-readable.
       const mode = (await stat(path)).mode & 0o777
       expect(mode).toBe(0o600)
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previous
+    }
+  })
+
+  it('retries a reconcile that failed instead of recording it as applied', async () => {
+    // The signature is a promise that "this config is what is running". Recording
+    // it before the work meant a run that threw part-way — here, a web-server
+    // route already taken — was remembered as done, so every later reconcile with
+    // that config returned at the guard and the endpoint stayed half-configured
+    // until an unrelated edit changed the signature.
+    const port = await freePort()
+    const settings = capturingSettingsProvider()
+    const root = new Context()
+    contexts.push(root)
+    root.provide('settings', settings.provider)
+
+    let attempts = 0
+    root.provide('webServer', {
+      register() {
+        attempts += 1
+        throw new Error('route already registered')
+      },
+      unregister() {},
+    })
+
+    apply(root, pluginConfig({ port, mountOnWebServer: true }))
+    await until(() => settings.hooks() !== undefined, 'settings registration')
+    // The listener is unaffected by a failed mount, so this also pins that the
+    // two halves stay independent.
+    await waitForEndpoint(`http://127.0.0.1:${port}/mcp`)
+
+    // How many reconciles boot happens to run is not the contract, so it is not
+    // asserted. What matters is that later edits keep retrying: a signature
+    // recorded up front freezes this count forever after the first throw.
+    const afterBoot = attempts
+    expect(afterBoot).toBeGreaterThanOrEqual(1)
+
+    for (const round of [1, 2]) {
+      settings.hooks()!.setSource(() => pluginConfig({ port, mountOnWebServer: true }))
+      settings.hooks()!.onChange()
+      await until(() => attempts === afterBoot + round, `retry ${round}`)
+    }
+
+    expect(attempts).toBe(afterBoot + 2)
+  })
+
+  it('says so when the token path is not a regular file, instead of implying it was read', async () => {
+    // Reproduces the live finding: with a symlink at the token path, the boot
+    // lines used to read "read from ephemeral" and "… fingerprint … read from
+    // <the token path>" — the second of which is false, because that path is
+    // exactly what was *not* read. The endpoint is also unauthenticatable (the
+    // token is per-process and only its fingerprint is logged), so silence here
+    // leaves an operator with a 401 and no stated cause.
+    const home = await mkdtemp(join(tmpdir(), 'dsh-as-mcp-apply-'))
+    const previous = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      await mkdir(join(home, 'dsh-as-mcp'), { recursive: true })
+      await writeFile(join(home, 'victim.txt'), 'not a credential\n')
+      await symlink(join(home, 'victim.txt'), join(home, 'dsh-as-mcp', 'token'))
+
+      const port = await freePort()
+      const lines: string[] = []
+      const root = new Context()
+      contexts.push(root)
+      const capture =
+        (...args: unknown[]) =>
+          lines.push(args.map((argument) => String(argument)).join(' '))
+      root.logger = { debug: capture, info: capture, warn: capture, error: capture } as never
+
+      apply(root, pluginConfig({ port, token: '' }))
+      await waitForEndpoint(`http://127.0.0.1:${port}/mcp`)
+
+      // The operator is told, at warning level, what happened and what to do.
+      const warning = lines.find((line) => line.includes('not a regular file'))
+      expect(warning).toBeDefined()
+      expect(warning).toContain(join(home, 'dsh-as-mcp', 'token'))
+      expect(warning).toContain('auth.token')
+
+      // And no line asserts the credential was READ FROM that path — the exact
+      // false claim this pinned. Matched as an adjacency rather than on the bare
+      // words: the warning legitimately says the token "cannot be read from disk".
+      const tokenPath = join(home, 'dsh-as-mcp', 'token')
+      const claims = lines.filter((line) => line.includes(`read from ${tokenPath}`))
+      expect(claims).toEqual([])
+
+      // The victim file is untouched, which is the whole point of not reading through it.
+      expect(await readFile(join(home, 'victim.txt'), 'utf8')).toBe('not a credential\n')
     } finally {
       if (previous === undefined) delete process.env.DSH_HOME
       else process.env.DSH_HOME = previous

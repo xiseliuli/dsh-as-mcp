@@ -76,7 +76,11 @@ dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 }
 ```
 
-`dsh-as-mcp --help` 会打印它将使用的端点和 token 状态。
+`dsh-as-mcp --help` 会打印它将使用的端点和 token 状态。桥接脚本只会把**从 token 文件读到的**
+凭证发给回环端点；要把 `DSH_AS_MCP_URL` 指向远程，必须显式设置 `DSH_AS_MCP_TOKEN`——复制来的
+客户端配置因此无法悄悄把本机凭证外传。「回环」是**精确匹配**：`localhost`、`::1`，或字面量
+`127.x.x.x` 地址，因此 `127.0.0.1.example.com` 这类域名会被当作它实际所属的远程主机处理。
+scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 
 **先调 `dsh_info`**。它会返回端点、token 的来源、哪些工具组开着，以及——这点很关键——当前 profile
 实际提供了哪些 harness 服务，这样客户端能区分「这个 profile 没有 shell」和「这条命令执行
@@ -139,13 +143,16 @@ workspace_create { path: "/Users/me/project" }
 
 这个端点等于远程操控一个拥有 shell 权限的编码 agent。请把 token 当 SSH 私钥对待——插件自己也是
 这么做的：没有任何工具会返回它的值。`dsh_info` 只报 token 的来源（文件路径或配置），不报明文，
-所以调用方 agent 的上下文里不会攒下这个凭证。
+所以调用方 agent 的上下文里不会攒下这个凭证。启动时，短于 16 个字符的自定义 token 会触发告警；
+自动生成的 token 是 43 个字符的 CSPRNG 输出。
 
 - 监听绑定在 `127.0.0.1`，所有请求都做 bearer 校验——包括挂在 DSH 自身 web server 上的那条
   路由。但在那条路由上，**这个校验是唯一的关卡**：插件注册的精确路由会先于 DSH 的鉴权围栏被
   匹配，没匹配上的请求才会作为 fallback 交给围栏（`webserver/src/index.ts:222-227`）。所以
-  `http.mountOnWebServer: true` 并**不**继承你浏览器会话的保护，它自带准入。把 `http.host`
-  改成 `0.0.0.0` 等于把同样的权力开放到你的网络，只在你自己的网关后面这么做。
+  `http.mountOnWebServer: true` 并**不**继承你浏览器会话的保护，它自带准入。DSH Desktop 上
+  有一个例外：关闭普通浏览器访问时，web server 还会拒绝不带渲染进程头的请求，此时挂载路径对
+  普通 MCP 客户端不可达——请使用插件自有的监听端口。把 `http.host` 改成 `0.0.0.0` 等于把同样
+  的权力开放到你的网络；插件会在绑定时告警，且只应在你自己的网关后面这么做。
 - **token 就是全部的安全边界，而这个边界等于你的用户账号。** 这里没有任何路径沙箱。调用方一旦
   持有 token，`file_read`／`file_write`／`file_list` 就能触及 DSH 进程能触及的一切，`shell_run`
   就是以你的身份执行任意命令——因为 harness 自己的 `fs` 与 `shell` 服务替 DSH agent 做事时正是
@@ -295,6 +302,10 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
       session: true
       files: true
       shell: true
+      agentTools: true
+    agentTools:
+      allow: []              # 空：用内置白名单；非空则整体替换
+      deny: []               # 从解析后的集合里减去
     session:
       agentPreset: ''        # 空：用 harness 默认
       provider: ''           # 必须和 model 成对出现
@@ -303,6 +314,7 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
     limits:
       maxReadBytes: 1048576
       shellTimeoutMs: 120000
+      agentToolTimeoutMs: 120000
     approval:
       policy: inherit        # inherit | allow
 ```
@@ -312,6 +324,10 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 宿主挂载了 settings 服务时（DSH Desktop 与 `dsh web` 都有），插件会在设置面板里贡献一个
 **MCP 服务** 分组。它编辑的就是上面那段配置所在的 `dsh-as-mcp` 命名空间——面板和文件是同一个
 值的两种视图，不是两份副本。
+
+面板覆盖全部设置，包括 `agentTools.allow` 与 `agentTools.deny` 这两份名单（用逗号分隔的文本
+编辑）。它们本质是 `string[]`，所以**名字里带逗号**的工具无法在面板里表达，那种情况请改配置
+文件。
 
 所有改动**即时生效**：
 
@@ -360,9 +376,14 @@ cookie 围栏**之内**，因此自动继承 DSH 自己的鉴权，绝不会暴�
   正确性的来源，而不是「看起来合理」：排队中的 prompt 在日志里是落在**正在跑的那一轮**的区间
   内部的，所以出现在我们消息之后的 `turn/end` 通常属于别人，不属于我们。同一会话上的轮次另外
   还做了串行化，因此两个并发调用方不会把 prompt 交错在一起、然后对「哪条回复属于谁」产生分歧。
-- **文件系统。** 只有 `workspace_create` 和 `file_write` 为创建父目录用到 `node:fs` 的
-  `mkdir`；harness 的文件系统服务有意不暴露 `mkdir`。其余读写一律走 `ctx.fs`，所以 DSH agent
-  所处的路径规则与沙箱同样约束调用方。
+  代价要说清楚：串行化覆盖的是**整个等待**，不只是消息提交——前一个等待还没结束时，第二个
+  `session_prompt` 的消息连提交都不会提交（直到前者落定或超时）；此时发来的 `steer` 也会被
+  推迟到前者结束，从而退化为一条排队消息。只想排队的调用方应当改用轮询 `session_messages`，
+  而不是长时间握着一个等待不放。
+- **文件系统。** 只有 `workspace_create` 为创建工作区根目录本身用到 `node:fs` 的 `mkdir`
+  （这个目录是新的沙箱根，按定义在既有根之外，所以无法走接缝，也因此受 read-only 策略约束）；
+  harness 的文件系统服务有意不暴露 `mkdir`。其余读写一律走 `ctx.fs`，所以 DSH agent 所处的
+  路径规则与沙箱同样约束调用方。
 - **没有删除会话。** harness 只有 `archiveSession`/`unarchiveSession`，没有 delete，本插件
   同样不提供。
 

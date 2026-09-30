@@ -45,6 +45,22 @@ function deny(res: Parameters<NodeMcpRequestHandler>[1], status: number, body: s
   res.end(payload)
 }
 
+/**
+ * The host a client should dial: a wildcard bind advertises loopback, because
+ * `0.0.0.0` (or `::`) is not an address a client can connect to, while the
+ * endpoint it stands for is reachable on the loopback interface.
+ */
+export function advertisedHost(host: string): string {
+  const normalized = host.trim().toLowerCase()
+  return normalized === '0.0.0.0' || normalized === '::' ? '127.0.0.1' : host
+}
+
+/** Whether a listen host admits only the local machine. */
+export function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase()
+  return normalized === 'localhost' || normalized === '::1' || normalized.startsWith('127.')
+}
+
 /** The `?token=` fallback, for clients that cannot set an `Authorization` header. */
 function queryToken(url: string | undefined): string | null {
   if (url === undefined) return null
@@ -120,7 +136,14 @@ export async function startListener(input: {
       deny(res, 404, 'not found')
       return
     }
-    void handler(req, res)
+    // The guard is async, so a rejection has to be caught here rather than
+    // escape: DSH treats an unhandled rejection as fatal, and one failed
+    // request must never take the host process down with it.
+    void handler(req, res).catch((error: Error) => {
+      log.error('[dsh-as-mcp] request handling failed:', error.message)
+      if (res.headersSent) res.end()
+      else deny(res, 500, 'internal error')
+    })
   })
 
   await new Promise<void>((resolve, reject) => {
@@ -139,7 +162,9 @@ export async function startListener(input: {
 
   const address = server.address()
   const boundPort = typeof address === 'object' && address !== null ? address.port : port
-  const url = `http://${host}:${boundPort}${path}`
+  // Advertise a dialable host: a wildcard bind is reported as loopback, matching
+  // what `status()` reports for the same configuration.
+  const url = `http://${advertisedHost(host)}:${boundPort}${path}`
   log.info(`[dsh-as-mcp] MCP endpoint listening on ${url}`)
 
   return {

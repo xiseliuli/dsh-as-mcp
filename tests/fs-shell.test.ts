@@ -265,6 +265,75 @@ describe('the shell seam across harness versions', () => {
   })
 })
 
+describe('file_write honours createDirectories', () => {
+  /**
+   * A filesystem double whose directories exist only where `existing` says so.
+   *
+   * The real seam's atomic write always creates missing parents, which is what
+   * made `createDirectories: false` a silent no-op before; modelling that
+   * behavior here is what pins the driver's pre-write check to the flag.
+   */
+  function fsWithExistingParents(existing: (path: string) => boolean): {
+    fs: DshFileSystem
+    writes: string[]
+  } {
+    const writes: string[] = []
+    const fs: DshFileSystem = {
+      resolve: async (path: string) => targetFor(path),
+      processPath: (target: DshFsTarget) => target.displayPath,
+      stat: async (target: DshFsTarget) =>
+        existing(target.displayPath) ? { type: 'directory' as const, size: 0 } : undefined,
+      readText: async () => '',
+      readByteRange: async () => new Uint8Array(),
+      listDir: async () => [],
+      writeText: async (target: DshFsTarget) => {
+        writes.push(target.displayPath)
+        return { operation: 'create' as const }
+      },
+    }
+    return { fs, writes }
+  }
+
+  it('refuses the write when the parent is missing and the flag is false', async () => {
+    // The contract the schema used to lie about: a caller passing
+    // `createDirectories: false` expects a refusal, not a successful write that
+    // created the directory anyway.
+    const { fs, writes } = fsWithExistingParents((path) => path === '/present')
+    await expect(
+      driverWith({ fs }).writeFile({
+        path: '/present/missing/out.txt',
+        content: 'x',
+        createDirectories: false,
+      }),
+    ).rejects.toThrow(/parent directory does not exist and createDirectories is false/)
+    expect(writes).toEqual([])
+  })
+
+  it('writes through when the parent exists, even with the flag false', async () => {
+    const { fs, writes } = fsWithExistingParents((path) => path === '/present')
+    const outcome = await driverWith({ fs }).writeFile({
+      path: '/present/out.txt',
+      content: 'x',
+      createDirectories: false,
+    })
+    expect(outcome).toEqual({ path: '/present/out.txt', operation: 'create' })
+    expect(writes).toEqual(['/present/out.txt'])
+  })
+
+  it('does not consult the parent when the flag is true, matching the seam', async () => {
+    // With creation allowed, the seam handles missing parents inside the fence;
+    // probing first would be dead work and another path for TOCTOU.
+    const { fs, writes } = fsWithExistingParents(() => false)
+    const outcome = await driverWith({ fs }).writeFile({
+      path: '/anything/missing/out.txt',
+      content: 'x',
+      createDirectories: true,
+    })
+    expect(outcome.operation).toBe('create')
+    expect(writes).toEqual(['/anything/missing/out.txt'])
+  })
+})
+
 describe('file_write never creates the parent outside the sandbox (F1)', () => {
   it('does not mkdir through node:fs before the fs seam sees the write', async () => {
     // The bug this encodes: `file_write {createDirectories: true}` used to call

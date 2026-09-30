@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -12,6 +12,38 @@ export interface ResolvedToken {
   readonly source: TokenSource
   /** The file the token is read from and persisted to. */
   readonly file: string
+}
+
+/**
+ * Prose for where a token came from, shared by every log line that reports one.
+ *
+ * One helper rather than a ternary per call site, because the sources are not a
+ * two-way split and two sites already drifted: both rendered any non-`config`
+ * source as "read from <file>", so `ephemeral` produced a line asserting the
+ * credential had been read from the token path. Nothing is read from that path
+ * in that case — it is not a regular file, which is the whole reason the token
+ * is ephemeral — so the line sent an operator debugging a 401 to a file holding
+ * someone else's bytes.
+ *
+ * `settings` is not a {@link TokenSource}: it is what `effectiveToken` reports
+ * when the value was pinned in the settings panel, and it must be named here
+ * too or it would fall through to the default.
+ */
+export function describeTokenSource(token: { readonly source: string; readonly file: string }): string {
+  switch (token.source) {
+    case 'config':
+      return 'pinned in the plugin config'
+    case 'settings':
+      return 'pinned in the settings panel'
+    case 'file':
+      return `read from ${token.file}`
+    case 'generated':
+      return `generated and persisted at ${token.file}`
+    case 'ephemeral':
+      return `minted for this process only and NOT persisted; ${token.file} is not a regular file and was left alone`
+    default:
+      return `reported as "${token.source}"`
+  }
 }
 
 /**
@@ -44,6 +76,18 @@ export function resolveToken(configured: string): ResolvedToken {
   const fromConfig = configured.trim()
   if (fromConfig !== '') return { token: fromConfig, source: 'config', file }
 
+  // A foreign object at the token path — a symlink above all — is not ours to
+  // trust: reading it would adopt whatever it points at as the endpoint's
+  // secret, and writing it would follow the link and overwrite the target.
+  // Mint an ephemeral token instead and leave the object alone.
+  try {
+    if (!lstatSync(file).isFile()) {
+      return { token: randomBytes(32).toString('base64url'), source: 'ephemeral', file }
+    }
+  } catch {
+    // Absent: fall through and read or mint one.
+  }
+
   try {
     const existing = readFileSync(file, 'utf8').trim()
     if (existing !== '') return { token: existing, source: 'file', file }
@@ -53,7 +97,10 @@ export function resolveToken(configured: string): ResolvedToken {
 
   const token = randomBytes(32).toString('base64url')
   try {
-    mkdirSync(dirname(file), { recursive: true })
+    // Mode 0700: the directory holds a credential, and the default 0755 would
+    // make its existence and metadata world-readable even though the file
+    // itself is 0600. With `recursive`, the mode applies to what is created.
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
     writeFileSync(file, `${token}\n`, { mode: 0o600 })
   } catch {
     // A read-only or otherwise unwritable DSH home must not stop DSH from

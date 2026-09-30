@@ -1,9 +1,9 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { TokenSource, maskToken, resolveToken, tokenMatches } from '../src/mcp/token.js'
+import { TokenSource, describeTokenSource, maskToken, resolveToken, tokenMatches } from '../src/mcp/token.js'
 
 /** Point DSH_HOME at a scratch directory for the duration of one test. */
 function withHome(): string {
@@ -47,6 +47,29 @@ describe('resolveToken', () => {
     const second = resolveToken('')
     expect(second.source).toBe<TokenSource>('file')
     expect(second.token).toBe(first.token)
+  })
+
+  it('creates the token directory 0700, not world-readable', () => {
+    const home = withHome()
+    resolveToken('')
+    // The directory holds a credential; the default 0755 would advertise its
+    // existence and metadata to every local user even with a 0600 file inside.
+    expect(statSync(join(home, 'dsh-as-mcp')).mode & 0o777).toBe(0o700)
+  })
+
+  it('does not read or write through a symlink at the token path', () => {
+    const home = withHome()
+    mkdirSync(join(home, 'dsh-as-mcp'), { recursive: true })
+    const victim = join(home, 'innocent.txt')
+    writeFileSync(victim, 'do not touch\n')
+    symlinkSync(victim, join(home, 'dsh-as-mcp', 'token'))
+
+    const resolved = resolveToken('')
+
+    // The endpoint must not adopt the link target as its secret, and minting a
+    // replacement must not follow the link and overwrite the target either.
+    expect(resolved.source).toBe<TokenSource>('ephemeral')
+    expect(readFileSync(victim, 'utf8')).toBe('do not touch\n')
   })
 
   it('lets a configured token win over the file', () => {
@@ -107,5 +130,37 @@ describe('tokenMatches', () => {
     // is the one guard whose absence would be silent.
     expect(tokenMatches('', '')).toBe(false)
     expect(tokenMatches('', 'anything')).toBe(false)
+  })
+})
+
+describe('describeTokenSource', () => {
+  const file = '/home/u/.dsh/dsh-as-mcp/token'
+
+  it('names the file only for the sources that actually read it', () => {
+    expect(describeTokenSource({ source: 'file', file })).toContain(file)
+    expect(describeTokenSource({ source: 'generated', file })).toContain(file)
+  })
+
+  it('does not claim the file was read when the token is ephemeral', () => {
+    // The bug this pins: both log sites rendered any non-`config` source as
+    // "read from <file>", so a symlinked token path produced a line asserting the
+    // credential had been read from a path that was deliberately not read. An
+    // operator chasing a 401 would go read someone else's file.
+    const prose = describeTokenSource({ source: 'ephemeral', file })
+    expect(prose).not.toMatch(/read from/)
+    expect(prose).toMatch(/NOT persisted/)
+    // The path still has to appear: it is what the operator must go fix.
+    expect(prose).toContain(file)
+  })
+
+  it('distinguishes config from settings, which are different sources', () => {
+    // `settings` is not a TokenSource — it is what effectiveToken reports for a
+    // panel value — so a switch that forgot it would silently fall to the default.
+    expect(describeTokenSource({ source: 'config', file })).toMatch(/plugin config/)
+    expect(describeTokenSource({ source: 'settings', file })).toMatch(/settings panel/)
+  })
+
+  it('never returns an empty string, so a log line cannot lose its reason', () => {
+    expect(describeTokenSource({ source: 'something-new', file })).not.toBe('')
   })
 })

@@ -8,8 +8,15 @@
  * @module dsh-as-mcp/client/fields
  */
 
-/** How a field is edited. */
-export type FieldKind = 'toggle' | 'text' | 'number' | 'select'
+/**
+ * How a field is edited.
+ *
+ * `list` is a comma-separated editor for a host `string[]` field. It exists
+ * because a settings namespace holds JSON values but the panel's controls are
+ * deliberately few, and an array otherwise has no way to be displayed at all —
+ * which is how the allow-list shipped configurable only by hand-editing YAML.
+ */
+export type FieldKind = 'toggle' | 'text' | 'number' | 'select' | 'list'
 
 /** One editable setting. */
 export interface FieldSpec {
@@ -70,6 +77,33 @@ export const GROUPS: readonly GroupSpec[] = [
       { kind: 'toggle', path: ['tools', 'session'], label: 'field.tools.session', hint: 'field.tools.session.hint' },
       { kind: 'toggle', path: ['tools', 'files'], label: 'field.tools.files', hint: 'field.tools.files.hint' },
       { kind: 'toggle', path: ['tools', 'shell'], label: 'field.tools.shell', hint: 'field.tools.shell.hint' },
+      {
+        kind: 'toggle',
+        path: ['tools', 'agentTools'],
+        label: 'field.tools.agentTools',
+        hint: 'field.tools.agentTools.hint',
+      },
+    ],
+  },
+  {
+    id: 'agentTools',
+    title: 'group.agentTools.title',
+    description: 'group.agentTools.description',
+    fields: [
+      {
+        kind: 'list',
+        path: ['agentTools', 'allow'],
+        label: 'field.agentTools.allow',
+        hint: 'field.agentTools.allow.hint',
+        placeholder: 'read, write, bash',
+      },
+      {
+        kind: 'list',
+        path: ['agentTools', 'deny'],
+        label: 'field.agentTools.deny',
+        hint: 'field.agentTools.deny.hint',
+        placeholder: 'bash, pwsh',
+      },
     ],
   },
   {
@@ -96,6 +130,13 @@ export const GROUPS: readonly GroupSpec[] = [
     fields: [
       { kind: 'number', path: ['limits', 'maxReadBytes'], label: 'field.limits.maxReadBytes', hint: 'field.limits.maxReadBytes.hint', min: 1 },
       { kind: 'number', path: ['limits', 'shellTimeoutMs'], label: 'field.limits.shellTimeoutMs', hint: 'field.limits.shellTimeoutMs.hint', min: 0 },
+      {
+        kind: 'number',
+        path: ['limits', 'agentToolTimeoutMs'],
+        label: 'field.limits.agentToolTimeoutMs',
+        hint: 'field.limits.agentToolTimeoutMs.hint',
+        min: 0,
+      },
     ],
   },
   {
@@ -130,4 +171,23 @@ export function readPath(value: unknown, path: readonly string[]): unknown {
 /** The dotted form, used as a stable React key and as the copyable path. */
 export function pathKey(path: readonly string[]): string {
   return path.join('.')
+}
+
+/**
+ * Render a `string[]` field for the comma-separated editor.
+ *
+ * Joining with ", " rather than "," keeps the value readable when the operator
+ * reopens the panel, and both separators are accepted on the way back in, so a
+ * paste of one-name-per-line works.
+ */
+export function formatList(value: unknown): string {
+  return Array.isArray(value) ? value.map((entry) => String(entry)).join(', ') : ''
+}
+
+/** Parse the editor's text back into the `string[]` the host stores. */
+export function parseList(text: string): string[] {
+  return text
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '')
 }

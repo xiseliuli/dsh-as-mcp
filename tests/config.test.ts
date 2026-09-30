@@ -56,7 +56,7 @@ describe('cordis.patch.yml', () => {
       // built-in list", so the row and the schema still agree on the default.
       agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [] },
       session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900_000 },
-      limits: { maxReadBytes: 1_048_576, shellTimeoutMs: 120_000 },
+      limits: { maxReadBytes: 1_048_576, shellTimeoutMs: 120_000, agentToolTimeoutMs: 120_000 },
       approval: { policy: 'inherit' },
     })
   })
@@ -74,6 +74,9 @@ describe('config loading through Cordis', () => {
     expect(config.http.mountOnWebServer).toBe(false)
     expect(config.approval.policy).toBe('inherit')
     expect(config.session.promptTimeoutMs).toBe(900_000)
+    // Its own knob, not a reuse of the shell timeout: an operator tuning one
+    // must not silently move the other's default.
+    expect(config.limits.agentToolTimeoutMs).toBe(120_000)
   })
 
   it('keeps sibling defaults when a nested section is partially set', () => {

@@ -338,7 +338,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           createDirectories: z
             .boolean()
             .optional()
-            .describe('Create missing parent directories. Defaults to true.'),
+            .describe(
+              'When false, the call fails if the parent directory does not exist instead of '
+              + 'creating it. Defaults to true (create it).',
+            ),
         }),
         annotations: { openWorldHint: false },
       },
@@ -429,7 +432,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           sessionId: z.string().min(1)
             .describe('The session whose agent runs the call, under its policy and working directory. Required.'),
           timeoutMs: z.number().int().positive().max(600_000).optional()
-            .describe('Abort the call after this many milliseconds.'),
+            .describe(
+              'Abort the call after this many milliseconds. Defaults to the configured agent '
+              + 'tool timeout (limits.agentToolTimeoutMs).',
+            ),
         }),
         annotations: { openWorldHint: true },
       },
@@ -437,7 +443,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         name: args.name,
         ...(args.args === undefined ? {} : { args: args.args }),
         sessionId: args.sessionId,
-        timeoutMs: args.timeoutMs ?? getConfig().limits.shellTimeoutMs,
+        timeoutMs: args.timeoutMs ?? getConfig().limits.agentToolTimeoutMs,
       }))),
     )
   }

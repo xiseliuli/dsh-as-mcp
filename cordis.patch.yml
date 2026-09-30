@@ -68,6 +68,8 @@
           maxReadBytes: 1048576
           # Default timeout for `shell_run`, in milliseconds.
           shellTimeoutMs: 120000
+          # Default timeout for `dsh_tool_call`, in milliseconds.
+          agentToolTimeoutMs: 120000
         approval:
           # 'inherit' leaves the harness approval policy alone. 'allow' installs
           # an answerer that approves every request made by sessions this plugin

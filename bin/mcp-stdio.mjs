@@ -45,7 +45,52 @@ function readPersistedToken() {
 }
 
 const endpoint = process.env.DSH_AS_MCP_URL?.trim() || DEFAULT_URL
+// The distinction matters for the exfil guard below: a token handed over
+// explicitly was meant for the configured endpoint, one read from disk was
+// not necessarily.
+const tokenIsExplicit = Boolean(process.env.DSH_AS_MCP_TOKEN?.trim())
 const token = process.env.DSH_AS_MCP_TOKEN?.trim() || readPersistedToken()
+
+/**
+ * Whether a hostname names this machine.
+ *
+ * The IPv4 arm matches a literal 127.0.0.0/8 dotted quad, NOT a `127.` string
+ * prefix. A prefix test also accepts `127.0.0.1.attacker.example`, whose DNS the
+ * attacker controls, so the persisted machine-local token would be sent straight
+ * to them — defeating the exact exfiltration this guard exists to stop. The
+ * hostname is attacker-influenced (it comes from a pasted client config), so the
+ * test has to be exact.
+ */
+function isLoopbackHost(hostname) {
+  // Trailing dot is the fully-qualified spelling of the same name.
+  const name = hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
+  if (name === 'localhost' || name === '::1') return true
+  const quad = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(name)
+  if (quad === null) return false
+  const octets = quad.slice(1).map(Number)
+  return octets.every((octet) => octet <= 255) && octets[0] === 127
+}
+
+/**
+ * Whether a URL points at this machine, so sending the local token is safe.
+ *
+ * A scheme-less authority (`127.0.0.1:8790/mcp`) is accepted: it is how someone
+ * naturally writes an address, and `new URL` otherwise parses it as the opaque
+ * scheme `127.0.0.1:` with an empty host, reporting a loopback endpoint as
+ * off-host and refusing for a reason that is not the real one.
+ *
+ * Anything that parses neither way is not loopback, so the guard fails closed.
+ */
+function isLoopbackUrl(value) {
+  for (const candidate of [value, `http://${value}`]) {
+    try {
+      if (isLoopbackHost(new URL(candidate).hostname)) return true
+    } catch {
+      // Not this shape; a scheme-less value is tried next.
+    }
+  }
+  return false
+}
 
 /** MCP session id, when the server issues one. */
 let sessionId
@@ -166,6 +211,18 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 
 if (!token) {
   log(`no bearer token found; set DSH_AS_MCP_TOKEN or start DSH once so ${tokenFilePath()} exists`)
+}
+
+// The token file is a machine-local credential. A copied or generated client
+// config with an off-host URL would otherwise silently send it there, so a
+// file-derived token may only travel to a loopback endpoint unless the token
+// was set explicitly for this run.
+if (token && !tokenIsExplicit && !isLoopbackUrl(endpoint)) {
+  log(
+    `refusing to send the persisted token (${tokenFilePath()}) to a non-loopback endpoint: ${endpoint}. `
+    + 'Set DSH_AS_MCP_TOKEN explicitly if this endpoint is meant to receive it.',
+  )
+  process.exit(1)
 }
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, resolve as resolveAbsolute } from 'node:path'
+import { isAbsolute, dirname, resolve as resolveAbsolute } from 'node:path'
 
 import type { Config } from '../config.js'
 import { optional } from '../config.js'
@@ -97,9 +97,6 @@ export interface DirectoryEntry {
   readonly type: 'file' | 'directory' | 'other'
   readonly size?: number
 }
-
-/** A tool name the driver can serve, used to advertise capability gating. */
-export type DriverTool = 'workspace' | 'session' | 'files' | 'shell'
 
 /**
  * Where one request's prompt sits in the durable session log.
@@ -846,12 +843,22 @@ export class DshDriver {
     // `workspace-write` a symlinked ancestor would land them outside the root
     // before the write itself was refused. It is also unnecessary — the seam's
     // atomic write already does `mkdir(dirname(target), { recursive: true })`
-    // inside the fence (`fs-local/src/fsio.ts:578-580`). `createDirectories` is
-    // kept in the schema because it is a no-op that documents intent, not because
-    // the driver acts on it.
+    // inside the fence (`fs-local/src/fsio.ts:578-580`).
     const target = await fs.resolve(request.path, {
       ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
     })
+    if (!request.createDirectories) {
+      // The seam's write always creates missing parents, so `false` has to be
+      // enforced *before* the write: probe the parent through the seam so the
+      // same path rules apply, and refuse when it is not there.
+      const parent = await fs.resolve(dirname(fs.processPath(target)))
+      if ((await fs.stat(parent)) === undefined) {
+        throw new Error(
+          `cannot write "${fs.processPath(target)}": its parent directory does not exist `
+          + 'and createDirectories is false.',
+        )
+      }
+    }
     const outcome = await fs.writeText(target, request.content)
     return { path: fs.processPath(target), operation: outcome.operation }
   }
