@@ -20,10 +20,15 @@ jobs:
       # package.json's `packageManager` field, so the two never drift apart.
       - uses: pnpm/action-setup@v6
 
+      # Deliberately no `registry-url`. Its only effect here is to write a
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` line into a scratch
+      # .npmrc, and an empty token in that line has repeatedly been reported to
+      # push npm onto token auth instead of the OIDC exchange (ENEEDAUTH, or a
+      # misleading E404, at publish time). Publishing to npm's own registry needs
+      # no registry line at all, so omitting it is the strictly safer default.
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
           cache: pnpm
 
       # The tag is the only thing a trigger guarantees is trustworthy; a
