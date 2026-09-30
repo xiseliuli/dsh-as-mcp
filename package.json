@@ -6,11 +6,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/REPO.git"
+    "url": "git+https://github.com/xiseliuli/dsh-as-mcp.git"
   },
-  "homepage": "https://github.com/OWNER/REPO#readme",
+  "homepage": "https://github.com/xiseliuli/dsh-as-mcp#readme",
   "bugs": {
-    "url": "https://github.com/OWNER/REPO/issues"
+    "url": "https://github.com/xiseliuli/dsh-as-mcp/issues"
   },
   "keywords": [
     "dsh-plugin",
