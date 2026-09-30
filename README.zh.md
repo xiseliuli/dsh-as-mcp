@@ -25,7 +25,7 @@ dsh plugin --profile <名称> add dsh-as-mcp
 **从 GitHub：**
 
 ```bash
-dsh plugin --profile <名称> add github:OWNER/REPO
+dsh plugin --profile <名称> add github:xiseliuli/dsh-as-mcp
 ```
 
 git 安装拉下来的是源码，不是构建产物 `lib/`，所以 pnpm 得跑本包的 `prepare` 脚本
@@ -46,11 +46,11 @@ allowBuilds:
 ```
 
 这个放行等于允许在你机器上、在安装阶段执行这个包的代码——建议钉死到某个 commit
-（`github:OWNER/REPO#<sha>`），免得后续的 push 悄悄改掉实际跑的代码。`dsh plugin add` 使用的是
+（`github:xiseliuli/dsh-as-mcp#<sha>`），免得后续的 push 悄悄改掉实际跑的代码。`dsh plugin add` 使用的是
 DSH 锁定的 pnpm 版本（DSH 0.1.7-rc.2 为 v11.7.0，输出末尾会打印 `using pnpm v…`），所以下面这条要等
 DSH 自带更新的 pnpm 后才适用。如果 profile 用的 pnpm
 ≥11.19.0（若是克隆而非 `github:` 这种 tarball 形式的 git 依赖，则 ≥11.11.0 即可），可以改为放行整个
-仓库——`'dsh-as-mcp@git+https://github.com/OWNER/REPO.git': true`，不带 `#<sha>`——这样同一个仓库
+仓库——`'dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git': true`，不带 `#<sha>`——这样同一个仓库
 之后再提交新 commit 也不用重新放行；更早的 pnpm 版本只能用精确 commit 的 key，每次更新都要重新放行一次
 （[pnpm 11.11 release notes](https://pnpm.io/blog/releases/11.11-11.14)，
 [pnpm/pnpm#12367](https://github.com/pnpm/pnpm/issues/12367)）。
@@ -484,9 +484,9 @@ DSH 实例吗"——而为了回答这个问题，它会给一个真实的 DSH a
 
 **一次性设置**，在 GitHub 仓库建好之后：
 
-1. 把仓库里所有 `OWNER/REPO` 占位符（package.json 的 `repository`、`homepage`、`bugs`，以及
-   两份 README）替换成真实的 `owner/repo`——一次全局替换就够，因为每处拼法都一样。
-2. 打上插件发现要靠的 topic：`gh repo edit OWNER/REPO --add-topic dsh-plugin`。
+1. 把仓库里所有 `xiseliuli/dsh-as-mcp` 占位符（package.json 的 `repository`、`homepage`、`bugs`，以及
+   两份 README）替换成真实的 `xiseliuli/dsh-as-mcp`——一次全局替换就够，因为每处拼法都一样。
+2. 打上插件发现要靠的 topic：`gh repo edit xiseliuli/dsh-as-mcp --add-topic dsh-plugin`。
 3. Trusted Publishing 没法完成包的**第一次**发布——npm 要求先有这个包存在于 registry 上，
    才能给它挂 Trusted Publisher（[`npm trust` 文档](https://docs.npmjs.com/cli/v11/commands/npm-trust/)
    把这条前提写得很直白："Package must exist: The package you're configuring must already exist

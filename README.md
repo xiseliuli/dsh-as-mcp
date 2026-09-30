@@ -27,7 +27,7 @@ From a source checkout, the equivalent is `pnpm dsh plugin --profile <name> add 
 **From GitHub:**
 
 ```bash
-dsh plugin --profile <name> add github:OWNER/REPO
+dsh plugin --profile <name> add github:xiseliuli/dsh-as-mcp
 ```
 
 A git install fetches source, not the built `lib/`, so pnpm must run this package's `prepare`
@@ -49,11 +49,11 @@ allowBuilds:
 ```
 
 Treat that allowance as permission to run this package's code on your machine at install time;
-pin a commit (`github:OWNER/REPO#<sha>`) so a later push cannot silently change what runs.
+pin a commit (`github:xiseliuli/dsh-as-mcp#<sha>`) so a later push cannot silently change what runs.
 `dsh plugin add` runs the pnpm version DSH pins (v11.7.0 as of DSH 0.1.7-rc.2 — its output ends
 with `using pnpm v…`), so the following applies only once DSH ships a newer pnpm. If the
 profile's pnpm is ≥11.19.0 (≥11.11.0 for a cloned, non-`github:` git dependency), you can instead
-approve the repository itself — `'dsh-as-mcp@git+https://github.com/OWNER/REPO.git': true`, with
+approve the repository itself — `'dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git': true`, with
 no `#<sha>` — so a later commit on the same repo keeps building without re-approval; on an older
 pnpm the exact-commit key is your only option and needs re-approving after every update
 ([pnpm 11.11 release notes](https://pnpm.io/blog/releases/11.11-11.14),
@@ -537,11 +537,11 @@ Two rules this codebase learned the hard way:
 
 **One-time setup**, once the GitHub repo exists:
 
-1. Replace every `OWNER/REPO` placeholder in this repo (package.json's `repository`,
-   `homepage`, and `bugs`, plus both READMEs) with the real `owner/repo` — a single global
+1. Replace every `xiseliuli/dsh-as-mcp` placeholder in this repo (package.json's `repository`,
+   `homepage`, and `bugs`, plus both READMEs) with the real `xiseliuli/dsh-as-mcp` — a single global
    find-and-replace works, since every occurrence uses the identical spelling.
 2. Tag the repo with the topic plugin discovery keys on:
-   `gh repo edit OWNER/REPO --add-topic dsh-plugin`.
+   `gh repo edit xiseliuli/dsh-as-mcp --add-topic dsh-plugin`.
 3. Trusted Publishing cannot perform a package's *first* publish — npm requires the package to
    already exist on the registry before a Trusted Publisher can be attached to it (the
    [`npm trust` docs](https://docs.npmjs.com/cli/v11/commands/npm-trust/) state the prerequisite
