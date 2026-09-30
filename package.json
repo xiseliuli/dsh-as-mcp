@@ -1,18 +1,86 @@
 {
-  "name": "dsh-plugins",
-  "private": true,
-  "version": "0.0.0",
-  "description": "DeepSeek Harness plugins maintained in this workspace.",
+  "name": "dsh-as-mcp",
+  "version": "0.1.0",
+  "description": "Expose this DeepSeek Harness as an MCP server so other agents can create workspaces, start sessions, write code through DSH, and run commands.",
   "type": "module",
-  "packageManager": "pnpm@11.8.0",
+  "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "mcp",
+    "model-context-protocol",
+    "cordis-plugin",
+    "bundle"
+  ],
   "engines": {
-    "node": ">=22.15"
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json",
+    "./client": {
+      "default": "./lib/client.js"
+    }
+  },
+  "bin": {
+    "dsh-as-mcp": "./bin/mcp-stdio.mjs"
+  },
+  "files": [
+    "lib",
+    "bin",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": ">=0.1.5-rc.1"
+    },
+    "client": {
+      "platform": "web"
+    }
   },
   "scripts": {
-    "build": "pnpm -r run build",
-    "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r run test",
-    "lint": "pnpm -r run lint",
-    "check": "pnpm run typecheck && pnpm run test"
+    "build": "tsdown && node scripts/build-client.mjs",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.client.json",
+    "test": "vitest run --passWithNoTests",
+    "prepare": "tsdown && node scripts/build-client.mjs",
+    "build:client": "node scripts/build-client.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.0",
+    "@modelcontextprotocol/server": "^2.1.0",
+    "zod": "^4.2.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "@types/node": "^22.18.0",
+    "@types/react": "~18.3.31",
+    "esbuild": "^0.28.2",
+    "tsdown": "^0.23.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "yaml": "^2.9.1"
   }
 }

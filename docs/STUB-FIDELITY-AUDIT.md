@@ -8,8 +8,8 @@ replace: the suite stays green while a contract violation reaches production. Th
 
 | What | Where |
 | --- | --- |
-| Plugin host half | `packages/dsh-as-mcp/src/dsh/driver.ts`, `src/index.ts`, `src/settings.ts`, `src/mcp/http.ts`, `src/mcp/tools.ts` |
-| Plugin tests | `packages/dsh-as-mcp/tests/*.test.ts`, `tests/harness.ts` |
+| Plugin host half | `src/dsh/driver.ts`, `src/index.ts`, `src/settings.ts`, `src/mcp/http.ts`, `src/mcp/tools.ts` |
+| Plugin tests | `tests/*.test.ts`, `tests/harness.ts` |
 | Authoritative harness | `/Users/xiseliuli/test_code/dsh-harness-015` (0.1.5-rc.1) |
 | Second harness | `/Users/xiseliuli/test_code/dsh-harness-ref` (0.1.7-rc.2) |
 | Shipped runtime | `/Applications/DSH Desktop.app/Contents/Resources/app.asar` (bundles 0.1.5-rc.1) |

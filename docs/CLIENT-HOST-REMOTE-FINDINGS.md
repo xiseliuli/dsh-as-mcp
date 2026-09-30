@@ -504,7 +504,7 @@ Two route registries, with different security postures:
   `Access-Control-Allow-Origin` / `access-control-allow-origin` finds **no** occurrence in any
   `packages/**` or `apps/**` TypeScript **[V]**, and `dsh-as-mcp`'s own listener sets only
   `content-type` / `content-length` / `cache-control` on its responses **[V]** —
-  `packages/dsh-as-mcp/src/mcp/http.ts:38-46` (`deny()`). So a browser `fetch` to it would fail
+  `src/mcp/http.ts:38-46` (`deny()`). So a browser `fetch` to it would fail
   preflight/response inspection. **[I]** (I did not run a browser to demonstrate the CORS refusal;
   the absence of ACAO headers is the verified part.)
 
@@ -557,9 +557,9 @@ client does (at byte offset 246017 of `lib/client.js`,
 ## 5. Concrete recommendation for `dsh-as-mcp`
 
 Current state, read from this workspace: the host already computes exactly the needed shape
-**[V]** — `packages/dsh-as-mcp/src/status.ts:10-23` (`EndpointStatus` with `listening`, `url`,
+**[V]** — `src/status.ts:10-23` (`EndpointStatus` with `listening`, `url`,
 `mountedOnWebServer`, `error`, `tokenSource`, `settingsRegistered`) and
-`packages/dsh-as-mcp/src/index.ts:102-113`:
+`src/index.ts:102-113`:
 
 ```ts
   const status = (): EndpointStatus => {

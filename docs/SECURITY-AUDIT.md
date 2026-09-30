@@ -1,4 +1,4 @@
-# Security audit — `packages/dsh-as-mcp`
+# Security audit — `dsh-as-mcp`
 
 Adversarial review of the DSH plugin that exposes a running DeepSeek Harness instance as an
 MCP server. Written to find real vulnerabilities, not to confirm the design.
@@ -185,7 +185,7 @@ these tools. `session_prompt` with `mode: 'steer'` delivers into an already-runn
 - `src/dsh/driver.ts:422-433` (`controller.list({}, signal)` — every visible session), `:504-522` (whole transcript of any id), `:442-496` (`promptSession` of any id; `steer` at `:460`), `:499-501` (`cancelSession`).
 - `src/mcp/tools.ts:204-215`, `:256-281`.
 - `src/dsh/driver.ts:156`, `:178-180` — `ownedSessions`/`ownsSession`, read only at `src/index.ts:266`.
-- README `packages/dsh-as-mcp/README.md:139-144` states this explicitly and correctly.
+- README `README.md:139-144` states this explicitly and correctly.
 
 **Concrete failure.** A token holder calls `session_list` and finds the session the user is currently
 typing into, reads its transcript (`session_messages`), and injects a prompt into the live turn

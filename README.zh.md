@@ -200,7 +200,7 @@ grep -rn watchUserPatches <dsh-desktop>/dsh-plugin-desktop/src/    # 无匹配
 ### 1. 打包并装进 desktop profile
 
 ```bash
-cd /path/to/dsh-plugins/packages/dsh-as-mcp && pnpm pack --pack-destination /tmp
+cd /path/to/dsh-as-mcp && pnpm pack --pack-destination /tmp
 
 # raw pnpm，绕过 CLI 对保留 profile 名的限制
 cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
@@ -212,7 +212,7 @@ cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
 >
 > ```bash
 > TARBALL=/tmp/dsh-as-mcp-$(date +%s).tgz
-> cd /path/to/dsh-plugins/packages/dsh-as-mcp && pnpm pack --pack-destination "$(dirname $TARBALL)"
+> cd /path/to/dsh-as-mcp && pnpm pack --pack-destination "$(dirname $TARBALL)"
 > mv /tmp/dsh-as-mcp-0.1.0.tgz "$TARBALL"
 > cd ~/.dsh/profiles/desktop && pnpm remove dsh-as-mcp && pnpm add "$TARBALL"
 > ```
@@ -221,7 +221,7 @@ cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
 >
 > ```bash
 > wc -c ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/lib/index.js \
->       /path/to/dsh-plugins/packages/dsh-as-mcp/lib/index.js
+>       /path/to/dsh-as-mcp/lib/index.js
 > ```
 
 ### 2. 把插件行写进 profile 自己的 patch 层

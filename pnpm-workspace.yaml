@@ -1,12 +1,14 @@
-packages:
-  - 'packages/*'
+# pnpm's settings file. This repository is a single package, so there is no
+# `packages:` glob — but pnpm 10+ reads settings such as `allowBuilds` only from
+# here, and ignoring them leaves esbuild's postinstall unrun on a fresh clone
+# (vitest needs the platform binary it fetches).
 
-# esbuild's postinstall only fetches its platform binary; vitest needs it.
+# esbuild's postinstall only downloads its platform binary; vitest needs it.
 allowBuilds:
   esbuild: true
 
-# `pnpm run` otherwise re-runs a full dependency-status verification before
-# every script, which fails whenever a build-tool transitive was published
-# inside this machine's minimumReleaseAge window. Installs are still verified;
-# only the per-script re-check is skipped.
+# `pnpm run` otherwise re-runs a full dependency-status verification before every
+# script, which fails whenever a build-tool transitive was published inside this
+# machine's minimumReleaseAge window. Installs are still verified; only the
+# per-script re-check is skipped.
 verifyDepsBeforeRun: false

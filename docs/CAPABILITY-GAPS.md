@@ -1,16 +1,16 @@
 # Capability gaps: what DSH can do that `dsh-as-mcp` cannot reach
 
-**Question.** `packages/dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with 12 tools.
+**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with 12 tools.
 The author wants to know exactly what is missing, what is worth adding, and what should never be added.
 
 **Artifacts**
 
 | What | Where |
 | --- | --- |
-| Plugin under analysis | `packages/dsh-as-mcp/src/dsh/driver.ts`, `src/dsh/types.ts`, `src/mcp/tools.ts`, `src/mcp/http.ts`, `src/index.ts` |
+| Plugin under analysis | `src/dsh/driver.ts`, `src/dsh/types.ts`, `src/mcp/tools.ts`, `src/mcp/http.ts`, `src/index.ts` |
 | Authoritative harness | `/Users/xiseliuli/test_code/dsh-harness-015` — **0.1.5-rc.1**, the version shipped inside DSH Desktop 2.0.9 |
 | Second harness | `/Users/xiseliuli/test_code/dsh-harness-ref` — **0.1.7-rc.2** |
-| Installed MCP SDK | `packages/dsh-as-mcp/node_modules/@modelcontextprotocol/server` — **2.1.0** |
+| Installed MCP SDK | `node_modules/@modelcontextprotocol/server` — **2.1.0** |
 | Profile composition | `packages/bundle/base/cordis.patch.yml` (84 rows), `packages/bundle/web-app/cordis.patch.yml` (68 rows) in the 015 checkout — this *is* the Desktop profile |
 
 **Evidence standard.** Anything marked **verified** was read first-hand in the source named. Citations of
