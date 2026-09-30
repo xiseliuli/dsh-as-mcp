@@ -12,3 +12,13 @@ allowBuilds:
 # machine's minimumReleaseAge window. Installs are still verified; only the
 # per-script re-check is skipped.
 verifyDepsBeforeRun: false
+
+# The optional `@deepseek-ai/dsh` peer (declared purely so DSH's compatibility gate
+# has something to read) is otherwise resolvable from the registry, so pnpm's
+# default `autoInstallPeers: true` pulls the whole harness — and its own dozen
+# `@deepseek-ai/dsh-*` dependencies — into this package's own node_modules for
+# nothing this repo's build or tests use. Every profile `dsh` itself generates
+# already sets this to `false` (`packages/boot/app-boot/src/profile.ts` in the
+# harness repo); mirroring it here keeps a plain `pnpm install` in this checkout
+# from doing the same.
+autoInstallPeers: false

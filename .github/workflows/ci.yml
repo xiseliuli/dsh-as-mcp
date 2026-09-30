@@ -1,0 +1,41 @@
+name: CI
+
+# Runs on every push to main and on every pull request targeting it, so a
+# broken build is caught before it lands rather than at release time.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      # The two Node ranges package.json's `engines` field actually allows:
+      # the floor of the 22.x line and the current major.
+      matrix:
+        node-version: ['22.19.0', '24']
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `version` input: pnpm/action-setup reads the exact pnpm version off
+      # package.json's `packageManager` field, so the two never drift apart.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
+      - run: pnpm run build
+
+      # Fails if `files` drifts from what publishing actually needs (a stray
+      # doc, a missing script, an accidentally-excluded build artifact).
+      - run: npm pack --dry-run

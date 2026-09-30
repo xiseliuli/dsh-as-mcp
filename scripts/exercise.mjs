@@ -7,13 +7,24 @@
  * workspace, start a session, make the DSH agent write code, read that code back
  * off disk, and run it? Every step asserts a real effect, not just a 200.
  *
+ * WARNING: this creates a real session and hands a real prompt to the DSH
+ * agent, which makes real LLM calls against whatever endpoint it resolves to.
+ * That costs real money and leaves a real session behind — read the endpoint
+ * line this script prints before anything else runs.
+ *
  * It also exercises the failure paths deliberately, because a bridge that works
  * when everything is present but returns an opaque 500 when something is missing
  * is not usable from another agent: an unknown tool must be reported as an
  * unknown tool, and a missing session must say so.
  *
- *   node scripts/exercise.mjs [--url http://127.0.0.1:8790/mcp] [--token <value>]
- *                             [--dir <scratch>] [--keep] [--no-color]
+ *   node scripts/exercise.mjs [--url <url>] [--token <value>] [--dir <scratch>]
+ *                             [--keep] [--no-color]
+ *
+ * Configuration, same priority as smoke.mjs — flag, then environment, then
+ * default:
+ *   DSH_AS_MCP_URL    endpoint URL, default http://127.0.0.1:8790/mcp
+ *   DSH_AS_MCP_TOKEN  bearer token; otherwise read from
+ *                     <DSH_HOME>/dsh-as-mcp/token
  *
  * Exits non-zero on the first failed expectation, after reporting every step.
  *
@@ -22,10 +33,23 @@
 
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const argv = process.argv.slice(2)
+
+if (argv.includes('--help') || argv.includes('-h')) {
+  process.stdout.write(
+    'Full acceptance run against a live dsh-as-mcp endpoint.\n\n'
+    + 'WARNING: this creates a real session and makes real LLM calls through the\n'
+    + 'DSH agent — it costs real money and leaves a real session behind.\n\n'
+    + '  node scripts/exercise.mjs [--url <url>] [--token <value>] [--dir <scratch>]\n'
+    + '                            [--keep] [--no-color]\n\n'
+    + 'Environment (same priority as smoke.mjs: flag, then env, then default):\n'
+    + '  DSH_AS_MCP_URL, DSH_AS_MCP_TOKEN, DSH_HOME\n',
+  )
+  process.exit(0)
+}
 
 function flag(name) {
   return argv.includes(`--${name}`)
@@ -42,7 +66,21 @@ function option(name, fallback) {
   return value
 }
 
-const endpoint = option('url', 'http://127.0.0.1:8790/mcp')
+function resolveDshHome() {
+  const fromEnv = process.env.DSH_HOME?.trim()
+  return fromEnv ? fromEnv : join(homedir(), '.dsh')
+}
+
+// Priority matches smoke.mjs: an explicit flag wins, then the environment
+// variable, then the default — and the caller is told which one resolved
+// before anything is sent, since silently landing on the default endpoint is
+// exactly how a stray run once hit a real, already-running DSH instance.
+const urlFromArg = option('url', undefined)
+const urlFromEnv = process.env.DSH_AS_MCP_URL?.trim()
+const endpoint = urlFromArg ?? urlFromEnv ?? 'http://127.0.0.1:8790/mcp'
+const endpointSource = urlFromArg ? 'arg' : urlFromEnv ? 'env' : 'default'
+process.stderr.write(`endpoint: ${endpoint} (${endpointSource})\n`)
+
 const keep = flag('keep')
 const useColor = process.stdout.isTTY === true && !flag('no-color')
 
@@ -68,14 +106,13 @@ function section(title) {
 
 // --- transport -------------------------------------------------------------
 
-let token = option('token', undefined)
+let token = option('token', undefined) ?? process.env.DSH_AS_MCP_TOKEN?.trim()
 let protocolVersion
 let nextId = 1
 let sessionHeader
 
 if (token === undefined) {
-  const home = process.env.DSH_HOME ?? join(process.env.HOME ?? '', '.dsh')
-  const path = join(home, 'dsh-as-mcp', 'token')
+  const path = join(resolveDshHome(), 'dsh-as-mcp', 'token')
   if (existsSync(path)) token = (await readFile(path, 'utf8')).trim()
 }
 

@@ -1,0 +1,74 @@
+name: Release
+
+# Only real version tags cut a release; nothing here runs on an ordinary push.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # to create the GitHub Release
+  id-token: write # to mint the OIDC token npm's trusted publishing verifies
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `version` input: pnpm/action-setup reads the exact pnpm version off
+      # package.json's `packageManager` field, so the two never drift apart.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+
+      # The tag is the only thing a trigger guarantees is trustworthy; a
+      # mismatched package.json would otherwise publish the wrong version
+      # under the right tag's Release notes, or vice versa.
+      - name: Verify the tag matches package.json's version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME (version $tag_version) does not match package.json version $pkg_version"
+            exit 1
+          fi
+          echo "pkg_version=$pkg_version" >> "$GITHUB_ENV"
+
+      # The DSH marketplace resolves `dsh plugin add dsh-as-mcp` against npm's
+      # `latest` dist-tag and requires it to be an exact stable version, so a
+      # prerelease (anything with a `-` suffix, e.g. `0.2.0-rc.1`) publishes
+      # under `next` instead and never touches `latest`.
+      - name: Choose the npm dist-tag
+        run: |
+          if [[ "$pkg_version" == *-* ]]; then
+            echo "npm_dist_tag=next" >> "$GITHUB_ENV"
+            echo "Prerelease version; publishing to the 'next' dist-tag, not 'latest'."
+          else
+            echo "npm_dist_tag=latest" >> "$GITHUB_ENV"
+          fi
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
+      - run: pnpm run build
+
+      # Trusted publishing (OIDC) requires npm CLI >= 11.5.1; the npm bundled
+      # with a given Node build can lag behind that.
+      - name: Ensure npm satisfies trusted publishing's minimum version
+        run: npm install -g npm@latest
+
+      - name: Publish to npm via trusted publishing (OIDC, no token)
+        run: npm publish --provenance --access public --tag "$npm_dist_tag"
+
+      - name: Pack the tarball attached to the GitHub Release
+        run: npm pack
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dsh-as-mcp-*.tgz --title "$GITHUB_REF_NAME" --generate-notes

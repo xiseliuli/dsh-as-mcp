@@ -13,16 +13,63 @@ reimplemented.
 
 ## Install
 
+Three channels install this bundle into a profile; pick whichever matches where you got the
+package from.
+
+**From npm:**
+
 ```bash
-dsh plugin add dsh-as-mcp
+dsh plugin --profile <name> add dsh-as-mcp
 ```
 
-From a checkout or a tarball:
+From a source checkout, the equivalent is `pnpm dsh plugin --profile <name> add dsh-as-mcp`.
+
+**From GitHub:**
 
 ```bash
-dsh plugin add /path/to/dsh-as-mcp
-dsh plugin add ./dsh-as-mcp-0.1.0.tgz
+dsh plugin --profile <name> add github:OWNER/REPO
 ```
+
+A git install fetches source, not the built `lib/`, so pnpm must run this package's `prepare`
+script (`tsdown && node scripts/build-client.mjs`) to produce it. pnpm ≥10 refuses to run that
+script — and the `esbuild` postinstall the build depends on — until the profile allows them, so
+the first `add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`.
+
+A bare package name in `allowBuilds` works for `esbuild` (a registry dependency) but never for
+`dsh-as-mcp` here: pnpm only approves a git-hosted build by its exact resolved key, never by
+name alone ([pnpm docs](https://pnpm.io/settings/build#allowbuilds)). The failed `add` prints
+that exact key in its error; copy it verbatim into the profile's `pnpm-workspace.yaml`
+(`~/.dsh/profiles/<name>/pnpm-workspace.yaml`) and re-run the `add`. Don't rely on pnpm having
+written a placeholder entry for you — on this failure path it does not. The result looks like:
+
+```yaml
+allowBuilds:
+  '<the exact git spec pnpm wrote, including its commit hash>': true
+  esbuild: true
+```
+
+Treat that allowance as permission to run this package's code on your machine at install time;
+pin a commit (`github:OWNER/REPO#<sha>`) so a later push cannot silently change what runs.
+`dsh plugin add` runs the pnpm version DSH pins (v11.7.0 as of DSH 0.1.7-rc.2 — its output ends
+with `using pnpm v…`), so the following applies only once DSH ships a newer pnpm. If the
+profile's pnpm is ≥11.19.0 (≥11.11.0 for a cloned, non-`github:` git dependency), you can instead
+approve the repository itself — `'dsh-as-mcp@git+https://github.com/OWNER/REPO.git': true`, with
+no `#<sha>` — so a later commit on the same repo keeps building without re-approval; on an older
+pnpm the exact-commit key is your only option and needs re-approving after every update
+([pnpm 11.11 release notes](https://pnpm.io/blog/releases/11.11-11.14),
+[pnpm/pnpm#12367](https://github.com/pnpm/pnpm/issues/12367)).
+
+**From a tarball:**
+
+```bash
+pnpm pack
+dsh plugin --profile <name> add /abs/path/to/dsh-as-mcp-<version>.tgz
+```
+
+Reinstalling from the *same* tarball path silently keeps the previous build — see the warning
+under "Installing into DSH Desktop" below for why, and give each rebuild a unique filename.
+
+---
 
 `dsh plugin add` records the package in the profile's `dsh.profile.bundles`, and the
 bundle's `cordis.patch.yml` supplies the plugin row and its defaults. **Restart DSH
@@ -33,6 +80,10 @@ Confirm the layer composed:
 ```bash
 dsh --profile <name> --dump-config | grep -A 30 '# == dsh-as-mcp'
 ```
+
+**For publishers:** tag the GitHub repository with the topic `dsh-plugin` — that is what plugin
+discovery keys on — and keep npm's `latest` dist-tag pointed at an exact, stable version (no
+prerelease, no range), since that is what `dsh plugin add dsh-as-mcp` resolves.
 
 ## Connect a client
 
@@ -386,19 +437,24 @@ two you have.
 ## Compatibility
 
 - **Harness** ≥ `0.1.5-rc.1` (developed and verified against `dsh-v0.1.5-rc.1`, the version
-  bundled with DSH Desktop 2.0.9).
+  bundled with DSH Desktop 2.0.9), declared as `peerDependencies["@deepseek-ai/dsh"]:
+  ">=0.1.5-rc.1"` with no upper bound. DSH's plugin loader reads that range straight from the
+  manifest and semver-checks it against the single running runtime version (prereleases
+  included) *before* the plugin is imported; an incompatible install is refused unless the host
+  grants an exact-version exemption (`dsh plugin allow-version`).
 - **Node** `^22.19.0 || >=24.0.0`.
-- **No hard `@deepseek-ai/*` dependencies.** DSH gates a plugin on each declared
-  `@deepseek-ai/dsh-*` peer range against the single running runtime version, so this package
-  declares none: it resolves every capability structurally through `ctx.get(name)`, and its
-  config schema is a hand-written [Standard Schema](https://standardschema.dev) rather than a
-  schemastery schema — which is all Cordis's `resolveConfig` actually consumes. The result
-  installs and loads with no version gate, and cannot fail at import time because a peer was
-  not installed.
-  The one exception is `@deepseek-ai/schemastery`, declared as an **optional** peer: DSH offers
-  no schemastery-free path to registering a settings namespace, so wanting the panel means
-  declaring it — but optional means a host without it loses only the panel. This is the same
-  stance the installed third-party `dsh-tokenledger` takes.
+- The `@deepseek-ai/dsh` peer is declared **optional**, purely so `dsh plugin add` does not pull
+  a full harness install into every profile just to satisfy it. Optional only changes
+  installation — DSH's compatibility gate reads `peerDependencies` regardless of
+  `peerDependenciesMeta`, so the version check above still applies in full.
+- **No other hard `@deepseek-ai/*` dependency.** This package resolves every other capability
+  structurally through `ctx.get(name)`, and its config schema is a hand-written
+  [Standard Schema](https://standardschema.dev) rather than a schemastery schema — which is all
+  Cordis's `resolveConfig` actually consumes. The one exception is `@deepseek-ai/schemastery`,
+  also declared as an **optional** peer: DSH offers no schemastery-free path to registering a
+  settings namespace, so wanting the panel means declaring it — but optional means a host
+  without it loses only the panel. This is the same stance the installed third-party
+  `dsh-tokenledger` takes.
 
 ## Design notes
 
@@ -444,7 +500,11 @@ and loads the plugin into a real `@deepseek-ai/cordis` context — with `resolve
 config validation — so the wire protocol, the bridge, and the loader contract are all
 exercised rather than mocked.
 
-Two scripts run against a **live** endpoint, which is a different thing:
+Two scripts run against a **live** endpoint, which is a different thing. Both resolve it the
+same way — the `--url`/`--token` flag wins, then `DSH_AS_MCP_URL`/`DSH_AS_MCP_TOKEN`, then the
+loopback default — and both print the endpoint they resolved and where it came from (`arg` /
+`env` / `default`) to stderr before sending anything, so a stray run cannot silently land on
+whatever DSH instance happens to be listening on the default port:
 
 ```bash
 node scripts/smoke.mjs       # handshake, tools/list, dsh_info — is the wire up?
@@ -454,11 +514,13 @@ node scripts/exercise.mjs    # ~40 checks: create a workspace, start a session, 
 ```
 
 `smoke.mjs` answers "does this speak MCP". `exercise.mjs` answers "can an outside agent
-actually drive a DSH instance through it". It is the only check that catches a whole class of
-bug a green unit suite misses — a test stub more forgiving than the harness service it stands
-in for. That class produced four real failures here, three in a primary use case, so run it
-after any change to the driver. `docs/STUB-FIDELITY-AUDIT.md` is the audit that enumerated the
-class; it is worth reading before writing a double for a harness service.
+actually drive a DSH instance through it" — and to answer that it hands a real prompt to a real
+DSH agent, making real LLM calls and costing real money against whatever endpoint it resolved
+to, so read the endpoint line it prints before letting it run. It is the only check that catches
+a whole class of bug a green unit suite misses — a test stub more forgiving than the harness
+service it stands in for. That class produced four real failures here, three in a primary use
+case, so run it after any change to the driver. `docs/STUB-FIDELITY-AUDIT.md` is the audit that
+enumerated the class; it is worth reading before writing a double for a harness service.
 
 Two rules this codebase learned the hard way:
 
@@ -470,6 +532,49 @@ Two rules this codebase learned the hard way:
 - **A test can lock a bug in.** One asserted that a `turn/start` *before* our message meant the
   turn was not ours; a real session log showed that is exactly the ordinary shape, and the
   assertion kept every waiting `session_prompt` timing out on turns that had completed.
+
+## Publishing (maintainers)
+
+**One-time setup**, once the GitHub repo exists:
+
+1. Replace every `OWNER/REPO` placeholder in this repo (package.json's `repository`,
+   `homepage`, and `bugs`, plus both READMEs) with the real `owner/repo` — a single global
+   find-and-replace works, since every occurrence uses the identical spelling.
+2. Tag the repo with the topic plugin discovery keys on:
+   `gh repo edit OWNER/REPO --add-topic dsh-plugin`.
+3. Trusted Publishing cannot perform a package's *first* publish — npm requires the package to
+   already exist on the registry before a Trusted Publisher can be attached to it (the
+   [`npm trust` docs](https://docs.npmjs.com/cli/v11/commands/npm-trust/) state the prerequisite
+   outright: "Package must exist: The package you're configuring must already exist on the npm
+   registry."). So the first release has to go out by hand: `npm publish --access public` from a
+   checkout (or `npm login --auth-type=web` first, if you'd rather not touch a long-lived
+   credential at all). Only after that publish succeeds does the package have a Settings page to
+   configure.
+4. On npmjs.com, open the package → **Settings** → **Trusted Publisher**, and add a GitHub
+   Actions publisher with this repo's owner, repo name, and the exact workflow filename
+   `release.yml`. Every release after this one goes out through
+   `.github/workflows/release.yml`'s OIDC flow — no `NPM_TOKEN` involved.
+
+**Every release:**
+
+```bash
+npm version patch   # or minor / major
+git push --follow-tags
+```
+
+The pushed tag triggers `release.yml`, which verifies the tag matches `package.json`'s version,
+builds, tests, and publishes — under the `next` dist-tag instead of `latest` if the version is a
+prerelease.
+
+**After a release, verify it actually installs:**
+
+```bash
+dsh plugin --profile <name> add dsh-as-mcp
+dsh --profile <name> --dump-config | grep -A 30 '# == dsh-as-mcp'
+```
+
+That is the same install/verify pair from "Install" above, run against the version that just
+shipped.
 
 ## License
 

@@ -12,16 +12,60 @@ Codex、另一个 DSH、CI 任务、你自己写的脚本 —— 都能驱动它
 
 ## 安装
 
-```bash
-dsh plugin add dsh-as-mcp
-```
+三种渠道都能把这个 bundle 装进 profile，按你拿到包的方式选一种。
 
-从本地目录或 tarball 安装：
+**从 npm：**
 
 ```bash
-dsh plugin add /path/to/dsh-as-mcp
-dsh plugin add ./dsh-as-mcp-0.1.0.tgz
+dsh plugin --profile <名称> add dsh-as-mcp
 ```
+
+从源码 checkout 里跑，等价命令是 `pnpm dsh plugin --profile <名称> add dsh-as-mcp`。
+
+**从 GitHub：**
+
+```bash
+dsh plugin --profile <名称> add github:OWNER/REPO
+```
+
+git 安装拉下来的是源码，不是构建产物 `lib/`，所以 pnpm 得跑本包的 `prepare` 脚本
+（`tsdown && node scripts/build-client.mjs`）才能把它建出来。pnpm ≥10 默认拒绝执行这个脚本——
+连带它依赖的 `esbuild` 的 postinstall 也一并拦下——直到 profile 显式放行，所以第一次 `add` 会以
+`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 失败。
+
+`allowBuilds` 里写裸包名，对 `esbuild`（来自 registry）有效，但对这里的 `dsh-as-mcp` 永远无效：
+pnpm 只认 git 依赖精确解析出来的那个 key，不认包名
+（[pnpm 文档](https://pnpm.io/settings/build#allowbuilds)）。失败的那次 `add` 会在报错里打印这个
+精确 key；把它原样抄进 profile 的 `pnpm-workspace.yaml`（`~/.dsh/profiles/<名称>/pnpm-workspace.yaml`），
+再重新跑一次 `add`。不要指望 pnpm 已经替你写好占位项——这条失败路径下它不会写。结果长这样：
+
+```yaml
+allowBuilds:
+  '<pnpm 写出来的那个精确 git spec，含 commit hash>': true
+  esbuild: true
+```
+
+这个放行等于允许在你机器上、在安装阶段执行这个包的代码——建议钉死到某个 commit
+（`github:OWNER/REPO#<sha>`），免得后续的 push 悄悄改掉实际跑的代码。`dsh plugin add` 使用的是
+DSH 锁定的 pnpm 版本（DSH 0.1.7-rc.2 为 v11.7.0，输出末尾会打印 `using pnpm v…`），所以下面这条要等
+DSH 自带更新的 pnpm 后才适用。如果 profile 用的 pnpm
+≥11.19.0（若是克隆而非 `github:` 这种 tarball 形式的 git 依赖，则 ≥11.11.0 即可），可以改为放行整个
+仓库——`'dsh-as-mcp@git+https://github.com/OWNER/REPO.git': true`，不带 `#<sha>`——这样同一个仓库
+之后再提交新 commit 也不用重新放行；更早的 pnpm 版本只能用精确 commit 的 key，每次更新都要重新放行一次
+（[pnpm 11.11 release notes](https://pnpm.io/blog/releases/11.11-11.14)，
+[pnpm/pnpm#12367](https://github.com/pnpm/pnpm/issues/12367)）。
+
+**从 tarball：**
+
+```bash
+pnpm pack
+dsh plugin --profile <名称> add /绝对路径/dsh-as-mcp-<版本>.tgz
+```
+
+用**同一个** tarball 路径重装会悄悄沿用旧构建——原因和规避方法见下文「装进 DSH Desktop」一节，
+每次重新打包都换一个文件名。
+
+---
 
 `dsh plugin add` 会把包记进 profile 的 `dsh.profile.bundles`，包内的 `cordis.patch.yml`
 负责提供插件行和默认配置。**装完要重启 DSH**：bundle patch 是启动时读取的，不热重载。
@@ -31,6 +75,10 @@ dsh plugin add ./dsh-as-mcp-0.1.0.tgz
 ```bash
 dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 ```
+
+**给发布者：** GitHub 仓库要打上 `dsh-plugin` 这个 topic——插件发现就是靠它找到你的仓库；npm
+的 `latest` 标签要指向一个精确的稳定版本（不能是预发布版，也不能是范围），因为
+`dsh plugin add dsh-as-mcp` 解析的就是这个。
 
 ## 让客户端接进来
 
@@ -353,16 +401,21 @@ cookie 围栏**之内**，因此自动继承 DSH 自己的鉴权，绝不会暴�
 ## 兼容性
 
 - **Harness** ≥ `0.1.5-rc.1`（开发与验证基于 `dsh-v0.1.5-rc.1`，即 DSH Desktop 2.0.9 内置
-  的版本）。
+  的版本），声明为 `peerDependencies["@deepseek-ai/dsh"]: ">=0.1.5-rc.1"`，不封顶。DSH 的插件
+  加载器会直接从 manifest 里读出这个范围，在插件被 import **之前**就拿它和唯一那个运行时版本做
+  semver 比对（预发布版也参与比对）；不兼容的安装会被拒载，除非宿主显式给出精确版本豁免
+  （`dsh plugin allow-version`）。
 - **Node** `^22.19.0 || >=24.0.0`。
-- **没有硬 `@deepseek-ai/*` 依赖。** DSH 会把插件声明的每一个 `@deepseek-ai/dsh-*` peer 范围拿去
-  和唯一那个运行时版本比对，所以本包一个都不声明：所有能力通过 `ctx.get(name)` 做结构化解析，
-  配置 schema 是手写的 [Standard Schema](https://standardschema.dev) 而不是 schemastery
-  schema——而 Cordis 的 `resolveConfig` 实际消费的就是 Standard Schema。于是它安装、加载都
-  没有版本闸门，也不会因为某个 peer 没装上就在 import 期直接失败。
-  唯一的例外是 `@deepseek-ai/schemastery`，且声明为**可选** peer：DSH 里没有免 schemastery 的
-  settings 注册路径，所以想要设置面板就必须声明它——但声明为可选意味着没装上也只失去面板，
-  核心功能不受影响。这与生态里已有的第三方插件（`dsh-tokenledger`）做法一致。
+- `@deepseek-ai/dsh` 这个 peer 声明为**可选**，纯粹是为了不让 `dsh plugin add` 为了满足它就把
+  一整个 harness 装进每个 profile。可选只影响安装行为——DSH 的兼容性检查不看
+  `peerDependenciesMeta`，只读 `peerDependencies`，所以上面那条版本校验照样生效，一条都不少。
+- **没有其它硬 `@deepseek-ai/*` 依赖。** 除了上面这个版本闸门，本包的其它能力都通过
+  `ctx.get(name)` 做结构化解析，配置 schema 也是手写的
+  [Standard Schema](https://standardschema.dev) 而不是 schemastery schema——而 Cordis 的
+  `resolveConfig` 实际消费的就是 Standard Schema。唯一的例外是 `@deepseek-ai/schemastery`，同样
+  声明为**可选** peer：DSH 里没有免 schemastery 的 settings 注册路径，所以想要设置面板就必须
+  声明它——但声明为可选意味着没装上也只失去面板，核心功能不受影响。这与生态里已有的第三方插件
+  （`dsh-tokenledger`）做法一致。
 
 ## 设计说明
 
@@ -400,7 +453,10 @@ pnpm test        # vitest
 `@deepseek-ai/cordis` context（配置校验由 `resolveConfig` 执行），因此线协议、桥接脚本和
 loader 契约都是被真正跑过的，不是 mock 出来的。
 
-另有两个脚本针对**运行中的端点**，这是另一回事：
+另有两个脚本针对**运行中的端点**，这是另一回事。两者解析端点的方式完全一致——`--url`／
+`--token` 参数优先，其次是 `DSH_AS_MCP_URL`／`DSH_AS_MCP_TOKEN`，最后才是回环默认值——而且
+两者都会在发出第一个请求之前把解析到的端点及其来源（`arg`／`env`／`default`）打到 stderr，
+这样一次误跑就不会悄悄打到默认端口上恰好在监听的某个 DSH 实例：
 
 ```bash
 node scripts/smoke.mjs       # 握手、tools/list、dsh_info —— 线通不通？
@@ -409,10 +465,11 @@ node scripts/exercise.mjs    # 约 40 项断言：建工作区、开会话、让
 ```
 
 `smoke.mjs` 回答"这玩意儿会说 MCP 吗"，`exercise.mjs` 回答"外部 agent 真的能通过它驱动一个
-DSH 实例吗"。它是唯一能抓住某一整类 bug 的检查——**测试桩比它所替代的 harness 服务更宽容**。
-这类 bug 在本项目里造成过四次真实故障、三次落在主路径上，所以改动驱动后务必跑一遍。
-`docs/STUB-FIDELITY-AUDIT.md` 是穷举这一类问题的审计报告；在给某个 harness 服务写替身之前，
-值得先读它。
+DSH 实例吗"——而为了回答这个问题，它会给一个真实的 DSH agent 下发一个真实的 prompt，对它解析到
+的那个端点发起真实的 LLM 调用，产生真实花费，所以运行前请先看清它打印的那行端点信息。它是唯一
+能抓住某一整类 bug 的检查——**测试桩比它所替代的 harness 服务更宽容**。这类 bug 在本项目里造成
+过四次真实故障、三次落在主路径上，所以改动驱动后务必跑一遍。`docs/STUB-FIDELITY-AUDIT.md` 是
+穷举这一类问题的审计报告；在给某个 harness 服务写替身之前，值得先读它。
 
 这个项目用代价换来的两条规则：
 
@@ -422,6 +479,42 @@ DSH 实例吗"。它是唯一能抓住某一整类 bug 的检查——**测试�
 - **测试本身可能把 bug 锁死。** 有一条断言认为"`turn/start` 出现在我们消息之前"就意味着那个
   回合不属于我们；真实会话日志显示这恰恰是**最常见的形状**，而这条断言让每次等待
   `session_prompt` 都在已经完成的回合上超时。
+
+## 发布（维护者）
+
+**一次性设置**，在 GitHub 仓库建好之后：
+
+1. 把仓库里所有 `OWNER/REPO` 占位符（package.json 的 `repository`、`homepage`、`bugs`，以及
+   两份 README）替换成真实的 `owner/repo`——一次全局替换就够，因为每处拼法都一样。
+2. 打上插件发现要靠的 topic：`gh repo edit OWNER/REPO --add-topic dsh-plugin`。
+3. Trusted Publishing 没法完成包的**第一次**发布——npm 要求先有这个包存在于 registry 上，
+   才能给它挂 Trusted Publisher（[`npm trust` 文档](https://docs.npmjs.com/cli/v11/commands/npm-trust/)
+   把这条前提写得很直白："Package must exist: The package you're configuring must already exist
+   on the npm registry."）。所以第一版必须手动发：在 checkout 里跑
+   `npm publish --access public`（或者不想碰长期凭证的话，先 `npm login --auth-type=web` 再
+   发布）。这次发布成功之后，这个包才会有 Settings 页可配。
+4. 在 npmjs.com 上打开这个包 → **Settings** → **Trusted Publisher**，填入这个仓库的 owner、
+   仓库名，以及精确的 workflow 文件名 `release.yml`。从这之后的每次发布都走
+   `.github/workflows/release.yml` 的 OIDC 流程，不再涉及 `NPM_TOKEN`。
+
+**每次发布：**
+
+```bash
+npm version patch   # 或 minor / major
+git push --follow-tags
+```
+
+推上去的 tag 会触发 `release.yml`：校验 tag 与 `package.json` 的版本一致、build、test，然后
+发布——如果是预发布版本就发到 `next` 这个 dist-tag，而不是 `latest`。
+
+**发布之后，验证它真的能装上：**
+
+```bash
+dsh plugin --profile <名称> add dsh-as-mcp
+dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
+```
+
+这就是上面「安装」一节里同一套安装/验证组合，只是这次针对的是刚发出去的版本。
 
 ## 许可证
 

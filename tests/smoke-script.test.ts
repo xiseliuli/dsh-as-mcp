@@ -42,7 +42,9 @@ describe('scripts/smoke.mjs', () => {
 
   it('reports every read-only step against a live endpoint', async () => {
     const { code, stdout, stderr } = await runSmoke(['--url', url])
-    expect(stderr).toBe('')
+    // Announced on stderr, before any request, with its source — so a run
+    // cannot silently land on the wrong endpoint without the caller noticing.
+    expect(stderr).toBe(`endpoint: ${url} (arg)\n`)
     expect(code).toBe(0)
     expect(stdout).toContain('initialize')
     expect(stdout).toContain('dsh-as-mcp')
@@ -52,6 +54,20 @@ describe('scripts/smoke.mjs', () => {
     expect(stdout).toContain('listening=true')
     expect(stdout).toContain('tools/call workspace_list')
     expect(stdout).toContain('OK —')
+  })
+
+  it('falls back to DSH_AS_MCP_URL when --url is not given', async () => {
+    const { code, stderr } = await runSmoke([], { DSH_AS_MCP_URL: url })
+    expect(stderr).toBe(`endpoint: ${url} (env)\n`)
+    expect(code).toBe(0)
+  })
+
+  it('prefers --url over DSH_AS_MCP_URL when both are given', async () => {
+    // The env value is a reserved, never-bound port: if it were picked instead
+    // of the flag, the run would fail rather than succeed.
+    const { code, stderr } = await runSmoke(['--url', url], { DSH_AS_MCP_URL: 'http://127.0.0.1:1/mcp' })
+    expect(stderr).toBe(`endpoint: ${url} (arg)\n`)
+    expect(code).toBe(0)
   })
 
   it('explains a missing settings entry instead of failing the run', async () => {

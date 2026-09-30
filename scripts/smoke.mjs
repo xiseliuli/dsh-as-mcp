@@ -48,9 +48,18 @@ function tokenFilePath() {
   return join(resolveDshHome(), 'dsh-as-mcp', 'token')
 }
 
-const endpoint = flag('url') ?? process.env.DSH_AS_MCP_URL?.trim() ?? 'http://127.0.0.1:8790/mcp'
+// An explicit flag wins, then the environment variable, then the default — and
+// the caller is told which one resolved before anything is sent, since
+// silently landing on the default endpoint is exactly how a stray run once
+// hit a real, already-running DSH instance instead of a test fixture.
+const urlFromArg = flag('url')
+const urlFromEnv = process.env.DSH_AS_MCP_URL?.trim()
+const endpoint = urlFromArg ?? urlFromEnv ?? 'http://127.0.0.1:8790/mcp'
+const endpointSource = urlFromArg ? 'arg' : urlFromEnv ? 'env' : 'default'
 const token = flag('token') ?? process.env.DSH_AS_MCP_TOKEN?.trim() ?? readToken()
 const prompt = flag('prompt')
+
+process.stderr.write(`endpoint: ${endpoint} (${endpointSource})\n`)
 
 function readToken() {
   try {
