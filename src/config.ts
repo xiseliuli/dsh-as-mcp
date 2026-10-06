@@ -15,10 +15,11 @@
  *
  * That is the whole contract — `~standard` is a public spec, and it is
  * deliberately *not* schemastery-specific. Hand-writing it here rather than
- * depending on `@deepseek-ai/schemastery` keeps this package free of every
- * `@deepseek-ai/*` dependency, which matters because DSH treats each declared
- * `@deepseek-ai/dsh-*` peer range as a compatibility gate and an optional peer
- * that fails to install is a load-time import error rather than a warning.
+ * importing `@deepseek-ai/schemastery` keeps this package free of every
+ * `@deepseek-ai/*` *runtime import*: the manifest's two optional peers exist so
+ * that resolution can find them, not so this module can import them, and an
+ * optional peer that fails to install must degrade rather than become a
+ * load-time import error.
  *
  * The normalizer is intentionally strict about unknown keys: the shipped
  * `cordis.patch.yml` spells out every key, so a typo in a user's override means

@@ -4,10 +4,15 @@
  * These are deliberately hand-written and *minimal* instead of importing
  * `@deepseek-ai/dsh-*` types. Two reasons:
  *
- * 1. DSH gates a plugin on the `peerDependencies` it declares for
- *    `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*`: every declared range must match
- *    the single running runtime version. Declaring none imposes no constraint,
- *    so this plugin loads across harness releases instead of pinning one.
+ * 1. No `@deepseek-ai/*` package is imported here, so nothing in this file can
+ *    disagree with the harness that is actually running. The manifest does
+ *    declare two optional peers — `@deepseek-ai/dsh` and
+ *    `@deepseek-ai/schemastery` — but they are there for resolution, not for
+ *    types: DSH folds `peerDependencies` into the module-fallback graph it
+ *    builds for a profile (`app-boot`'s `profileDependencyNames`), which is how
+ *    `settings.ts`'s dynamic `import('@deepseek-ai/schemastery')` finds the
+ *    module. An optional peer that fails to install degrades instead of
+ *    breaking a load-time import, and neither peer is a type source.
  * 2. The published `@deepseek-ai/dsh-*` npm artifacts are far behind the
  *    harness that ships inside the Desktop app, so npm types would be wrong.
  *
