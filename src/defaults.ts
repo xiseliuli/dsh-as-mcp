@@ -84,7 +84,6 @@ export const DEFAULT_AGENT_TOOLS: AgentToolsConfig = {
     'todo_write',
     'skill',
     'get_goal',
-    'lsp',
   ],
   deny: [],
 }
