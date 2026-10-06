@@ -101,7 +101,7 @@ describe('the client bundle is self-contained', () => {
     }
   })
 
-  it('inlines React rather than shipping a second copy', () => {
+  it('requires React from the platform rather than shipping a second copy', () => {
     // `react` must be a seed require, never a bundled copy: two React instances
     // break hooks in ways that surface far from the cause.
     expect(bundle).toContain('require("react")')
