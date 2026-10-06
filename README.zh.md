@@ -1,5 +1,7 @@
 # dsh-as-mcp
 
+[English](README.md) | 中文
+
 把一个正在运行的 **DeepSeek Harness** 暴露成 **MCP 服务**，让别的 agent —— Claude Code、
 Codex、另一个 DSH、CI 任务、你自己写的脚本 —— 都能驱动它：创建工作区、新建会话、把编码
 任务交给 DSH 的 agent、读写文件、执行命令。

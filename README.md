@@ -1,5 +1,7 @@
 # dsh-as-mcp
 
+English | [中文](README.zh.md)
+
 Expose a running **DeepSeek Harness** as an **MCP server**, so any other agent — Claude
 Code, Codex, another DSH, a CI job, your own script — can drive it: create workspaces,
 start sessions, hand the DSH agent a coding task, read and write files, run commands.
