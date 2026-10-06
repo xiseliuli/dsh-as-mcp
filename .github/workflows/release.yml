@@ -62,18 +62,31 @@ jobs:
       - run: pnpm test
       - run: pnpm run build
 
-      # Trusted publishing (OIDC) requires npm CLI >= 11.5.1; the npm bundled
-      # with a given Node build can lag behind that.
-      - name: Ensure npm satisfies trusted publishing's minimum version
-        run: npm install -g npm@latest
-
-      - name: Publish to npm via trusted publishing (OIDC, no token)
-        run: npm publish --provenance --access public --tag "$npm_dist_tag"
-
       - name: Pack the tarball attached to the GitHub Release
         run: npm pack
 
+      # The GitHub Release is created BEFORE the npm step on purpose. It is the
+      # deliverable that never depends on npm credentials, so a tag always
+      # produces an installable release even while npm publishing is off, and a
+      # failed publish can never take the release down with it.
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dsh-as-mcp-*.tgz --title "$GITHUB_REF_NAME" --generate-notes
+
+      # npm publishing is gated off until the package exists on npm and a
+      # Trusted Publisher is bound to this repository and this workflow file.
+      # Turn it on with `gh variable set NPM_PUBLISH --body true` (or the repo's
+      # Settings -> Secrets and variables -> Actions -> Variables). While that
+      # variable is unset both steps below are skipped and a tag still cuts a
+      # green GitHub Release.
+      #
+      # Trusted publishing (OIDC) requires npm CLI >= 11.5.1; the npm bundled
+      # with a given Node build can lag behind that.
+      - name: Ensure npm satisfies trusted publishing's minimum version
+        if: vars.NPM_PUBLISH == 'true'
+        run: npm install -g npm@latest
+
+      - name: Publish to npm via trusted publishing (OIDC, no token)
+        if: vars.NPM_PUBLISH == 'true'
+        run: npm publish --provenance --access public --tag "$npm_dist_tag"
