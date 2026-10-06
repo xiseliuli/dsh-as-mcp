@@ -1,6 +1,20 @@
-# dsh-as-mcp
+<p align="center">
+  <img src="icon.svg" width="96" alt="dsh-as-mcp">
+</p>
 
-English | [中文](README.zh.md)
+<h1 align="center">dsh-as-mcp</h1>
+
+<p align="center">English | <a href="README.zh.md">中文</a></p>
+
+<p align="center">
+  <a href="https://github.com/xiseliuli/dsh-as-mcp/actions/workflows/ci.yml"><img src="https://github.com/xiseliuli/dsh-as-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/xiseliuli/dsh-as-mcp/releases"><img src="https://img.shields.io/github/v/release/xiseliuli/dsh-as-mcp?label=release&color=2f81f7" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/xiseliuli/dsh-as-mcp?color=3fb950" alt="License: MIT"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%5E22.19.0%20%7C%7C%20%3E%3D24-339933?logo=nodedotjs&logoColor=white" alt="Node"></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-server-8B5CF6" alt="MCP server"></a>
+  <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/DSH-plugin-4B8BBE" alt="DSH plugin"></a>
+</p>
 
 Expose a running **DeepSeek Harness** as an **MCP server**, so any other agent — Claude
 Code, Codex, another DSH, a CI job, your own script — can drive it: create workspaces,
@@ -10,6 +24,30 @@ The endpoint runs *inside* the DSH host process, so a session created over MCP i
 DSH session. It appears live in the DSH UI, runs inside the DSH sandbox, and is subject to
 the same permission policy as anything you type yourself. Nothing about the agent is
 reimplemented.
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph clients["Any MCP client"]
+    direction TB
+    c1["Claude Code"]
+    c2["Codex"]
+    c3["another DSH"]
+    c4["a CI job"]
+    c5["your own script"]
+  end
+
+  subgraph host["DSH host process"]
+    direction TB
+    plugin["dsh-as-mcp<br/>(this plugin)"]
+    tools["workspace_* · session_*<br/>file_* · shell_* · dsh_tool_*"]
+    services["the harness's own services<br/>workspace · session · fs · shell"]
+    plugin --> tools --> services
+  end
+
+  clients -- "Streamable HTTP or stdio<br/>bearer token" --> plugin
+```
 
 ---
 

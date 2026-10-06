@@ -1,6 +1,20 @@
-# dsh-as-mcp
+<p align="center">
+  <img src="icon.svg" width="96" alt="dsh-as-mcp">
+</p>
 
-[English](README.md) | 中文
+<h1 align="center">dsh-as-mcp</h1>
+
+<p align="center"><a href="README.md">English</a> | 中文</p>
+
+<p align="center">
+  <a href="https://github.com/xiseliuli/dsh-as-mcp/actions/workflows/ci.yml"><img src="https://github.com/xiseliuli/dsh-as-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/xiseliuli/dsh-as-mcp/releases"><img src="https://img.shields.io/github/v/release/xiseliuli/dsh-as-mcp?label=release&color=2f81f7" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/xiseliuli/dsh-as-mcp?color=3fb950" alt="License: MIT"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%5E22.19.0%20%7C%7C%20%3E%3D24-339933?logo=nodedotjs&logoColor=white" alt="Node"></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-server-8B5CF6" alt="MCP 服务"></a>
+  <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/DSH-plugin-4B8BBE" alt="DSH 插件"></a>
+</p>
 
 把一个正在运行的 **DeepSeek Harness** 暴露成 **MCP 服务**，让别的 agent —— Claude Code、
 Codex、另一个 DSH、CI 任务、你自己写的脚本 —— 都能驱动它：创建工作区、新建会话、把编码
@@ -9,6 +23,30 @@ Codex、另一个 DSH、CI 任务、你自己写的脚本 —— 都能驱动它
 端点跑在 DSH 宿主进程**内部**，所以通过 MCP 建出来的会话就是真正的 DSH 会话：它实时出现
 在 DSH 界面里，跑在 DSH 沙箱中，受和你手敲一样的那套权限策略约束。agent 本身没有任何东西
 是被重新实现的。
+
+## 工作原理
+
+```mermaid
+flowchart LR
+  subgraph clients["任意 MCP 客户端"]
+    direction TB
+    c1["Claude Code"]
+    c2["Codex"]
+    c3["另一个 DSH"]
+    c4["CI 任务"]
+    c5["你自己的脚本"]
+  end
+
+  subgraph host["DSH 宿主进程"]
+    direction TB
+    plugin["dsh-as-mcp<br/>（本插件）"]
+    tools["workspace_* · session_*<br/>file_* · shell_* · dsh_tool_*"]
+    services["harness 自己的服务<br/>workspace · session · fs · shell"]
+    plugin --> tools --> services
+  end
+
+  clients -- "Streamable HTTP 或 stdio<br/>bearer token" --> plugin
+```
 
 ---
 
