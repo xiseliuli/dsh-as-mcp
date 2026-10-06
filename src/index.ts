@@ -363,10 +363,17 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
   // belongs to a session this plugin started.
   ctx.effect(() => {
     const off = eventsOf(ctx).on('approval/request', (...args: unknown[]) => {
-      const request = args[0] as { agent?: { session?: { id?: string } } } | undefined
+      const request = args[0] as
+        | { agent?: { id?: string; session?: { id?: string } } }
+        | undefined
       const next = args[1] as (() => unknown) | undefined
       if (getConfig().approval.policy !== 'allow') return typeof next === 'function' ? next() : undefined
-      const sessionId = request?.agent?.session?.id
+      // `agent.id` is the SessionId the public `ApprovalRequestEvent` contract
+      // declares, so it is read first. `agent.session.id` is the same value on
+      // the shipped harness, but the published `Agent` declaration carries only
+      // `id`; keeping it as a fallback costs nothing and survives a host that
+      // exposes the richer object without the flat one.
+      const sessionId = request?.agent?.id ?? request?.agent?.session?.id
       if (sessionId !== undefined && deps.driver.ownsSession(sessionId)) return 'allowed-once'
       return typeof next === 'function' ? next() : undefined
     })

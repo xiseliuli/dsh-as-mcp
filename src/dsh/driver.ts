@@ -706,7 +706,14 @@ export class DshDriver {
       )
     }
 
-    const { agent } = await this.resolveScope(request.sessionId)
+    const { agent, scopeError } = await this.resolveScope(request.sessionId)
+    // Running without a scope is not a lesser version of the call. Tools are
+    // registered inside an agent scope, so an unscoped `execute` answers
+    // `unknown tool` — an error that names neither the session nor the reason.
+    // The scope failure is the actionable one; report it instead.
+    if (agent === undefined) {
+      throw new Error(scopeError ?? `session "${request.sessionId}" could not be scoped to an agent`)
+    }
     // Cancellation has to come from somewhere: `signal` is required by the
     // harness, and a hung tool would otherwise hold the call open forever.
     const controller = new AbortController()
@@ -720,7 +727,7 @@ export class DshDriver {
         callId: `dsh-as-mcp-${randomUUID()}`,
         name: request.name,
         arguments: request.args ?? {},
-        ...(agent === undefined ? {} : { agent }),
+        agent,
         signal: controller.signal,
       })
       const text = flattenToolContent(result.content)
@@ -748,6 +755,12 @@ export class DshDriver {
    * The agent is the policy: it is what makes the harness apply a sandbox, run
    * guards, and file the call under a session transcript. There is no unscoped
    * fallback — see the guard in the body for why one cannot exist.
+   *
+   * The two callers differ in what they do with a scope failure, and both are
+   * deliberate: {@link listAgentTools} reports it alongside the empty result,
+   * because a listing is still a useful answer to "what can this session call";
+   * {@link callAgentTool} throws it, because executing without the agent would
+   * answer `unknown tool` and bury the reason.
    */
   private async resolveScope(sessionId: string): Promise<{
     agent?: DshAgentHandle
@@ -770,7 +783,7 @@ export class DshDriver {
     }
     const controller = this.requireSessionController()
     if (typeof controller.resolveAgent !== 'function') {
-      return { scopeError: 'this DSH profile cannot resolve a session to an agent; the call ran unscoped' }
+      return { scopeError: 'this DSH profile cannot resolve a session to an agent, so there is no scope to run under' }
     }
     const found = await controller.resolveAgent(sessionId)
     if ('error' in found) {

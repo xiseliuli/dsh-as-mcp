@@ -466,11 +466,24 @@ describe('approval answerer', () => {
     expect(created.sessionId).toBe('session-owned')
 
     const fallback = (): Promise<string> => Promise.resolve('unavailable')
-    const owned = await waterfall(root, 'approval/request', { agent: { session: { id: 'session-owned' } } }, fallback)
+    // `agent.id` is the shape the public `ApprovalRequestEvent` contract declares
+    // (`Agent` carries only `readonly id: SessionId`), so it is what the answerer
+    // must read first.
+    const owned = await waterfall(root, 'approval/request', { agent: { id: 'session-owned' } }, fallback)
     expect(owned).toBe('allowed-once')
 
+    // The shipped harness also carries the richer agent object on the same
+    // request; the read falls back to `agent.session.id` rather than going blind.
+    const ownedViaSession = await waterfall(
+      root,
+      'approval/request',
+      { agent: { session: { id: 'session-owned' } } },
+      fallback,
+    )
+    expect(ownedViaSession).toBe('allowed-once')
+
     // A session the user is driving interactively must keep its own policy.
-    const foreign = await waterfall(root, 'approval/request', { agent: { session: { id: 'session-someone-else' } } }, fallback)
+    const foreign = await waterfall(root, 'approval/request', { agent: { id: 'session-someone-else' } }, fallback)
     expect(foreign).toBe('unavailable')
   })
 
@@ -487,7 +500,7 @@ describe('approval answerer', () => {
     const result = await waterfall(
       root,
       'approval/request',
-      { agent: { session: { id: 'session-owned' } } },
+      { agent: { id: 'session-owned' } },
       () => Promise.resolve('unavailable'),
     )
     expect(result).toBe('unavailable')

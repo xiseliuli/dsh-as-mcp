@@ -308,6 +308,20 @@ describe('callAgentTool', () => {
     expect(result.text).toBe('shot\n[image]')
   })
 
+  it('refuses to run unscoped rather than answering with a bare unknown-tool', async () => {
+    const tools = fakeTools()
+    const driver = driverWith({
+      tools: tools.tools,
+      resolveAgent: async () => ({ error: 'SESSION_QUERY_SESSION_NOT_FOUND' }),
+    })
+
+    // Executing without the agent would answer `unknown tool` and name neither
+    // the session nor the reason, so the scope failure itself is the error.
+    await expect(driver.callAgentTool({ name: 'read', sessionId: 'missing', timeoutMs: 1_000 }))
+      .rejects.toThrow(/could not be scoped/)
+    expect(tools.calls).toEqual([])
+  })
+
   it('names the missing service instead of failing obscurely', async () => {
     const ctx = new Context()
     contexts.push(ctx)
