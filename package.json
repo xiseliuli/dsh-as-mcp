@@ -34,7 +34,6 @@
       "default": "./lib/index.js"
     },
     "./package.json": "./package.json",
-    "./locale/*.json": "./locale/*.json",
     "./client": {
       "default": "./lib/client.js"
     }
@@ -50,8 +49,7 @@
     "README.md",
     "README.zh.md",
     "LICENSE",
-    "icon.svg",
-    "locale"
+    "icon.svg"
   ],
   "dsh": {
     "bundle": {

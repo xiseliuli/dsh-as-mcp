@@ -1,6 +1,0 @@
-{
-  "meta": {
-    "title": "DSH as MCP",
-    "description": "Expose this DeepSeek Harness as an MCP server so other agents can create workspaces, start sessions, write code through DSH, and run commands."
-  }
-}
