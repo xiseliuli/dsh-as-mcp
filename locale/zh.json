@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH as MCP",
+    "description": "把这个 DeepSeek Harness 暴露成 MCP 服务，让别的 agent 能创建工作区、开启会话、通过 DSH 写代码、执行命令。"
+  }
+}
