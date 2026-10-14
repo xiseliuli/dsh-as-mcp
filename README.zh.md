@@ -1,8 +1,12 @@
 <p align="center">
-  <img src="icon.png" width="96" alt="dsh-as-mcp">
+  <!-- 故意用绝对 URL：npm 从 tarball 渲染 README，不解析相对图片路径，
+       写成相对路径在 npm 页面上会是裂图。两个版本是因为 wordmark 是深海军蓝，
+       在 GitHub 暗色主题下会看不见。 -->
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/xiseliuli/dsh-as-mcp/main/assets/logo-dark.png">
+    <img src="https://raw.githubusercontent.com/xiseliuli/dsh-as-mcp/main/assets/logo-light.png" width="380" alt="dsh-as-mcp">
+  </picture>
 </p>
-
-<h1 align="center">dsh-as-mcp</h1>
 
 <p align="center"><a href="README.md">English</a> | 中文</p>
 

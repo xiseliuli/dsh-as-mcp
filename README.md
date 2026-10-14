@@ -1,8 +1,13 @@
 <p align="center">
-  <img src="icon.png" width="96" alt="dsh-as-mcp">
+  <!-- Absolute URLs on purpose: npm renders the README from the tarball and does
+       not resolve relative image paths, so a relative src shows up broken there.
+       Two variants because the wordmark is dark navy, which vanishes on GitHub's
+       dark theme. -->
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/xiseliuli/dsh-as-mcp/main/assets/logo-dark.png">
+    <img src="https://raw.githubusercontent.com/xiseliuli/dsh-as-mcp/main/assets/logo-light.png" width="380" alt="dsh-as-mcp">
+  </picture>
 </p>
-
-<h1 align="center">dsh-as-mcp</h1>
 
 <p align="center">English | <a href="README.zh.md">中文</a></p>
 
