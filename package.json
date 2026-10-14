@@ -40,7 +40,7 @@
     }
   },
   "bin": {
-    "dsh-as-mcp": "./bin/mcp-stdio.mjs"
+    "dsh-as-mcp": "bin/mcp-stdio.mjs"
   },
   "files": [
     "lib",
