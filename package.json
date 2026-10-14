@@ -27,7 +27,7 @@
   "packageManager": "pnpm@10.8.0",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
-  "icon": "./icon.svg",
+  "icon": "./icon.png",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -50,7 +50,7 @@
     "README.md",
     "README.zh.md",
     "LICENSE",
-    "icon.svg",
+    "icon.png",
     "locale"
   ],
   "dsh": {

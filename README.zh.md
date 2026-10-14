@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.svg" width="96" alt="dsh-as-mcp">
+  <img src="icon.png" width="96" alt="dsh-as-mcp">
 </p>
 
 <h1 align="center">dsh-as-mcp</h1>
