@@ -69,10 +69,20 @@ jobs:
       # deliverable that never depends on npm credentials, so a tag always
       # produces an installable release even while npm publishing is off, and a
       # failed publish can never take the release down with it.
+      #
+      # Re-running a release must be safe: `gh release create` fails outright
+      # once the release exists, which would abort the run before the npm steps
+      # below ever get a chance. So an existing release gets its asset replaced
+      # instead, and only a missing one is created.
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dsh-as-mcp-*.tgz --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dsh-as-mcp-*.tgz --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dsh-as-mcp-*.tgz --title "$GITHUB_REF_NAME" --generate-notes
+          fi
 
       # npm publishing is gated off until the package exists on npm and a
       # Trusted Publisher is bound to this repository and this workflow file.
