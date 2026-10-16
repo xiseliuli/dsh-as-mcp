@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { Config } from '../src/config.js'
 import { DEFAULT_AGENT_TOOLS } from '../src/defaults.js'
-import { SETTINGS_NAMESPACE, type SettingsSectionHooks } from '../src/settings.js'
 import { STATUS_ROUTE } from '../src/status.js'
 import { apply, inject, name } from '../src/index.js'
 import { TOKEN, callTool, rpc } from './harness.js'
@@ -130,29 +129,23 @@ async function until(ready: () => boolean, label: string, timeoutMs = 5_000): Pr
 }
 
 /**
- * A settings provider that hands back the hooks `apply()` registered, so a test
- * can fire live configuration changes exactly the way the settings panel does:
- * `setSource` with the new value, then `onChange`.
+ * Commit a configuration change the way a volatile settings write does.
+ *
+ * Every leaf of this plugin's schema is `.volatile()`, so DSH hands `apply()` a
+ * config whose fields are `Volatile` boxes, writes a settings edit into those
+ * boxes *without* remounting the plugin, and then notifies the owning fiber with
+ * `loader/volatile-update` carrying the changed paths. Mutating the config object
+ * `apply()` received is the same edit from the plugin's point of view — it
+ * re-resolves that object on every read — and emitting the event is the only
+ * signal that a bind parameter moved.
  */
-function capturingSettingsProvider(): {
-  provider: unknown
-  hooks: () => SettingsSectionHooks<Config> | undefined
-} {
-  let captured: SettingsSectionHooks<Config> | undefined
+function liveConfig(root: Context, config: Config): { set(next: Config): void } {
+  const bus = root as unknown as { emit(name: string, ...args: unknown[]): void }
   return {
-    provider: {
-      installSection(
-        _owner: unknown,
-        ns: string,
-        _schema: unknown,
-        _entry: Config,
-        hooks: SettingsSectionHooks<Config>,
-      ): void {
-        if (ns !== SETTINGS_NAMESPACE) return
-        captured = hooks
-      },
+    set(next) {
+      Object.assign(config, next)
+      bus.emit.call(root, 'loader/volatile-update', [])
     },
-    hooks: () => captured,
   }
 }
 
@@ -337,7 +330,7 @@ describe('apply() with harness services present', () => {
     expect(denied.status).toBe(401)
   })
 
-  it('serves the panel a status payload that never carries the token', async () => {
+  it('serves the panel a status payload carrying the token the copy button needs', async () => {
     const port = await freePort()
     const routes: { path: string; methods: readonly string[]; fetch: (req: Request) => Promise<Response> }[] = []
     await bootWithContext((root) => {
@@ -381,10 +374,12 @@ describe('apply() with harness services present', () => {
     expect(typeof payload.tokenSource).toBe('string')
     expect(typeof payload.tokenFile).toBe('string')
     expect(payload.enabledToolGroups).toContain('workspace')
-    // The whole point of a redacted view: the literal must not be reachable from
-    // the panel's own read.
-    expect(body).not.toContain(TOKEN)
-    expect(payload).not.toHaveProperty('token')
+    // Deliberate, and the reason this route lives inside the authorization
+    // fence: the panel needs the literal to build a snippet that works as
+    // pasted. A `<token>` placeholder would send the user hunting through
+    // `tokenFile` for a value the host already has. The test above pins the
+    // other half — `dsh_info` still reports only the source.
+    expect(payload.token).toBe(TOKEN)
   })
 
   it('picks up the connection service when it arrives after the plugin', async () => {
@@ -527,22 +522,19 @@ describe('endpoint lifecycle', () => {
   })
 
   it('moves the listener on a live bind change and closes the old port', async () => {
-    // The settings panel commits one `onChange` per field, so binds change while
-    // the plugin is running. Whatever the timing, exactly one listener may be
-    // live afterwards: a leaked old port is an endpoint the operator believes
-    // they turned off.
+    // A settings write commits one field at a time into the running references,
+    // so binds change while the plugin is running. Whatever the timing, exactly
+    // one listener may be live afterwards: a leaked old port is an endpoint the
+    // operator believes they turned off.
     const portA = await freePort()
     const portB = await freePort()
-    const settings = capturingSettingsProvider()
     const root = new Context()
     contexts.push(root)
-    root.provide('settings', settings.provider)
-    apply(root, pluginConfig({ port: portA }))
-    await until(() => settings.hooks() !== undefined, 'settings registration')
+    const config = pluginConfig({ port: portA })
+    apply(root, config)
     await waitForEndpoint(`http://127.0.0.1:${portA}/mcp`)
 
-    settings.hooks()!.setSource(() => pluginConfig({ port: portB }))
-    settings.hooks()!.onChange()
+    liveConfig(root, config).set(pluginConfig({ port: portB }))
     await waitForEndpoint(`http://127.0.0.1:${portB}/mcp`)
 
     // The new endpoint answers, and the old one is really gone.
@@ -557,16 +549,13 @@ describe('endpoint lifecycle', () => {
     // a handle afterwards, leaving a live endpoint that outlived the plugin.
     const portA = await freePort()
     const portB = await freePort()
-    const settings = capturingSettingsProvider()
     const root = new Context()
     contexts.push(root)
-    root.provide('settings', settings.provider)
-    apply(root, pluginConfig({ port: portA }))
-    await until(() => settings.hooks() !== undefined, 'settings registration')
+    const config = pluginConfig({ port: portA })
+    apply(root, config)
     await waitForEndpoint(`http://127.0.0.1:${portA}/mcp`)
 
-    settings.hooks()!.setSource(() => pluginConfig({ port: portB }))
-    settings.hooks()!.onChange()
+    liveConfig(root, config).set(pluginConfig({ port: portB }))
     // Tear down before the move can finish; the dispose must absorb the
     // in-flight reconcile, not race it.
     await root.fiber.dispose()
@@ -636,10 +625,8 @@ describe('endpoint lifecycle', () => {
     // that config returned at the guard and the endpoint stayed half-configured
     // until an unrelated edit changed the signature.
     const port = await freePort()
-    const settings = capturingSettingsProvider()
     const root = new Context()
     contexts.push(root)
-    root.provide('settings', settings.provider)
 
     let attempts = 0
     root.provide('webServer', {
@@ -650,8 +637,8 @@ describe('endpoint lifecycle', () => {
       unregister() {},
     })
 
-    apply(root, pluginConfig({ port, mountOnWebServer: true }))
-    await until(() => settings.hooks() !== undefined, 'settings registration')
+    const config = pluginConfig({ port, mountOnWebServer: true })
+    apply(root, config)
     // The listener is unaffected by a failed mount, so this also pins that the
     // two halves stay independent.
     await waitForEndpoint(`http://127.0.0.1:${port}/mcp`)
@@ -663,8 +650,7 @@ describe('endpoint lifecycle', () => {
     expect(afterBoot).toBeGreaterThanOrEqual(1)
 
     for (const round of [1, 2]) {
-      settings.hooks()!.setSource(() => pluginConfig({ port, mountOnWebServer: true }))
-      settings.hooks()!.onChange()
+      liveConfig(root, config).set(pluginConfig({ port, mountOnWebServer: true }))
       await until(() => attempts === afterBoot + round, `retry ${round}`)
     }
 

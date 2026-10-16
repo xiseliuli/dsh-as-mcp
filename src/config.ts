@@ -1,33 +1,52 @@
 /**
  * Plugin configuration: contract, defaults, and validation.
  *
- * Defaults themselves live in `defaults.ts`, because the settings-service schema
- * must resolve the very same values.
+ * Defaults themselves live in `defaults.ts`, because the settings schema must
+ * resolve the very same values.
  *
- * Cordis validates a plugin's entry config through **Standard Schema**:
+ * Two layers validate the same object, and they are deliberately different:
  *
- * ```js
- * const result = runtime.Config["~standard"].validate(config)
- * if ("then" in result) throw new TypeError("Async config validation is not supported")
- * if (result.issues) throw new ValidationError(result.issues)
- * else return result.value
- * ```
+ * - **{@link Config}** is a real schemastery schema, because that is what the
+ *   harness requires to project a settings form. DSH 0.2.0-rc.2's settings
+ *   service keeps only entries whose `fiber.runtime.Config` carries a
+ *   `toJSON()` (`SettingsForms.schema()`), and builds the form from the fields
+ *   marked `meta.volatile`. A hand-written Standard Schema — which this module
+ *   used before — has neither, so the entry was silently skipped and the panel
+ *   could never appear. Schemastery is a declared optional peer and is present
+ *   in every DSH installation.
+ * - **{@link normalizeConfig}** stays the authority on what this plugin can
+ *   actually act on: it reports every problem at once and refuses unknown keys,
+ *   which a schema projection cannot express. `apply()` runs it once per config
+ *   read, so a typo in a user's override still fails loudly instead of being
+ *   silently dropped by the schema.
  *
- * That is the whole contract — `~standard` is a public spec, and it is
- * deliberately *not* schemastery-specific. Hand-writing it here rather than
- * importing `@deepseek-ai/schemastery` keeps this package free of every
- * `@deepseek-ai/*` *runtime import*: the manifest's two optional peers exist so
- * that resolution can find them, not so this module can import them, and an
- * optional peer that fails to install must degrade rather than become a
- * load-time import error.
+ * Every leaf is marked `.volatile()`. That is the harness's own mechanism for
+ * "editable without a remount": the resolved value becomes a `Volatile` box the
+ * Loader commits into, so this plugin reads live values through
+ * {@link plainConfig} and the settings panel can write them. Fields left
+ * ordinary would be absent from the form entirely.
  *
- * The normalizer is intentionally strict about unknown keys: the shipped
- * `cordis.patch.yml` spells out every key, so a typo in a user's override means
- * their intent is silently not applied. Failing at boot with the exact key is
- * far cheaper to diagnose.
+ * One leaf deliberately carries **no default**: {@link Config}'s `auth.token`.
+ * A configuration surface never receives a secret's value — it receives
+ * `{ path, set }`, and `@deepseek-ai/dsh-settings`'s `redactSecrets()` computes
+ * `set` as `value !== undefined`. A default would therefore make every panel
+ * report "a token is pinned" from the moment the plugin loads, even though
+ * nothing is. Absent resolves to `undefined`, which is the honest answer;
+ * {@link normalizeConfig} still turns that into the empty string this plugin
+ * acts on, and the panel's badge is the only reader of the distinction.
  */
 
-import { DEFAULT_HTTP, defaultConfig } from './defaults.js'
+import Schema from '@deepseek-ai/schemastery'
+
+import {
+  DEFAULT_AGENT_TOOLS,
+  DEFAULT_APPROVAL,
+  DEFAULT_HTTP,
+  DEFAULT_LIMITS,
+  DEFAULT_SESSION,
+  DEFAULT_TOOLS,
+  defaultConfig,
+} from './defaults.js'
 
 /** Where the MCP endpoint listens, and whether DSH's own web server carries it too. */
 export interface HttpConfig {
@@ -136,29 +155,12 @@ export interface Config {
 /** The approval policies a configuration may name. */
 export const APPROVAL_POLICIES = ['inherit', 'allow'] as const
 
-/** One reported problem, in Standard Schema's shape. */
-interface StandardIssue {
-  readonly message: string
-  readonly path?: readonly (string | number)[]
-}
-
 /** Raised when a config value cannot be normalized. */
 export class ConfigValidationError extends Error {
   override readonly name = 'ConfigValidationError'
 
   constructor(readonly issues: readonly string[]) {
     super(`invalid dsh-as-mcp configuration:\n  - ${issues.join('\n  - ')}`)
-  }
-}
-
-/** A callable schema that also satisfies Standard Schema, as Cordis expects. */
-export interface ConfigSchema {
-  /** Normalize and validate, throwing {@link ConfigValidationError} on failure. */
-  (input?: unknown): Config
-  readonly '~standard': {
-    readonly version: 1
-    readonly vendor: string
-    validate(input: unknown): { value: Config; issues?: undefined } | { value?: undefined; issues: readonly StandardIssue[] }
   }
 }
 
@@ -383,28 +385,112 @@ export function normalizeConfig(input: unknown = {}): Config {
 /**
  * The plugin's config schema, in the shape Cordis consumes.
  *
- * Callable like a schemastery schema (`Config({})`) as well as validatable
- * through Standard Schema, so the harness and tests share one code path.
+ * Schemastery — not a hand-written Standard Schema — because the harness reads
+ * this object's `toJSON()` and its `meta.volatile` markers to project the
+ * settings form; see the module doc. Every leaf is volatile so the panel can
+ * edit it and the Loader can commit the new value into the running plugin
+ * without a remount.
  */
-export const Config: ConfigSchema = Object.assign(
-  (input?: unknown): Config => normalizeConfig(input),
-  {
-    '~standard': {
-      version: 1 as const,
-      vendor: 'dsh-as-mcp',
-      validate(input: unknown) {
-        try {
-          return { value: normalizeConfig(input) }
-        } catch (error) {
-          if (error instanceof ConfigValidationError) {
-            return { issues: error.issues.map((message) => ({ message })) }
-          }
-          return { issues: [{ message: error instanceof Error ? error.message : String(error) }] }
-        }
-      },
-    },
-  },
-)
+export const Config = Schema.object({
+  http: Schema.object({
+    enabled: Schema.boolean().default(DEFAULT_HTTP.enabled).volatile()
+      .description('Serve the MCP endpoint from a listener this plugin owns.'),
+    host: Schema.string().default(DEFAULT_HTTP.host).volatile()
+      .description('Listen host for the plugin-owned listener.'),
+    port: Schema.number().default(DEFAULT_HTTP.port).volatile()
+      .description('Listen port; 0 asks the OS for a free port.'),
+    path: Schema.string().default(DEFAULT_HTTP.path).volatile()
+      .description('Endpoint pathname, for example /mcp.'),
+    mountOnWebServer: Schema.boolean().default(DEFAULT_HTTP.mountOnWebServer).volatile()
+      .description("Also serve the endpoint through DSH's own web server."),
+  }).description('Where the endpoint listens.'),
+  auth: Schema.object({
+    // No `.default('')`: see the module doc. An absent value is what tells the
+    // settings panel that no token is pinned.
+    token: Schema.string().role('secret').volatile()
+      .description('Pin the bearer token. Empty reads $DSH_HOME/dsh-as-mcp/token.'),
+  }).description('Bearer-token admission.'),
+  tools: Schema.object({
+    workspace: Schema.boolean().default(DEFAULT_TOOLS.workspace).volatile()
+      .description('Expose workspace_create and workspace_list.'),
+    session: Schema.boolean().default(DEFAULT_TOOLS.session).volatile()
+      .description('Expose the session tools, which drive a DSH agent.'),
+    files: Schema.boolean().default(DEFAULT_TOOLS.files).volatile()
+      .description('Expose file_read, file_write, and file_list.'),
+    shell: Schema.boolean().default(DEFAULT_TOOLS.shell).volatile()
+      .description('Expose shell_run, which executes commands as this DSH instance.'),
+    agentTools: Schema.boolean().default(DEFAULT_TOOLS.agentTools).volatile()
+      .description("Expose dsh_tool_list and dsh_tool_call, which run this instance's own agent tools."),
+  }).description('Which tool groups the endpoint advertises.'),
+  agentTools: Schema.object({
+    allow: Schema.array(Schema.string()).default([...DEFAULT_AGENT_TOOLS.allow]).volatile()
+      .description('Tool names dsh_tool_call may invoke. A non-empty list replaces the built-in default.'),
+    deny: Schema.array(Schema.string()).default([...DEFAULT_AGENT_TOOLS.deny]).volatile()
+      .description('Names removed from the permitted set, for subtracting from the default.'),
+  }).description('Which harness tools dsh_tool_call may reach.'),
+  session: Schema.object({
+    agentPreset: Schema.string().default(DEFAULT_SESSION.agentPreset).volatile()
+      .description('Agent preset for turns this plugin starts; empty inherits.'),
+    provider: Schema.string().default(DEFAULT_SESSION.provider).volatile()
+      .description('Model provider route; must be paired with model.'),
+    model: Schema.string().default(DEFAULT_SESSION.model).volatile()
+      .description('Model id; must be paired with provider.'),
+    promptTimeoutMs: Schema.number().default(DEFAULT_SESSION.promptTimeoutMs).volatile()
+      .description('How long session_prompt waits for its turn to settle.'),
+  }).description('Defaults for turns this plugin starts.'),
+  limits: Schema.object({
+    maxReadBytes: Schema.number().default(DEFAULT_LIMITS.maxReadBytes).volatile()
+      .description('Bytes file_read returns before truncating.'),
+    shellTimeoutMs: Schema.number().default(DEFAULT_LIMITS.shellTimeoutMs).volatile()
+      .description('Default timeout for shell_run.'),
+    agentToolTimeoutMs: Schema.number().default(DEFAULT_LIMITS.agentToolTimeoutMs).volatile()
+      .description('Default timeout for dsh_tool_call.'),
+  }).description('Bounds on one external call.'),
+  approval: Schema.object({
+    policy: Schema.union([Schema.const('inherit'), Schema.const('allow')])
+      .default(DEFAULT_APPROVAL.policy)
+      .volatile()
+      .description('How sessions this plugin starts answer approval requests.'),
+  }).description('Approval behaviour for plugin-started sessions.'),
+})
+
+/**
+ * Whether a value is a schemastery `Volatile` reference.
+ *
+ * The marker is cosmokit's write symbol rather than the `get` method alone, so
+ * an ordinary object that happens to expose `get` is never mistaken for one.
+ */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+function isVolatile(value: unknown): value is { get(): unknown } {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as { get?: unknown }).get === 'function'
+    && VOLATILE_WRITE in value
+}
+
+/**
+ * Resolve the config Cordis hands `apply()` into plain values.
+ *
+ * A `.volatile()` field arrives as a `Volatile` box rather than a value, and the
+ * Loader commits settings edits *into that box* without remounting the plugin —
+ * so reading through it here is what makes an edit in the panel reach the next
+ * request. This mirrors `plainConfig` in `@deepseek-ai/dsh-settings`, which is
+ * the same unwrapping the harness does before projecting a form.
+ *
+ * @param value - a parsed config, possibly holding volatile references.
+ * @returns the same shape with every reference read out.
+ */
+export function plainConfig(value: unknown): unknown {
+  if (isVolatile(value)) return plainConfig(value.get())
+  if (Array.isArray(value)) return value.map((entry) => plainConfig(entry))
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, plainConfig(child)]),
+    )
+  }
+  return value
+}
 
 /** Empty strings in YAML mean "unset", so collapse them once at load time. */
 export function optional(value: string | undefined): string | undefined {

@@ -12,6 +12,12 @@
 # what is tunable at a glance. A profile's own `cordis.patch.yml` overrides this
 # row by `id`, and a patch replaces a row's entire `config` object rather than
 # deep-merging it — restate every key you still want.
+#
+# Do NOT insert this row a second time from a profile patch. DSH's settings
+# editor refuses to write a configuration whose id composes twice (it compares
+# the edit against the *first* composed row, while the Loader applies the last),
+# and the only symptom is a panel that reports every write as failed. Listing
+# `dsh-as-mcp` in `dsh.profile.bundles` is the whole install.
 - insert:
     - id: dsh-as-mcp
       name: dsh-as-mcp
@@ -27,10 +33,14 @@
           # reachable at http://127.0.0.1:<dsh port>/mcp. Off by default because
           # that server is part of the browser-facing composition.
           mountOnWebServer: false
-        auth:
-          # Empty means: read $DSH_HOME/dsh-as-mcp/token, and generate + persist
-          # a fresh token when that file does not exist yet.
-          token: ''
+        # `auth.token` is deliberately NOT restated here. Leaving it absent means
+        # "read $DSH_HOME/dsh-as-mcp/token, and generate + persist a fresh token
+        # when that file does not exist yet" — the same meaning an empty string
+        # has for this plugin. But an explicitly empty string is a *present*
+        # value, and the settings panel answers "is a token pinned?" with
+        # `value !== undefined`, so shipping `token: ''` made every panel claim a
+        # token was pinned from the moment the plugin loaded. Set it here only to
+        # pin a real secret.
         tools:
           workspace: true
           session: true

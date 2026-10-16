@@ -83,6 +83,7 @@ export async function boot(driver: McpDriver, config: Config = testConfig()): Pr
     mountedOnWebServer: false,
     error: null,
     tokenSource: 'test',
+    token: TOKEN,
     settingsRegistered: false,
     tokenFile: '/tmp/dsh-as-mcp/token',
     enabledToolGroups: ['workspace', 'session', 'files'],

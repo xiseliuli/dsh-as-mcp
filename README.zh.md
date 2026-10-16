@@ -153,6 +153,9 @@ dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 }
 ```
 
+配置面板会生成一段一模一样的配置，并且已经填好当前令牌，所以直接用面板上的**复制**按钮，
+不必手工替换 `<token>`。
+
 **只支持 stdio 的客户端** —— 用随包提供的桥接脚本，它把每条 JSON-RPC 消息通过 HTTP 转给
 端点：
 
@@ -349,6 +352,13 @@ cd ~/.dsh/profiles/desktop && pnpm add /tmp/dsh-as-mcp-0.1.0.tgz
 > ⚠️ **不要同时把 `dsh-as-mcp` 加进 `dsh.profile.bundles`。** bundle 会贡献它自己的行，于是最终
 > 组合里会出现**两行同 id**（`dsh --profile <name> --dump-config` 会直接显示出 2 行）。用 patch
 > 层就只走 patch 层。反过来说，想让它跨重启常驻时，才改用 `dsh plugin add` 走 bundle 路线。
+>
+> 后果比"多一行"严重得多：**设置面板的每一次写入都会被拒绝**，错误是
+> `Configuration for "dsh-as-mcp" is overridden by a home patch or command-line overlay`。DSH 的
+> config editor 拿**第一行**组合结果校验编辑，而 Loader 生效的是**最后一行**，两行同 id 时永远
+> 对不上，于是什么也存不下去。面板只会显示"写入失败，已重新读取。请重试。"，看起来像偶发故障，
+> 而不是组合写错了。走 bundle 路线就删掉手写的 `- insert:` 那一行；走 patch 路线就把
+> `dsh-as-mcp` 从 `dsh.profile.bundles` 里去掉。
 
 ### 3. 冒烟验证
 
@@ -433,33 +443,43 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 最值得说清的是改端口：插件会先停掉旧监听再起新的，所以端点是真的搬了。如果新端口被占用，
 绑定错误会显示在面板和 `dsh_info` 里，而不是被吞掉。
 
-令牌是**只写**的。它的明文从不离开宿主进程，所以面板只能显示“是否已设置”和一个清除按钮；
-可复制的客户端配置用 `<token>` 占位，并指向令牌文件。实时端点状态（是否在监听、绑定错误、
-已启用的工具组）由 DSH connection 层上的一条只读路由提供——它在该层的 Host/Origin 与浏览器
-cookie 围栏**之内**，因此自动继承 DSH 自己的鉴权，绝不会暴露在一个裸端口上。
+令牌在表单里是**只写**的：明文不会进入设置表单，所以输入框只负责写入，另有一个清除按钮用来撤销
+面板自己写的那一层（如果令牌来自组合配置，清除它不影响该令牌，它仍然生效）。“是否已固定令牌”由
+宿主回答，而不是页面自己猜——`auth.token` 特意不设 schema 默认值，因为设置服务判断“这个 secret
+是否已设置”用的是 `value !== undefined`，一旦有默认值，插件一加载面板就会声称令牌已固定。
 
-注册 settings 命名空间需要 `@deepseek-ai/schemastery`，DSH 里没有绕开它的路径。本包把它声明为
-**可选** peer 并用动态导入加载：宿主提供不了时，只失去这个分组，其他能力一个不少——端点继续
-按配置文件运行。`dsh_info` 和冒烟脚本都会告诉你当前是哪种情况。
+面板里**可复制的客户端配置**是唯一一处有意交出明文的地方。**复制**按钮写入的片段里是当前真实
+生效的令牌，粘贴即可用；屏幕上显示的那份则打了掩码（另有一个“显示令牌”按钮），这样截图或共享
+屏幕都不会泄露它。两者都来自同一条只读状态路由，位于 DSH connection 层——在该层的 Host/Origin
+与浏览器 cookie 围栏**之内**，因此自动继承 DSH 自己的鉴权，绝不会暴露在一个裸端口上。`dsh_info`
+仍然只报告令牌来源：已经用这个令牌通过鉴权的调用方，没必要让它再被回显进对话记录里。
+
+面板是浏览器半边通过 `ctx.configForms.whileServed` 注册进 `settings.section` 的一页，因此只有宿主
+确实在提供这一项的配置表单时才会出现。这需要 `@deepseek-ai/schemastery`：DSH 0.2.0-rc.2 只给
+`Config` 上带 `toJSON()` 的 entry 投影表单，而且只保留标了 `meta.volatile` 的字段。DSH 里没有
+免 schemastery 的面板路径，所以它作为 peer 直接 import——拿不到它插件根本无法被 import，这正是
+下面那条兼容范围要挡住的情况。
 
 ## 兼容性
 
-- **Harness** ≥ `0.1.5-rc.1`（开发与验证基于 `dsh-v0.1.5-rc.1`，即 DSH Desktop 2.0.9 内置
-  的版本），声明为 `peerDependencies["@deepseek-ai/dsh"]: ">=0.1.5-rc.1"`，不封顶。DSH 的插件
-  加载器会直接从 manifest 里读出这个范围，在插件被 import **之前**就拿它和唯一那个运行时版本做
-  semver 比对（预发布版也参与比对）；不兼容的安装会被拒载，除非宿主显式给出精确版本豁免
-  （`dsh plugin allow-version`）。
+- **Harness** ≥ `0.1.5-rc.1`，声明为 `peerDependencies["@deepseek-ai/dsh"]: ">=0.1.5-rc.1"`，
+  不封顶。DSH 的插件加载器会直接从 manifest 里读出这个范围，在插件被 import **之前**就拿它和
+  唯一那个运行时版本做 semver 比对（预发布版也参与比对）；不兼容的安装会被拒载，除非宿主显式
+  给出精确版本豁免（`dsh plugin allow-version`）。
 - **Node** `^22.19.0 || >=24.0.0`。
 - `@deepseek-ai/dsh` 这个 peer 声明为**可选**，纯粹是为了不让 `dsh plugin add` 为了满足它就把
   一整个 harness 装进每个 profile。可选只影响安装行为——DSH 的兼容性检查不看
   `peerDependenciesMeta`，只读 `peerDependencies`，所以上面那条版本校验照样生效，一条都不少。
-- **没有其它硬 `@deepseek-ai/*` 依赖。** 除了上面这个版本闸门，本包的其它能力都通过
-  `ctx.get(name)` 做结构化解析，配置 schema 也是手写的
-  [Standard Schema](https://standardschema.dev) 而不是 schemastery schema——而 Cordis 的
-  `resolveConfig` 实际消费的就是 Standard Schema。唯一的例外是 `@deepseek-ai/schemastery`，同样
-  声明为**可选** peer：DSH 里没有免 schemastery 的 settings 注册路径，所以想要设置面板就必须
-  声明它——但声明为可选意味着没装上也只失去面板，核心功能不受影响。这与生态里已有的第三方插件
-  （`dsh-tokenledger`）做法一致。
+- **设置模型。** 已针对 `dsh 0.2.0-rc.2` 验证：它的 settings 服务换掉了本插件最初面向的 0.1.x
+  API——`settings.installSection` 已不存在，命名空间改由 entry 自己的 `Config` 按 Loader 行 id
+  投影，且只有 `meta.volatile` 字段可编辑；volatile 写入直接提交进运行中的引用，不重挂载。因此
+  宿主半边不再做任何注册，每次读取都通过 `plainConfig()` 解出实时值，唯一保留的 settings 调用是
+  `configure({ auto: false }, ctx.fiber)`（本插件自带页面）。**面板需要 0.2 的设置模型**；在
+  0.1.x 运行时上端点仍按配置文件正常运行，但没有面板——那种运行时只会为「插件通过已移除的那个
+  调用注册过的命名空间」投影表单。
+- **没有其它硬 `@deepseek-ai/*` 依赖。** 除上面这个版本闸门，本包的其它能力都通过
+  `ctx.get(name)` 做结构化解析。唯一的例外是 `@deepseek-ai/schemastery`，作为 peer 直接 import：
+  DSH 里没有免 schemastery 的设置表单路径。
 
 ## 设计说明
 

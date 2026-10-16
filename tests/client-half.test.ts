@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { GROUPS, formatList, parseList, readPath } from '../src/client/fields.js'
 import { normalizeConfig } from '../src/config.js'
 import { en, zh } from '../src/client/locales.js'
+import { clientSnippet, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from '../src/client/snippet.js'
 
 const run = promisify(execFile)
 const ROOT = join(__dirname, '..')
@@ -161,6 +162,60 @@ describe('the dictionaries cover the panel', () => {
 
   it('keeps the two dictionaries in step', () => {
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort())
+  })
+
+  it('covers every token source the host can report', () => {
+    // These keys are reached by interpolation (`client.tokenSource.${source}`),
+    // so the literal scan above cannot see them. A missing one renders the raw
+    // source name, which is survivable but is not what the panel promises.
+    for (const source of ['settings', 'config', 'file', 'generated', 'ephemeral']) {
+      expect(zh[`client.tokenSource.${source}`]?.length ?? 0).toBeGreaterThan(0)
+      expect(en[`client.tokenSource.${source}`]?.length ?? 0).toBeGreaterThan(0)
+    }
+  })
+})
+
+describe('the copyable client snippet', () => {
+  const URL = 'http://127.0.0.1:8790/mcp'
+  const TOKEN = 'Zx9-real-token-value'
+
+  it('embeds the real token, so a pasted configuration works', () => {
+    // The regression this pins: the snippet used to hard-code `<token>`, so
+    // copying it produced a configuration that could never authenticate and
+    // sent the user to the token file the panel already knew about.
+    const text = clientSnippet(URL, TOKEN)
+    expect(text).toContain(`Bearer ${TOKEN}`)
+    expect(text).not.toContain(TOKEN_PLACEHOLDER)
+    expect(JSON.parse(text)).toEqual({
+      mcpServers: { dsh: { type: 'http', url: URL, headers: { Authorization: `Bearer ${TOKEN}` } } },
+    })
+  })
+
+  it('keeps the placeholder only when the host reported no token', () => {
+    expect(clientSnippet(URL, TOKEN_PLACEHOLDER)).toContain(`Bearer ${TOKEN_PLACEHOLDER}`)
+  })
+
+  it('renders the display copy masked, and the same snippet otherwise', () => {
+    const shown = clientSnippet(URL, maskSecret(TOKEN))
+    const copied = clientSnippet(URL, TOKEN)
+    expect(shown).not.toContain(TOKEN)
+    expect(JSON.parse(shown).mcpServers.dsh.url).toBe(JSON.parse(copied).mcpServers.dsh.url)
+  })
+
+  it('masks a short token without revealing it through its own length', () => {
+    // A four-character token would otherwise be printed in full by a naive
+    // "keep the first four" rule.
+    expect(maskSecret('abc')).toBe('••••••••')
+    expect(maskSecret('abcdefghijklmnop')).toContain('abcd')
+    expect(maskSecret('abcdefghijklmnop')).not.toContain('efgh')
+    expect(maskSecret('')).toBe('••••••••')
+  })
+
+  it('names a token source, and falls back to the host spelling for an unknown one', () => {
+    const t = (key: string): string => (key === 'client.tokenSource.settings' ? 'this panel' : key)
+    expect(sourceLabel(t, 'settings')).toBe('this panel')
+    expect(sourceLabel(t, 'invented')).toBe('invented')
+    expect(sourceLabel(t, undefined)).toBeUndefined()
   })
 })
 

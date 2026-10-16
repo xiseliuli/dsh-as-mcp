@@ -29,6 +29,7 @@ async function mountMutable(initial: Config, driver = stubDriver()): Promise<{
     mountedOnWebServer: false,
     error: null,
     tokenSource: 'test',
+    token: config.auth.token,
     settingsRegistered: true,
     tokenFile: '/tmp/dsh-as-mcp/token',
     enabledToolGroups: ['workspace', 'session', 'files'],

@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 
-import { Config, normalizeConfig, optional, type Config as DshAsMcpConfig } from './config.js'
+import { Config, normalizeConfig, optional, plainConfig, type Config as DshAsMcpConfig } from './config.js'
 import { DshDriver } from './dsh/driver.js'
 import { eventsOf, loggerOf, serviceOf } from './dsh/types.js'
 import { describeTokenSource } from './mcp/token.js'
@@ -17,7 +17,7 @@ import {
 } from './mcp/http.js'
 import { maskToken, resolveToken } from './mcp/token.js'
 import type { ConnectionInfo, ToolDeps } from './mcp/tools.js'
-import { installSettings } from './settings.js'
+import { installSettingsPagePolicy } from './settings.js'
 import { STATUS_ROUTE, type EndpointStatus } from './status.js'
 
 /** Cordis plugin name. */
@@ -62,9 +62,35 @@ export type { EndpointStatus } from './status.js'
  * bind parameters (enabled, host, port, path, mountOnWebServer) is reconciled by
  * moving the listener.
  */
-export function apply(ctx: Context, config: DshAsMcpConfig): void {
+export function apply(ctx: Context, config: unknown): void {
   const log = loggerOf(ctx)
-  const entry = normalizeConfig(config)
+
+  /**
+   * The configuration to act on right now.
+   *
+   * `config` arrives as Cordis parsed it: every `.volatile()` field is a
+   * `Volatile` box the Loader commits settings edits into, so unwrapping it on
+   * each read is what makes a panel edit reach the next request without a
+   * remount. `normalizeConfig` then applies the defaults and enforces the
+   * strictness a schema projection cannot express (unknown keys, every problem
+   * reported at once). A value the normalizer refuses is not acted on: the last
+   * good configuration stays in force.
+   */
+  const readConfig = (): DshAsMcpConfig => normalizeConfig(plainConfig(config))
+
+  const entry = readConfig()
+  let lastGood = entry
+  const getConfig = (): DshAsMcpConfig => {
+    try {
+      lastGood = readConfig()
+    } catch (error) {
+      log.warn(
+        '[dsh-as-mcp] ignoring a configuration this plugin cannot serve: %s',
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+    return lastGood
+  }
 
   // The configured/file token is resolved once: it is the fallback whenever the
   // effective configuration pins no token of its own.
@@ -77,16 +103,22 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
   /** Set once the plugin is being torn down; every await in a reconcile re-checks it. */
   let disposed = false
 
-  const binding = installSettings({
-    ctx,
-    entry,
-    log,
-    onChange: () => {
-      void reconcile()
-    },
-  })
+  // The settings page itself is projected by the harness from this entry's
+  // `Config`; all this plugin still says is "do not also generate one from my
+  // schema". See `settings.ts` for why the 0.1.x registration is gone.
+  const settings = installSettingsPagePolicy({ ctx, log })
 
-  const getConfig = (): DshAsMcpConfig => binding.current()
+  /**
+   * Move the listener when a volatile bind parameter changes.
+   *
+   * A volatile-only settings write is committed into the running references
+   * *without* remounting this plugin, so `apply()` does not run again and the
+   * Loader instead notifies the owning fiber with the changed paths. That
+   * notification is the only chance to notice that `http.port` moved.
+   */
+  eventsOf(ctx).on('loader/volatile-update', () => {
+    void reconcile()
+  })
 
   /**
    * The token a request must present.
@@ -98,13 +130,14 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
   const effectiveToken = (): { token: string; source: string; file: string } => {
     const pinned = optional(getConfig().auth.token)
     if (pinned !== undefined) {
-      return { token: pinned, source: binding.registered() ? 'settings' : 'config', file: fallbackToken.file }
+      return { token: pinned, source: settings.available() ? 'settings' : 'config', file: fallbackToken.file }
     }
     return { token: fallbackToken.token, source: fallbackToken.source, file: fallbackToken.file }
   }
 
   const status = (): EndpointStatus => {
     const current = getConfig()
+    const credential = effectiveToken()
     // What to report when nothing is listening depends on where the endpoint
     // actually lives: mounted on the DSH web server it is reachable only at
     // `<path>` there — the web server's host and port are not ours to know —
@@ -118,8 +151,9 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
       url,
       mountedOnWebServer: unmountFromWebServer !== undefined,
       error: listenError,
-      tokenSource: effectiveToken().source,
-      settingsRegistered: binding.registered(),
+      tokenSource: credential.source,
+      token: credential.token,
+      settingsRegistered: settings.available(),
       tokenFile: fallbackToken.file,
       enabledToolGroups: Object.entries(current.tools)
         .filter(([, on]) => on)
@@ -343,7 +377,6 @@ export function apply(ctx: Context, config: DshAsMcpConfig): void {
 
     return async () => {
       disposed = true
-      binding.release()
       // An in-flight reconcile is mid-teardown or mid-bind right now, and it
       // re-checks `disposed` after every await — letting it settle first is what
       // makes the `listener` read below final instead of a sample that misses a

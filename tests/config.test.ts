@@ -4,7 +4,7 @@ import { resolveConfig } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 
-import { Config, ConfigValidationError, normalizeConfig, optional } from '../src/config.js'
+import { Config, ConfigValidationError, normalizeConfig, optional, plainConfig } from '../src/config.js'
 import { DEFAULT_AGENT_TOOLS } from '../src/defaults.js'
 
 const patchPath = fileURLToPath(new URL('../cordis.patch.yml', import.meta.url))
@@ -23,14 +23,16 @@ async function readPatchRows(): Promise<PatchRow[]> {
 }
 
 /**
- * Run a raw config through Cordis itself.
+ * Run a raw config through Cordis itself, then through the plugin's normalizer.
  *
- * This is the exact function the loader calls on a plugin's `Config`, so these
- * assertions test the harness's validation path rather than a hand-rolled one.
- * Cordis rejects a promise and throws `ValidationError` on `issues`.
+ * `resolveConfig` is the exact function the loader calls on a plugin's `Config`,
+ * so these assertions test the harness's validation path rather than a
+ * hand-rolled one. Its result carries a `Volatile` box per leaf — the harness's
+ * "editable without a remount" mechanism — so it is unwrapped the same way
+ * `apply()` unwraps it before the strict normalizer sees plain values.
  */
 function load(raw: unknown) {
-  return resolveConfig({ Config } as never, raw)
+  return normalizeConfig(plainConfig(resolveConfig({ Config } as never, raw)))
 }
 
 describe('cordis.patch.yml', () => {
@@ -59,6 +61,20 @@ describe('cordis.patch.yml', () => {
       limits: { maxReadBytes: 1_048_576, shellTimeoutMs: 120_000, agentToolTimeoutMs: 120_000 },
       approval: { policy: 'inherit' },
     })
+  })
+
+  it('leaves auth.token out of the row, so the panel does not start out claiming one is set', async () => {
+    // `@deepseek-ai/dsh-settings` answers "is this secret set?" with
+    // `value !== undefined` (`lib/types/redact.js`), over the resolved config.
+    // An explicitly empty string is a *present* value, so shipping `token: ''`
+    // made every panel report "已设置" from the moment the plugin loaded and made
+    // the row's own clear button look inert. Absent and empty mean the same thing
+    // to this plugin — inherit the token file — so the row omits it entirely.
+    const rows = await readPatchRows()
+    const config = rows[0]?.config as { auth?: { token?: unknown } } | undefined
+    expect(config?.auth?.token).toBeUndefined()
+    // The normalizer still hands the plugin the empty string it acts on.
+    expect(load(rows[0]?.config ?? {}).auth.token).toBe('')
   })
 })
 
@@ -94,26 +110,35 @@ describe('config loading through Cordis', () => {
   })
 
   it('reports every problem at once, not just the first', () => {
+    // Schemastery answers a type error with its own single-issue message, so the
+    // all-at-once property belongs to the normalizer — the layer that decides
+    // whether this plugin can act on the configuration at all.
     let error: unknown
     try {
-      load({ http: { port: 'nine' }, approval: { policy: 'yolo' } })
+      normalizeConfig({ http: { port: 'nine' }, approval: { policy: 'yolo' } })
     } catch (caught) {
       error = caught
     }
-    expect(error).toBeInstanceOf(Error)
+    expect(error).toBeInstanceOf(ConfigValidationError)
     const message = (error as Error).message
     expect(message).toContain('http.port')
     expect(message).toContain('approval.policy')
   })
 
+  it('names the offending path when the schema rejects a value first', () => {
+    // Whichever layer speaks first, a boot failure must point at the key.
+    expect(() => load({ http: { port: 'nine' } })).toThrow(/http\.port/)
+  })
+
   it('names a mistyped key instead of silently ignoring it', () => {
     // The shipped patch file spells out every key, so an unknown key means the
     // user's override is not being applied — the one failure worth failing on.
+    // Schemastery preserves unknown keys, so the normalizer still sees them.
     expect(() => load({ http: { prot: 9000 } })).toThrow(/http\.prot is not a dsh-as-mcp option/)
   })
 
   it('rejects a non-object config', () => {
-    expect(() => load('nope')).toThrow(/must be an object/)
+    expect(() => load('nope')).toThrow(/object/)
   })
 
   it('rejects a negative port and a path without a leading slash', () => {
@@ -122,23 +147,38 @@ describe('config loading through Cordis', () => {
   })
 })
 
-describe('Standard Schema surface', () => {
-  it('advertises version 1 and reports its own vendor', () => {
+describe('the schema Cordis consumes', () => {
+  it('is schemastery, which is what the settings service requires', () => {
+    // Two harness checks decide whether this plugin's entry ever reaches a
+    // settings form: `SettingsForms.schema()` wants `toJSON` on the schema, and
+    // `volatileForm()` wants `meta.volatile` on the fields. A hand-written
+    // Standard Schema satisfied neither, and the panel was silently absent.
     expect(Config['~standard'].version).toBe(1)
-    expect(Config['~standard'].vendor).toBe('dsh-as-mcp')
+    expect(Config['~standard'].vendor).toBe('schemastery')
+    expect(typeof Config.toJSON).toBe('function')
   })
 
   it('validates synchronously, which is all Cordis accepts', () => {
     const result = Config['~standard'].validate({})
     expect(result).not.toBeInstanceOf(Promise)
     expect('then' in result).toBe(false)
-    expect(result.value?.http.port).toBe(8790)
+    expect(normalizeConfig(plainConfig((result as { value: unknown }).value)).http.port).toBe(8790)
+  })
+
+  it('hands each leaf over as a volatile reference, so the Loader can commit edits', () => {
+    const result = Config['~standard'].validate({ http: { port: 1234 } }) as { value: { http: { port: unknown } } }
+    const box = result.value.http.port as { get?: () => unknown }
+    expect(typeof box.get).toBe('function')
+    expect(box.get?.()).toBe(1234)
   })
 
   it('returns issues rather than throwing, so Cordis can raise its own error', () => {
-    const result = Config['~standard'].validate({ approval: { policy: 'yolo' } })
+    const result = Config['~standard'].validate({ approval: { policy: 'yolo' } }) as {
+      value?: unknown
+      issues?: readonly { message: string }[]
+    }
     expect(result.value).toBeUndefined()
-    expect(result.issues?.[0]?.message).toContain('approval.policy')
+    expect(result.issues?.[0]?.message).toContain('policy')
   })
 })
 

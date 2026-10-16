@@ -39,10 +39,15 @@ export interface SettingsDescribeSnapshot {
   readonly view?: { readonly namespaces: readonly SettingsNamespaceView[] } | undefined
 }
 
-/** What a bound namespace scope publishes. */
+/** What a shared configuration form publishes. */
 export interface SettingsScopeSnapshot<T> {
   readonly status: 'loading' | 'ready' | 'unavailable'
+  /** The resolved value: schema defaults, then the composition base, then the user layer. */
   readonly value: T | undefined
+  /** The inherited layer beneath the user's overrides. */
+  readonly base?: T | undefined
+  /** The raw user layer, absent when the entry carries no override. */
+  readonly user?: T | undefined
   readonly revision: number | undefined
   readonly writable: boolean
   readonly mode: 'host' | 'memory'
@@ -60,18 +65,45 @@ export type SettingsPathOp =
   | { readonly op: 'set'; readonly path: readonly string[]; readonly value: unknown }
   | { readonly op: 'unset'; readonly path: readonly string[] }
 
-/** A namespace scope bound on the caller's fiber. */
-export interface SettingsScope<T> {
+/**
+ * One shared configuration form, as `configForms.get()` returns it.
+ *
+ * `ui-settings/src/client/config-forms.ts` builds one per Host entry id and
+ * shares it between every editor of that entry, so two surfaces editing the same
+ * namespace cannot silently overwrite each other.
+ */
+export interface ConfigForm<T> {
   /** @returns the current snapshot; the reference is stable until a change. */
   getSnapshot(): SettingsScopeSnapshot<T>
   subscribe(listener: () => void): () => void
-  mutate(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void>
+  /**
+   * Queue one atomic namespace mutation.
+   * @returns whether the Host accepted it, after any recovery read.
+   */
+  mutate(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<boolean>
 }
 
-/** The `settingsScope` service, injected on the client context. */
-export interface SettingsScopeService {
-  bind<T>(spec: { readonly namespace: string }): SettingsScope<T>
+/**
+ * The `configForms` service, injected on the client context.
+ *
+ * This is what DSH 0.2.0-rc.2 replaced the old `settingsScope` service with: the
+ * namespace is the Host plugin **entry id**, and the same service carries the
+ * describe mirror that answers "is a secret set?".
+ */
+export interface ConfigFormsService {
+  /** Get the shared form for one Host plugin entry id. */
+  get<T>(namespace: string): ConfigForm<T>
+  /** The shared describe mirror, for cross-namespace reads such as secret slots. */
   describe(): { getSnapshot(): SettingsDescribeSnapshot }
+  /**
+   * Run `register` while the Host serves any of `namespaces`, and stop when none
+   * is served any more — so a deployment that never composed the owner shows no
+   * trace of the page. The caller owns the returned disposer.
+   */
+  whileServed(
+    namespaces: readonly string[],
+    register: (served: ReadonlySet<string>) => (() => void) | undefined | void,
+  ): () => void
 }
 
 /** The `slots` service, injected on the client context. */
@@ -79,8 +111,9 @@ export interface SlotService {
   /**
    * Run `callback` while a slot declaration is live, re-running it if the
    * declaration arrives late or is re-declared. `ui-renderer/src/client/registry.ts:172-240`.
+   * @returns the disposer ending the injection.
    */
-  inject(name: string, callback: () => unknown): void
+  inject(name: string, callback: () => unknown): () => void
   /** Register into an already-declared slot. */
   register(options: {
     readonly name: string
@@ -106,13 +139,15 @@ export interface LocaleService {
 /**
  * The browser plugin context.
  *
- * Services are resolved through `get` rather than declared as properties, so a
- * profile missing one yields `undefined` instead of a throw or a wait. This
- * mirrors the host half, which resolves every capability the same way.
+ * `locale`, `slots`, and `configForms` are declared because this bundle lists
+ * them in `inject`, so Cordis has resolved them before `apply` runs. Everything
+ * else is resolved through `get`, so a profile missing one yields `undefined`
+ * instead of a throw or a wait — mirroring the host half.
  */
 export interface ClientContext {
   readonly locale: LocaleService
   readonly slots: SlotService
+  readonly configForms: ConfigFormsService
   get(key: string): unknown
   effect(callback: () => void | (() => void), label: string): void
 }

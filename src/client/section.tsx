@@ -4,13 +4,18 @@ import type { Config } from '../config.js'
 import type { EndpointStatus } from '../status.js'
 import type { SettingsPathOp, SettingsScopeSnapshot } from './contract.js'
 import { GROUPS, formatList, parseList, pathKey, readPath, type FieldSpec, type GroupSpec } from './fields.js'
+import { clientSnippet, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from './snippet.js'
 
 /** The bound settings namespace, as the section consumes it. */
 export interface SectionStore {
   subscribe(listener: () => void): () => void
   getSnapshot(): SettingsScopeSnapshot<Config>
   mutate(ops: readonly SettingsPathOp[], revision?: number): Promise<void>
-  /** Whether a token is pinned. The literal never leaves the host. */
+  /**
+   * Whether a token is pinned, per the settings describe mirror. The settings
+   * form never carries the literal; the live value the Copy button needs comes
+   * from {@link SectionStore.readStatus}.
+   */
   secretIsSet(): boolean
   /** Live endpoint state, or `undefined` when the host route is not reachable. */
   readStatus(): Promise<EndpointStatus | undefined>
@@ -284,6 +289,8 @@ function ClientConfig({
   t,
   url,
   mounted,
+  token,
+  tokenSource,
   tokenFile,
   status,
   statusRead,
@@ -291,37 +298,38 @@ function ClientConfig({
   t(key: string): string
   url: string
   mounted: boolean
+  /** The live bearer token, or `undefined` while the host has not reported one. */
+  token: string | undefined
+  tokenSource: string | undefined
   tokenFile: string
   status: EndpointStatus | undefined
   statusRead: boolean
 }) {
   const [copied, setCopied] = useState<'idle' | 'ok' | 'failed'>('idle')
-  const snippet = JSON.stringify(
-    {
-      mcpServers: {
-        dsh: {
-          type: 'http',
-          url,
-          headers: { Authorization: 'Bearer <token>' },
-        },
-      },
-    },
-    null,
-    2,
-  )
+  const [revealed, setRevealed] = useState(false)
+
+  // Two renderings of one snippet. What is shown masks the token so a shared
+  // screen does not leak it; what the button copies carries the real value, so
+  // the pasted configuration works without a trip to the token file. Until the
+  // host answers — or on a profile that mounts no status route — both fall back
+  // to the placeholder rather than inventing a value.
+  const known = token !== undefined && token !== ''
+  const copyText = clientSnippet(url, known ? token : TOKEN_PLACEHOLDER)
+  const shownText = clientSnippet(url, known ? (revealed ? token : maskSecret(token)) : TOKEN_PLACEHOLDER)
+  const source = sourceLabel(t, tokenSource)
 
   return (
     <section className="dshmcp_group">
       <h3 className="dshmcp_groupTitle">{t('client.title')}</h3>
       <p className="dshmcp_groupDesc">{t('client.description')}</p>
-      <pre className="dshmcp_code">{snippet}</pre>
+      <pre className="dshmcp_code">{shownText}</pre>
       <div className="dshmcp_control">
         <button
           className="dshmcp_btn"
           type="button"
           onClick={() => {
             void navigator.clipboard
-              .writeText(snippet)
+              .writeText(copyText)
               .then(() => {
                 setCopied('ok')
               })
@@ -332,6 +340,17 @@ function ClientConfig({
         >
           {copied === 'ok' ? t('client.copied') : copied === 'failed' ? t('client.copyFailed') : t('client.copy')}
         </button>
+        {known && (
+          <button
+            className="dshmcp_btn"
+            type="button"
+            onClick={() => {
+              setRevealed((on) => !on)
+            }}
+          >
+            {revealed ? t('client.hide') : t('client.reveal')}
+          </button>
+        )}
         {statusRead && (
           <span className={`dshmcp_badge${status?.listening === true ? ' dshmcp_badgeOk' : ''}`}>
             {status?.listening === true ? t('client.listening') : t('client.notListening')}
@@ -340,8 +359,14 @@ function ClientConfig({
         {mounted && <span className="dshmcp_badge">{t('client.mounted')}</span>}
       </div>
       <p className="dshmcp_note">
-        {t('field.auth.token.hint')} → <code>{tokenFile}</code>
+        {t('client.tokenSourceLabel')}
+        {source ?? t('client.tokenUnknown')}
       </p>
+      {!known && (
+        <p className="dshmcp_note">
+          {t('client.tokenUnknownHint')} <code>{tokenFile}</code>
+        </p>
+      )}
       {status !== undefined && status.enabledToolGroups.length > 0 && (
         <p className="dshmcp_note">
           {t('client.toolsLabel')}
@@ -370,6 +395,7 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
   const [writeError, setWriteError] = useState(false)
   const [status, setStatus] = useState<EndpointStatus>()
   const [statusRead, setStatusRead] = useState(false)
+  const live = useRef(true)
 
   const value = snapshot.value
   const writable = snapshot.writable && snapshot.status === 'ready' && value !== undefined
@@ -377,27 +403,34 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
   // The status route is polled rather than subscribed: it reports state that
   // changes outside the settings document (a port taken by someone else, a bind
   // that failed), and a slow poll is enough to answer "is it up right now?".
-  useEffect(() => {
-    let live = true
-    const read = () => {
-      void store.readStatus().then((next) => {
-        if (!live) return
+  // A write also refreshes it directly, so the snippet and the token badge
+  // reflect a value the user just typed instead of the previous poll's answer.
+  const refreshStatus = useCallback(
+    () =>
+      store.readStatus().then((next) => {
+        if (!live.current) return
         setStatusRead(true)
         setStatus(next)
-      })
-    }
-    read()
-    const timer = setInterval(read, 5_000)
+      }),
+    [store],
+  )
+
+  useEffect(() => {
+    live.current = true
+    void refreshStatus()
+    const timer = setInterval(() => {
+      void refreshStatus()
+    }, 5_000)
     return () => {
-      live = false
+      live.current = false
       clearInterval(timer)
     }
-  }, [store])
+  }, [refreshStatus])
 
   const write = useCallback(
     (path: readonly string[], next: unknown) => {
       setWriteError(false)
-      void store.mutate([{ op: 'set', path: [...path], value: next }], snapshot.revision).catch(() => {
+      return store.mutate([{ op: 'set', path: [...path], value: next }], snapshot.revision).catch(() => {
         setWriteError(true)
       })
     },
@@ -407,12 +440,23 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
   const clear = useCallback(
     (path: readonly string[]) => {
       setWriteError(false)
-      void store.mutate([{ op: 'unset', path: [...path] }], snapshot.revision).catch(() => {
+      return store.mutate([{ op: 'unset', path: [...path] }], snapshot.revision).catch(() => {
         setWriteError(true)
       })
     },
     [store, snapshot.revision],
   )
+
+  // Whether a token is pinned, as the host itself sees it. The settings mirror
+  // can only answer "is the field defined?", which is a proxy that a schema
+  // default or an explicitly stored empty string distorts; the status route
+  // reports whether the effective credential is a pinned one or the file/generated
+  // fallback, which is the actual question. The mirror remains the fallback for a
+  // profile whose status route is absent.
+  const pinnedFromStatus = status === undefined
+    ? undefined
+    : status.tokenSource === 'settings' || status.tokenSource === 'config'
+  const tokenIsSet = pinnedFromStatus ?? store.secretIsSet()
 
   const host = readPath(value, ['http', 'host'])
   const port = readPath(value, ['http', 'port'])
@@ -437,7 +481,7 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
           value={value}
           disabled={!writable}
           onWrite={(field, next) => {
-            write(field.path, next)
+            void write(field.path, next)
           }}
         />
       ))}
@@ -448,13 +492,13 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
         <div className="dshmcp_rows">
           <TokenRow
             t={t}
-            isSet={store.secretIsSet()}
+            isSet={tokenIsSet}
             disabled={!writable}
             onWrite={(next) => {
-              write(['auth', 'token'], next)
+              void write(['auth', 'token'], next).then(() => refreshStatus())
             }}
             onClear={() => {
-              clear(['auth', 'token'])
+              void clear(['auth', 'token']).then(() => refreshStatus())
             }}
           />
         </div>
@@ -464,6 +508,8 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
         t={t}
         url={url}
         mounted={readPath(value, ['http', 'mountOnWebServer']) === true}
+        token={status?.token}
+        tokenSource={status?.tokenSource}
         tokenFile={status?.tokenFile ?? tokenFile}
         status={status}
         statusRead={statusRead}

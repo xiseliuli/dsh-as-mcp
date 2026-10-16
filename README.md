@@ -160,6 +160,9 @@ introduces.
 }
 ```
 
+The settings panel builds exactly this snippet with the token already filled in, so prefer its
+**Copy** button over editing `<token>` by hand.
+
 **stdio-only client** — use the bundled bridge, which forwards each JSON-RPC message to the
 endpoint over HTTP:
 
@@ -381,6 +384,15 @@ Then **restart DSH Desktop** to mount the plugin.
 > row, so the composed result carries **two rows sharing one id** (`dsh --profile <name>
 > --dump-config` shows both). Use the patch layer or the bundle list, never both. Switch to the
 > bundle route via `dsh plugin add` when you want it to persist across restarts.
+>
+> This is worse than a duplicated row: **every write from the settings panel is refused**, with
+> `Configuration for "dsh-as-mcp" is overridden by a home patch or command-line overlay`. DSH's
+> config editor validates an edit against the *first* composed row while the Loader applies the
+> *last*, so with two rows they never agree and nothing is ever persisted. The panel only says
+> `Write failed; the host state was re-read. Please retry.` — which reads like a transient
+> failure, not a composition mistake. If you are on the bundle route, delete the hand-written
+> `- insert:` row; if you are on the patch route, remove `dsh-as-mcp` from
+> `dsh.profile.bundles`.
 
 ### 3. Smoke-test it
 
@@ -466,23 +478,32 @@ Changing the port is the case worth stating plainly: the plugin stops the old li
 starts the new one, so the endpoint really does move. If the new port is taken, the bind error
 is shown in the panel and in `dsh_info` rather than being swallowed.
 
-The token is rendered **write-only**. Its literal never leaves the host process, so the panel
-shows only whether one is set, and a "clear" button. The copyable client configuration uses a
-`<token>` placeholder and points at the token file. Live endpoint state (listening, bind error,
-enabled tool groups) is served by a read-only route on DSH's connection layer — inside that
-layer's Host/Origin and browser-cookie fence, so it inherits DSH's own authorization and is
-never exposed on a bare port.
+The token is rendered **write-only in the form**: its literal never reaches the settings form, so
+the input only writes, and a "clear" button removes the override this panel wrote (a token the
+composition config supplies is not affected by it and stays in force). Whether one is pinned is
+reported by the host, not guessed by the page: `auth.token` deliberately carries no schema
+default, because the settings service answers "is this secret set?" with `value !== undefined`
+and a default would make every panel claim a token was pinned from the moment the plugin loaded.
 
-The panel needs `@deepseek-ai/schemastery` to register a settings namespace; there is no
-schemastery-free path in DSH. It is declared as an **optional** peer and loaded by dynamic
-import, so a host that cannot supply it loses the section and nothing else — the endpoint keeps
-running from the configuration file. `dsh_info` and the smoke script both report which of the
-two you have.
+The panel's **copyable client configuration** is the one place the literal is deliberately handed
+out. The **Copy** button writes the snippet with the real effective token in it, so pasting it
+just works; the text on screen is masked (with a "Show token" button) so a screenshot or a shared
+screen does not leak it. Both come from the same read-only status route, on DSH's connection
+layer — inside that layer's Host/Origin and browser-cookie fence, so it inherits DSH's own
+authorization and is never exposed on a bare port. `dsh_info` still reports only the token's
+source: a caller that authenticated with the token does not need it echoed into its transcript.
+
+The panel is a `settings.section` page the browser half registers through
+`ctx.configForms.whileServed`, so it appears only while the host actually serves this entry's
+form. That needs `@deepseek-ai/schemastery`: DSH 0.2.0-rc.2 projects a form only for an entry
+whose `Config` carries a `toJSON()`, and it keeps only fields marked `meta.volatile`. There is
+no schemastery-free path to a panel, so the module is a declared peer and imported directly —
+without it the plugin cannot be imported at all, which is why the compatibility range below is
+what protects a host that cannot supply it.
 
 ## Compatibility
 
-- **Harness** ≥ `0.1.5-rc.1` (developed and verified against `dsh-v0.1.5-rc.1`, the version
-  bundled with DSH Desktop 2.0.9), declared as `peerDependencies["@deepseek-ai/dsh"]:
+- **Harness** ≥ `0.1.5-rc.1`, declared as `peerDependencies["@deepseek-ai/dsh"]:
   ">=0.1.5-rc.1"` with no upper bound. DSH's plugin loader reads that range straight from the
   manifest and semver-checks it against the single running runtime version (prereleases
   included) *before* the plugin is imported; an incompatible install is refused unless the host
@@ -492,14 +513,19 @@ two you have.
   a full harness install into every profile just to satisfy it. Optional only changes
   installation — DSH's compatibility gate reads `peerDependencies` regardless of
   `peerDependenciesMeta`, so the version check above still applies in full.
+- **Settings model.** Verified against `dsh 0.2.0-rc.2`, whose settings service replaced the
+  0.1.x API this plugin first shipped against: `settings.installSection` is gone, a namespace is
+  projected from the entry's own `Config` keyed by the Loader row id, and only `meta.volatile`
+  fields are editable — a volatile write is committed into the running reference without a
+  remount. The host half therefore declares no registration at all and reads its configuration
+  through `plainConfig()` on every access, and the only settings call it still makes is
+  `configure({ auto: false }, ctx.fiber)` (it ships its own page). **The panel needs the 0.2
+  settings model**; on a 0.1.x runtime the endpoint still runs from the configuration file, but
+  there is no panel, because that runtime only projects a form for a namespace a plugin
+  registered through the removed call.
 - **No other hard `@deepseek-ai/*` dependency.** This package resolves every other capability
-  structurally through `ctx.get(name)`, and its config schema is a hand-written
-  [Standard Schema](https://standardschema.dev) rather than a schemastery schema — which is all
-  Cordis's `resolveConfig` actually consumes. The one exception is `@deepseek-ai/schemastery`,
-  also declared as an **optional** peer: DSH offers no schemastery-free path to registering a
-  settings namespace, so wanting the panel means declaring it — but optional means a host
-  without it loses only the panel. This is the same stance the installed third-party
-  `dsh-tokenledger` takes.
+  structurally through `ctx.get(name)`. The one exception is `@deepseek-ai/schemastery`, a
+  declared peer imported directly: DSH offers no schemastery-free path to a settings form.
 
 ## Design notes
 

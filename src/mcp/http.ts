@@ -211,8 +211,11 @@ export interface ConnectionLike {
  *
  * Same-origin with the web shell, so the browser can read it without tripping
  * over cross-origin rules — which is what makes live endpoint state available to
- * the panel at all. It carries no secret: the token appears only as a source and
- * a file path, never as a value.
+ * the panel at all. It is also where the panel gets the bearer token's literal,
+ * so its Copy button can hand out a snippet that works as pasted; that is why
+ * the route is registered on the connection layer, behind DSH's own
+ * authorization, rather than on a bare port. `dsh_info` still reports only the
+ * source, never the value.
  *
  * `build()` runs on every request, so nothing here is a cached reading, and a
  * throwing `build()` returns an empty document rather than failing the route.

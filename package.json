@@ -1,6 +1,6 @@
 {
   "name": "dsh-as-mcp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Expose this DeepSeek Harness as an MCP server so other agents can create workspaces, start sessions, write code through DSH, and run commands.",
   "type": "module",
   "license": "MIT",

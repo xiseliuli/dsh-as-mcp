@@ -180,9 +180,9 @@ async function main() {
   }
   if (info.settingsRegistered !== true) {
     process.stdout.write(
-      `${dim('No settings entry: this host provided no settings service, or its plugin resolver could')}\n`
-      + `${dim('not supply @deepseek-ai/schemastery. Configuration then comes from the plugin row alone:')}\n`
-      + `${dim('the endpoint still works, but the settings panel shows no section for it.')}\n`,
+      `${dim('No settings entry: this host provided no settings service, so nothing projects a form for')}\n`
+      + `${dim('this row. Configuration then comes from the plugin row alone: the endpoint still works,')}\n`
+      + `${dim('but the settings panel shows no section for it.')}\n`,
     )
   }
 
