@@ -820,7 +820,7 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 | 仅 `files`、`shell` | 11 | live-checks 65/65（会话/用量/队列/搜索段落跳过） |
 
 带 `--with-model` 的两行是含真实轮次的计数；`tools/release.sh --shapes` 不加该参数时只跑廉价子集，
-同样四个形态报 104/45/59/65。
+同样四个形态报 108/45/62/65。
 
 `node tools/shapes.mjs [--with-model]` 用一条命令复现上面的表：为每个形态建临时 profile、装入打包产物、
 等 harness 服务真正挂载（socket 会比服务先应答）、跑 `tools/live-checks.mjs`、打印计数，并清理所有

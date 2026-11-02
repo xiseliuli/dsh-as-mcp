@@ -286,6 +286,26 @@ async function shellChecks() {
     `${(afterKill.jobs ?? []).length} running`,
   )
 
+  // Two views of one job: a row in the `running` filter must also report
+  // `done: false` from shell_output, and killing it must flip that.
+  if (has('shell_output')) {
+    const probe = await callTool('shell_start', { command: 'sleep 15' })
+    try {
+      const live = await callTool('shell_output', { jobId: probe.jobId })
+      const filtered = await callTool('shell_list', { running: true })
+      check(
+        (filtered.jobs ?? []).some((job) => job.jobId === probe.jobId) && live.done === false,
+        'a job in the running filter reports done:false from shell_output',
+        `done ${String(live.done)}`,
+      )
+      await callTool('shell_kill', { jobId: probe.jobId })
+      const settled = await callTool('shell_output', { jobId: probe.jobId })
+      check(settled.done === true, 'after shell_kill the output reports done', String(settled.done))
+    } finally {
+      await callTool('shell_kill', { jobId: probe.jobId }).catch(() => {})
+    }
+  }
+
   // The retention claim: a job that writes faster than it is polled loses the
   // oldest bytes beyond the retained buffer and says so. 200 KiB written at once
   // must not come back whole, and must not come back unboundedly either.

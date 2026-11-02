@@ -944,7 +944,7 @@ build:
 | `files`, `shell` only | 11 | live-checks 65/65 (session/usage/queue/search sections skip) |
 
 The two turn-running rows are measured with `--with-model`; `tools/release.sh --shapes` without it
-exercises the cheap subset and reports 104/45/59/65 for the same four shapes.
+exercises the cheap subset and reports 108/45/62/65 for the same four shapes.
 
 `node tools/shapes.mjs [--with-model]` reproduces that table in one command: for each shape it boots a
 throwaway profile with that shape's `tools` block, installs the packaged tarball, waits until the harness

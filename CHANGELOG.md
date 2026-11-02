@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.63
+
+- Two views of one background job are now checked against each other: a row in
+  `shell_list { running: true }` must report `done: false` from `shell_output`, and after
+  `shell_kill` that same call must report `done: true`. The two filters were each trusted on
+  their own before.
+
 ## 0.52.62
 
 - Found a real ambiguity while adding a cross-view check: `workspace_list`'s `sessionCount` is
