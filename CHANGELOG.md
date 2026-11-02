@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.67
+
+- Live-verified the `port: 0` configuration end to end: the plugin bound an OS-assigned port
+  (`61532`) and `dsh_info` reported `endpoint: "http://127.0.0.1:61532/mcp", listening: true`
+  — the port the OS chose, not `0`. The panel prefers that live URL since 0.52.66, so both
+  halves of the same problem are now covered. (Two earlier probe attempts failed on my own
+  script, not the plugin: an unbalanced parenthesis and a port discovered from the wrong
+  process.)
+
 ## 0.52.66
 
 - The panel's client snippet now uses the endpoint a client can actually dial:

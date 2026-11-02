@@ -120,6 +120,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 | Title generation leaves no usage record, while its `session/title-llm-request` names the route | 0.52.55 | read a probed session's own log: one `session/title-llm-request` carrying a route, **no** `assistant/message`/`assistant/attempt` event for it, and the receipt's `samples` equals the assistant events in the log (1 = 1). live-checks now asserts that equality, so title spend appearing in the fold would break it |
 
 | The folded usage totals agree with the harness's own token projection | 0.52.56 | a real two-turn session's receipt carries `verifiedAgainstProjection: true` with no `projectionTotals` (the field that appears only on disagreement). live-checks now asserts this, so a shape change on either side fails a live run rather than a stub |
+| `http.port: 0` advertises the port the OS assigned | 0.52.67 | booted a profile with `port: 0`: the plugin bound `61532`, and `dsh_info` answered `endpoint: "http://127.0.0.1:61532/mcp", listening: true` — not `:0`, and not the configured placeholder. Combined with 0.52.66 the panel now prefers this live URL over the mirror |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:
