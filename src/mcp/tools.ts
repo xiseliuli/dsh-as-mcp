@@ -754,6 +754,21 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'Only rows the log attributes to this turn (assistant and tool rows carry turn/step; the user '
               + 'prompt itself has no turn number, so it is not part of a turn-filtered read).',
             ),
+          fromTurn: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              'Only rows attributed to turns at or after this one, for reading one phase of a long transcript. '
+              + 'Same attribution rule as turn: prompt rows carry no turn and are not included.',
+            ),
+          toTurn: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('Only rows attributed to turns at or before this one.'),
           includeToolResults: z
             .union([z.boolean(), z.literal('errors')])
             .optional()
@@ -794,6 +809,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         const transcript = await driver.readTranscript(args.sessionId, args.limit ?? 50, {
           ...(args.sinceSeq === undefined ? {} : { sinceSeq: args.sinceSeq }),
           ...(args.beforeSeq === undefined ? {} : { beforeSeq: args.beforeSeq }),
+          ...(args.fromTurn === undefined ? {} : { fromTurn: args.fromTurn }),
+          ...(args.toTurn === undefined ? {} : { toTurn: args.toTurn }),
           ...(args.includeToolCalls === undefined ? {} : { includeToolCalls: args.includeToolCalls }),
           ...(args.includeToolResults === undefined ? {} : { includeToolResults: args.includeToolResults }),
           ...(args.turn === undefined ? {} : { turn: args.turn }),

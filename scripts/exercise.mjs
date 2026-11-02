@@ -1123,6 +1123,20 @@ try {
         'a turn-filtered read returns only rows attributed to that turn',
         `${(turnRead.messages ?? []).length} row(s) of turn ${someTurn}`,
       )
+      // The same phase, expressed as an inclusive range: this is what pairs with a
+      // session_usage fromTurn/toTurn receipt.
+      const phaseRead = await must('session_messages', {
+        sessionId,
+        limit: 200,
+        fromTurn: someTurn,
+        toTurn: someTurn,
+      })
+      check(
+        (phaseRead.messages ?? []).length === (turnRead.messages ?? []).length &&
+          (phaseRead.messages ?? []).every((entry) => entry.turn === someTurn),
+        'a turn-range read returns the same phase as the exact turn filter',
+        `${(phaseRead.messages ?? []).length} row(s) in range ${someTurn}..${someTurn}`,
+      )
     }
 
     // Only the failed results: the fast path for "why did this turn go wrong".

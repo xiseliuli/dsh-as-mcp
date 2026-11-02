@@ -2322,6 +2322,10 @@ export class DshDriver {
       includeToolResults?: boolean | 'errors'
       /** Only rows the log attributes to this turn; the prompt row has no turn and is filtered out. */
       turn?: number
+      /** Only rows attributed to turns at or after this one, for a phase of the transcript. */
+      fromTurn?: number
+      /** Only rows attributed to turns at or before this one. */
+      toTurn?: number
       /** Per-message character cap; absent means full text (the historical default). */
       maxCharsPerMessage?: number
     } = {},
@@ -2358,6 +2362,8 @@ export class DshDriver {
       const turn = typeof data?.turn === 'number' ? data.turn : undefined
       const step = typeof data?.step === 'number' ? data.step : undefined
       if (options.turn !== undefined && turn !== options.turn) continue
+      if (options.fromTurn !== undefined && (turn === undefined || turn < options.fromTurn)) continue
+      if (options.toTurn !== undefined && (turn === undefined || turn > options.toTurn)) continue
       const rawBlocks = role === 'user'
         ? (event.data as { content?: unknown } | undefined)?.content
         : (event.data as { message?: { content?: unknown } } | undefined)?.message?.content

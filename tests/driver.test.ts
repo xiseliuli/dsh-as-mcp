@@ -948,6 +948,29 @@ describe('bounded replies', () => {
     expect(second.messages.map((message) => message.text)).toEqual(['second answer'])
   })
 
+  it('reads one phase of a transcript by turn range', async () => {
+    const sessions = fakeSessions()
+    sessions.log.push(event('assistant/message', {
+      turn: 1, step: 0, message: { content: [{ type: 'text', text: 'one' }] },
+    }, 1))
+    sessions.log.push(event('assistant/message', {
+      turn: 2, step: 0, message: { content: [{ type: 'text', text: 'two' }] },
+    }, 2))
+    sessions.log.push(event('assistant/message', {
+      turn: 3, step: 0, message: { content: [{ type: 'text', text: 'three' }] },
+    }, 3))
+    const { driver } = driverWith(sessions)
+
+    const phase = await driver.readTranscript('session-1', 10, { fromTurn: 2, toTurn: 3 })
+    expect(phase.messages.map((message) => [message.turn, message.text])).toEqual([
+      [2, 'two'],
+      [3, 'three'],
+    ])
+    // Rows without a turn (the user prompt) are not part of a turn-attributed read.
+    const middle = await driver.readTranscript('session-1', 10, { fromTurn: 2, toTurn: 2 })
+    expect(middle.messages.map((message) => message.text)).toEqual(['two'])
+  })
+
   it('includes tool results as their own rows only when asked', async () => {
     const sessions = fakeSessions([userMessage('req-1', 'run it', 0)])
     sessions.log.push(event('assistant/message', {

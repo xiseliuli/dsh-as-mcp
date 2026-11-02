@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.47.0
+
+- `session_messages` accepts `fromTurn`/`toTurn`: read one phase of a long transcript
+  by turn range, matching the `fromTurn`/`toTurn` receipt `session_usage` now offers.
+  Attribution follows the existing rule — assistant and tool rows carry `turn`; the
+  user prompt has no turn number and is not part of a turn-attributed read.
+- Driver and endpoint tests cover the range and its forwarding; the acceptance run
+  compares a range read with the exact-turn read (same rows). Both READMEs updated.
+
 ## 0.46.0
 
 - `session_usage` gained `fromTurn`/`toTurn`: fold only the turns in that inclusive
