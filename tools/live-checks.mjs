@@ -503,6 +503,44 @@ async function shellLimitsChecks() {
   }
 }
 
+// --- relative paths --------------------------------------------------------
+
+/**
+ * Every file tool takes a `cwd` for relative paths; the resolution should be shared, so
+ * a relative write is readable and listable through the same base, and a missing relative
+ * path says which path it resolved to.
+ */
+async function relativePathChecks() {
+  section('relative path resolution')
+  if (!has('file_write') || !has('file_read') || !has('file_list')) {
+    skip('relative path resolution', 'needs file_write, file_read and file_list')
+    return
+  }
+  const dir = join('/tmp', `dsh-as-mcp-live-rel-${process.pid}`)
+  rmSync(dir, { recursive: true, force: true })
+  try {
+    await callTool('file_write', { path: 'nested/rel.txt', content: 'relative', cwd: dir })
+    check(
+      (await callTool('file_read', { path: 'nested/rel.txt', cwd: dir })).text === 'relative',
+      'file_write and file_read resolve a relative path against cwd',
+    )
+    const listed = await callTool('file_list', { path: '.', cwd: dir })
+    check(
+      (listed.entries ?? []).some((entry) => entry.name === 'nested'),
+      'file_list { path: ".", cwd } lists that directory',
+      `${(listed.entries ?? []).length} entr(ies)`,
+    )
+    const missing = await attemptTool('file_read', { path: 'nested/missing.txt', cwd: dir })
+    check(
+      missing.ok === false && /missing\.txt/.test(missing.error ?? ''),
+      'a missing relative path names the resolved file in its error',
+      missing.error?.slice(0, 70),
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // --- listing and image limits ----------------------------------------------
 
 /**
@@ -2251,6 +2289,7 @@ try {
   await forkRenameChecks()
   await toolBridgeChecks()
   await workspaceChecks()
+  await relativePathChecks()
   await fileEditChecks()
   await concurrencyChecks()
   await availabilityCheck()

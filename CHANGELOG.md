@@ -3,6 +3,12 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.28
+
+- The `cwd` contract shared by the file tools now has live checks: a relative write is
+  readable and listable through the same base (`file_list { path: ".", cwd }`), and a
+  missing relative path names the resolved file in its error. All cheap; no turns.
+
 ## 0.52.27
 
 - `session_fork`'s two cut forms now have negative live checks: passing both `atSeq` and
