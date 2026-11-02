@@ -112,6 +112,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 | A mid-turn `session_set_model` applies to the running turn's later steps | 0.52.1 | probed: a turn started on deepseek-official, was switched to deepseek-account mid-flight, and reported both routes; per-turn `byModel` split it 18 062 + 18 586 = 36 648 = the row total. live-checks asserts this |
 
 | A message queued by **another MCP client** can be seen and withdrawn here | 0.52.5 | live-checks orchestration: a second client (its own initialize and ids) queues a message, the first client lists and removes it, and the withdrawn text never runs. The queue lives on the session, so a connection-scoped id would show up here |
+| Owned-session ownership survives a plugin/host restart | 0.52.12 | created a session under `session.scope: "owned"` (it appeared in `$DSH_HOME/dsh-as-mcp/owned.json`), killed the process, restarted the same profile: `session_messages` on that id was served, while a session id read from another profile's log was refused with the scope message. The probe id was then removed from the record |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:

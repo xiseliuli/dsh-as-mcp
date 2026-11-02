@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.12
+
+- Verified the restart behavior README already promised for `session.scope: "owned"`:
+  a session created through the endpoint is written to `$DSH_HOME/dsh-as-mcp/owned.json`,
+  and after killing and restarting the process the same session was still readable while
+  a session from another profile's logs was refused with the scope message. Unit tests
+  covered the record's round-trip; this covered the composition. The probe id was removed
+  from the real record afterwards; the throwaway profile was deleted.
+
 ## 0.52.11
 
 - The drift check now owns one more number that had drifted before: the capability-probe
