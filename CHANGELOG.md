@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.29.2
+
+- Added `docs/LIVE-VERIFICATION.md`: a record of which behaviours were checked
+  against a real harness, the version that shipped each one, and how to reproduce
+  the check — plus an explicit "not verified here" list (desktop-composition
+  subagent accounting pending the app restart, panel visuals, chunked-body
+  bounding, an observed sandbox refusal) and the reasons. Linked from both
+  READMEs; versions were cross-checked against this changelog rather than
+  remembered.
+
 ## 0.29.1
 
 - Verified the other two `session_queue` actions against a live harness and

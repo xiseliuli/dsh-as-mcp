@@ -895,6 +895,10 @@ service it stands in for. That class produced four real failures here, three in 
 case, so run it after any change to the driver. `docs/STUB-FIDELITY-AUDIT.md` is the audit that
 enumerated the class; it is worth reading before writing a double for a harness service.
 
+`docs/LIVE-VERIFICATION.md` records which behaviours have been checked against a real harness,
+with the version that shipped each one and how to reproduce the check — including the list of
+things that are *not* verified here and why.
+
 A third script is maintainer-only and **not in the published package**: `tools/live-checks.mjs`. It
 covers what the shipped two cannot — the protocol contract a generic MCP client relies on (parse
 error, method-not-found, the 401 Bearer challenge, the declared-oversize refusal), list/paging
