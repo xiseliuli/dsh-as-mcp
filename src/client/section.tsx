@@ -480,6 +480,10 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
       {snapshot.status === 'unavailable' && <p className="dshmcp_error">{t('state.unavailable')}</p>}
       {snapshot.status === 'ready' && !snapshot.writable && <p className="dshmcp_note">{t('state.readonly')}</p>}
       {writeError && <p className="dshmcp_error">{t('state.writeFailed')}</p>}
+      {/* The status route answers `undefined` on a host that mounts none. Saying so is
+          better than an unexplained missing badge: the panel is honest about what it
+          could not observe. */}
+      {!statusRead && <p className="dshmcp_note">{t('state.statusUnknown')}</p>}
 
       {GROUPS.map((group) => (
         <Group

@@ -117,6 +117,7 @@ export const zh: Record<string, string> = {
   'state.unavailable': '设置服务不可用，无法从面板修改配置。',
   'state.readonly': '当前页面无法写入设置（非本机访问）。',
   'state.writeFailed': '写入失败，已重新读取。请重试。',
+  'state.statusUnknown': '这里读不到端点状态：健康标记保持隐藏，而不是猜一个值。',
 }
 
 /** English dictionary. */
@@ -224,4 +225,5 @@ export const en: Record<string, string> = {
   'state.unavailable': 'The settings service is unavailable, so this panel cannot change the configuration.',
   'state.readonly': 'This page cannot write settings (it is not a loopback page).',
   'state.writeFailed': 'Write failed; the host state was re-read. Please retry.',
+  'state.statusUnknown': 'The endpoint status cannot be read here; health is left hidden rather than guessed.',
 }

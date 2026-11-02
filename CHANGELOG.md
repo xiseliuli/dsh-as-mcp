@@ -3,6 +3,12 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.65
+
+- A panel on a host that mounts no status route (or whose fetch fails) used to show no health
+  badge and no reason. It now says the endpoint status cannot be read here — health stays
+  hidden, which is the honest state, but silently missing looked like an unfinished panel.
+
 ## 0.52.64
 
 - The panel's client configuration no longer appears while its configuration is half-read: it
