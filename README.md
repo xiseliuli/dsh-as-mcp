@@ -932,12 +932,15 @@ covers what the shipped two cannot — the protocol contract a generic MCP clien
 error, method-not-found, the 401 Bearer challenge, the declared-oversize refusal), list/paging
 contracts that need real services on the other end, and, with `--with-model`, the two features that
 need a real turn: progress notifications streaming while the turn runs, and MCP
-`notifications/cancelled` ending the wait promptly with `turn.aborted`. It resolves the endpoint and
-token exactly like the shipped scripts and exits non-zero on a failure.
+`notifications/cancelled` ending the wait promptly with `turn.aborted`, and — with `--with-subagent` —
+that a real subagent turn is billed inside its parent's usage as its own row and is readable through the
+owned tree. It resolves the endpoint and token exactly like the shipped scripts and exits non-zero on a
+failure.
 
 ```bash
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp                     # no LLM calls
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model        # spends real tokens
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-subagent     # also spawns a real subagent
 ```
 
 Two rules this codebase learned the hard way:

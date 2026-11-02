@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.3
+
+- Verified the last outstanding accounting question against a real harness: the
+  agent spawned a subagent, `session_usage { includeSubagents: true }` returned it
+  as its own row (parent 27,419 tokens, subagent 18,567) with the report total
+  equal to their sum, and under `session.scope: "owned"` the subagent session was
+  listed, billed and readable as part of the owned tree.
+- `tools/live-checks.mjs` gained `--with-subagent`, so that check is repeatable
+  instead of a one-off probe: it spawns a helper, asserts the reply, the
+  subagent row, the totals identity, and the tree access (23/23 with the model
+  checks on). The desktop composition remains the one unverified path.
+
 ## 0.30.2
 
 - `session.scope: "owned"` now treats **subagent sessions below an owned session**

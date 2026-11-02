@@ -19,6 +19,7 @@
  *
  *   node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp
  *   node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model
+ *   node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-subagent
  *
  * The endpoint resolution matches the shipped scripts: `--url`, then
  * `DSH_AS_MCP_URL`, then the loopback default; the token comes from `--token`,
@@ -360,6 +361,53 @@ async function cancellationCheck() {
   check(/after cancellation/.test(after.turn?.reply ?? ''), 'the session is usable afterwards', after.turn?.reply)
 }
 
+async function subagentCheck() {
+  section('subagent accounting (real turn)')
+  const session = await callTool('session_create', { cwd: process.cwd() })
+  const prompted = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Use your subagent tool to spawn one helper agent with the task "Reply with exactly: '
+      + 'SUBAGENT-OK". Wait for it, then reply exactly: PARENT SAW <its answer>.',
+    timeoutMs: 600_000,
+  })
+  check(
+    /SUBAGENT-OK/.test(prompted.turn?.reply ?? ''),
+    'the agent spawned a subagent and reported its answer',
+    (prompted.turn?.reply ?? '').slice(0, 60),
+  )
+
+  const report = await callTool('session_usage', {
+    sessionId: session.sessionId,
+    limit: 20,
+    includeSubagents: true,
+  })
+  const rows = report.sessions ?? []
+  const child = rows.find((row) => row.origin === 'subagent')
+  check(child !== undefined, 'usage folds the subagent session as its own row', `${rows.length} row(s)`)
+  check(
+    report.totals?.totalTokens === rows.reduce((sum, row) => sum + (row.usage?.totals?.totalTokens ?? 0), 0),
+    'the report total is the sum of the rows (no silent exclusion)',
+    `${report.totals?.totalTokens ?? '?'} tokens`,
+  )
+
+  if (child !== undefined) {
+    // Subagent sessions belong to the session tree: reading the child is reading
+    // the cost of the parent, so this must work under session.scope "owned" too.
+    const transcript = await callTool('session_messages', { sessionId: child.sessionId, limit: 5 })
+    check(
+      (transcript.messages ?? []).length > 0,
+      'the subagent session is readable by id',
+      `${(transcript.messages ?? []).length} message(s)`,
+    )
+    const listed = await callTool('session_list', { limit: 10 })
+    check(
+      (listed.sessions ?? []).some((entry) => entry.sessionId === child.sessionId),
+      'the subagent session is listed with its parent',
+      `${listed.total ?? '?'} session(s)`,
+    )
+  }
+}
+
 // --- run -------------------------------------------------------------------
 
 process.stdout.write(`${bold('dsh-as-mcp live checks')}\n`)
@@ -387,11 +435,16 @@ try {
   await protocolChecks()
   await shellChecks()
   const sessionId = await listChecks()
-  if (flag('--with-model')) {
+  const withSubagent = flag('--with-subagent')
+  if (flag('--with-model') || withSubagent) {
     await progressCheck(sessionId)
     await cancellationCheck()
+    if (withSubagent) await subagentCheck()
   } else {
-    process.stdout.write(`\n${dim('skipping the checks that spend tokens: pass --with-model to run them')}\n`)
+    process.stdout.write(
+      `\n${dim('skipping the checks that spend tokens: pass --with-model (progress/cancellation) '
+        + 'or --with-subagent (adds a real subagent turn) to run them')}\n`,
+    )
   }
 } catch (error) {
   check(false, 'run aborted', error instanceof Error ? error.message : String(error))
