@@ -634,7 +634,8 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 `mountOnWebServer` 可以单独使用：配合 `enabled: false`，端点只挂在 DSH 的 web server 上
 （`<dsh 主机>:<dsh web 端口><path>`），不再占第二个端口。插件会等待该服务挂载，然后注册精确路由——
 `dsh_info` 里看 `mountedOnDshWebServer`，等待期间还有 `mountNote`。服务暂时不存在不算错误：插件照常
-加载，web server 一出现就挂上去。
+加载，web server 一出现就挂上去。挂载路由与独立监听行为一致：进度通知按秒实时流出（实测不是结束后
+一次性补齐），取消通知也会中止轮次。
 
 ## 设置面板
 

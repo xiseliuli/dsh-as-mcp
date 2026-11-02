@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.24.1
+
+- Verified the web-server mount against the same protocol behaviours: with
+  `enabled: false, mountOnWebServer: true` the only listener is DSH's own, and
+  progress notifications stream roughly once a second (not batched at the end)
+  while a cancellation notification settled the wait 11 ms after it arrived, with
+  `turn.aborted: true` and the session still usable.
+
 ## 0.24.0
 
 - **MCP `notifications/cancelled` is now honored.** The SDK version in use

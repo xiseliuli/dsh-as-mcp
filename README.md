@@ -715,7 +715,9 @@ key named, because a silently ignored typo means your override is not being appl
 **only** on DSH's web server at `<dsh host>:<dsh web port><path>`, with no second port. The
 plugin waits for that service to mount, then registers an exact route — `dsh_info` reports
 `mountedOnDshWebServer`, and `mountNote` while it is still waiting. A missing service is not an
-error: the plugin keeps loading and mounts the moment the web server appears.
+error: the plugin keeps loading and mounts the moment the web server appears. The mounted route
+behaves like the listener: progress notifications stream as they happen (verified arriving about
+once a second, not batched at the end) and cancellation notifications stop the turn.
 
 ## Settings panel
 
