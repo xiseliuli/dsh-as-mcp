@@ -136,6 +136,47 @@ async function rpc(method, params) {
   return result.payload?.result
 }
 
+/**
+ * A second MCP client on the same endpoint, with its own initialize and request ids.
+ *
+ * The queue lives on the session, not on a connection, so a message one client queued
+ * must be visible to and withdrawable by another. This models "the message came from a
+ * different client" without needing the DSH UI's own client.
+ */
+function secondaryClient() {
+  let sequence = 50_000
+  let initialized = false
+  const exchange = async (method, params) => {
+    const id = sequence++
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+    })
+    const body = await response.text()
+    const events = body.split('\n').filter((line) => line.startsWith('data:')).map((line) => JSON.parse(line.slice(5)))
+    const payload = events.find((entry) => entry.id === id) ?? events[0]
+    if (payload?.error) throw new Error(`secondary JSON-RPC ${payload.error.code}: ${payload.error.message}`)
+    return payload?.result
+  }
+  return {
+    async callTool(name, args = {}) {
+      if (!initialized) {
+        await exchange('initialize', {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'live-checks-secondary', version: '1' },
+        })
+        initialized = true
+      }
+      const result = await exchange('tools/call', { name, arguments: args })
+      const text = result?.content?.[0]?.text ?? ''
+      if (result?.isError === true) throw new Error(`${name}: ${text}`)
+      return JSON.parse(text)
+    },
+  }
+}
+
 async function callTool(name, args = {}) {
   const result = await rpc('tools/call', { name, arguments: args })
   const text = result?.content?.[0]?.text ?? ''
@@ -1469,6 +1510,28 @@ async function orchestrationCheck() {
       })
       check(removed.accepted === true, 'the queued message can be withdrawn')
     }
+    // Cross-client: a message queued by another MCP client must be visible and
+    // withdrawable here. The queue lives on the session, so a connection-scoped id
+    // would be a bug a single-client test cannot see.
+    const secondary = secondaryClient()
+    await secondary.callTool('session_prompt', {
+      sessionId: session.sessionId,
+      prompt: 'Reply with exactly: QUEUED-FROM-OTHER-CLIENT',
+      wait: false,
+    })
+    const crossQueue = await callTool('session_queue', { sessionId: session.sessionId })
+    const foreign = (crossQueue.queued ?? []).find(
+      (entry) => String(entry.text ?? '').includes('QUEUED-FROM-OTHER-CLIENT'),
+    )
+    check(foreign !== undefined, 'a message queued by another client is visible here', `${(crossQueue.queued ?? []).length} queued`)
+    if (foreign !== undefined) {
+      const withdrawn = await callTool('session_queue', {
+        sessionId: session.sessionId,
+        messageId: foreign.id,
+        action: 'remove',
+      })
+      check(withdrawn.accepted === true, 'a message queued by another client can be withdrawn here')
+    }
   } else {
     skip('queue checks in orchestration', 'this endpoint advertises no session_queue')
   }
@@ -1506,8 +1569,9 @@ async function orchestrationCheck() {
   const messages = await callTool('session_messages', { sessionId: session.sessionId, limit: 100 })
   const transcript = messages.messages ?? []
   check(
-    !transcript.some((message) => String(message.text ?? '').includes('QUEUED-NEVER')),
-    'the withdrawn message never ran',
+    !transcript.some((message) => String(message.text ?? '').includes('QUEUED-NEVER')) &&
+      !transcript.some((message) => String(message.text ?? '').includes('QUEUED-FROM-OTHER-CLIENT')),
+    'the withdrawn messages never ran (including the one another client queued)',
   )
   if (preserved) {
     check(

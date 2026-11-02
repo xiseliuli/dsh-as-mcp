@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.5
+
+- The orchestration live check now covers a **second MCP client**: it queues a message
+  from another connection, sees it in `session_queue` from the first, withdraws it there,
+  and asserts the withdrawn text never ran. The queue lives on the session, so a
+  connection-scoped id would be a bug a single-client test cannot see. (A message queued
+  from the DSH UI itself remains unverified — that needs the UI.)
+
 ## 0.52.4
 
 - The two script-integration suites (`smoke-script`, `exercise-script`) allow one retry per

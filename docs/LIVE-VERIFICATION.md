@@ -111,6 +111,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 | Chunked request bodies are size-bounded, not just declared ones | 0.51.11 | a 70 MB body sent with `Transfer-Encoding: chunked` (no `content-length`) answered `413 request body too large` in 71 ms; a valid chunked `initialize` answered 200 |
 | A mid-turn `session_set_model` applies to the running turn's later steps | 0.52.1 | probed: a turn started on deepseek-official, was switched to deepseek-account mid-flight, and reported both routes; per-turn `byModel` split it 18 062 + 18 586 = 36 648 = the row total. live-checks asserts this |
 
+| A message queued by **another MCP client** can be seen and withdrawn here | 0.52.5 | live-checks orchestration: a second client (its own initialize and ids) queues a message, the first client lists and removes it, and the withdrawn text never runs. The queue lives on the session, so a connection-scoped id would show up here |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:
@@ -121,7 +122,7 @@ These are gaps in *evidence*, not known defects:
 | Desktop-composition acceptance run | same restart dependency | run `scripts/exercise.mjs` against the desktop profile's endpoint |
 | Panel/visual rendering (widgets, slots, settings page layout) | the `ifc-view` MCP server used for visual inspection was disconnected in this session | reconnect `ifc-view`, or inspect the panel by hand |
 | `session_usage` money figures match the cost plugin's own numbers **exactly** | money is a price-ledger estimate; the documented position is that tokens and money do not reconcile to the last cent | compare on a known model/price row and record the delta |
-| Mutating a message queued by a **different** client (the DSH UI) with `session_queue` | the queue projection and ids are the same code path, but only endpoint-queued messages were withdrawn live | queue a message from the DSH UI while a turn runs, then `remove` it through the endpoint |
+| Mutating a message queued by the **DSH UI** with `session_queue` | a *second MCP client* is covered live (0.52.5), and the queue projection/ids are shared code; the UI's own client was not driven | queue a message from the DSH UI while a turn runs, then `remove` it through the endpoint |
 
 ## Reproducing a check
 
