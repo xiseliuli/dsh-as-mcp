@@ -119,6 +119,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 | `http.host` is validated, and an invalid one stops the endpoint from binding | 0.52.51 | booted a profile with `http.host: ''`: no listener on the plugin port and the process output carried `http.host must not be empty: use 127.0.0.1 for loopback, or 0.0.0.0 to listen on every interface`. With `0.0.0.0` the listener **does** bind (the non-loopback warning path exists in code, but plugin `log.warn` output was not captured in this harness's stdout, so the warning itself is not observed here) |
 | Title generation leaves no usage record, while its `session/title-llm-request` names the route | 0.52.55 | read a probed session's own log: one `session/title-llm-request` carrying a route, **no** `assistant/message`/`assistant/attempt` event for it, and the receipt's `samples` equals the assistant events in the log (1 = 1). live-checks now asserts that equality, so title spend appearing in the fold would break it |
 
+| The folded usage totals agree with the harness's own token projection | 0.52.56 | a real two-turn session's receipt carries `verifiedAgainstProjection: true` with no `projectionTotals` (the field that appears only on disagreement). live-checks now asserts this, so a shape change on either side fails a live run rather than a stub |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:

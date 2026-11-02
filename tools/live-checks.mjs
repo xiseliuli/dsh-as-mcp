@@ -2331,6 +2331,16 @@ async function modelSelectionCheck() {
     // session receipt must agree, and the session total must be their sum.
     const replyTokens = reply.turn?.usage?.totalTokens
     const switchedTokens = switched.turn?.usage?.totalTokens
+    // The fold is ours; the harness keeps its own token projection. When both exist,
+    // the receipt says whether they agreed — a live disagreement is the signal that one
+    // side changed shape.
+    const observed = receipt.sessions?.[0]?.usage
+    check(
+      observed?.verifiedAgainstProjection === true && observed?.projectionTotals === undefined,
+      "the receipt's folded totals are verified against the harness's own projection",
+      `verified ${String(observed?.verifiedAgainstProjection)}`,
+    )
+
     // DSH's own price plugin, when installed, is the only source of money: the info
     // block claims costAvailable, so the receipt must actually have it.
     if (info.usage?.costAvailable === true) {
