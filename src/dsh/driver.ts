@@ -1993,6 +1993,9 @@ export class DshDriver {
       cwd?: string
       updatedAt?: number
       running?: boolean
+      /** Present for a subagent session, so a search result shows its place in the tree. */
+      parentSessionId?: string
+      origin?: 'subagent'
     }[]
     hasMore: boolean
     /** Matches dropped because session.scope is "owned" and they were not ours. */
@@ -2063,6 +2066,8 @@ export class DshDriver {
           ...(summary?.cwd === undefined ? {} : { cwd: summary.cwd }),
           ...(summary?.updatedAt === undefined ? {} : { updatedAt: summary.updatedAt }),
           ...(summary?.running === undefined ? {} : { running: summary.running }),
+          ...(summary?.parentSessionId === undefined ? {} : { parentSessionId: summary.parentSessionId }),
+          ...(summary?.origin === 'subagent' ? { origin: 'subagent' as const } : {}),
         }
       }),
       hasMore: limit !== undefined && result.items.length > limit ? true : result.hasMore,

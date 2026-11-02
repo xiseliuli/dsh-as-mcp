@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.35.0
+
+- `session_search` hits now carry `parentSessionId` and `origin: "subagent"` when the
+  matched session is an agent child, from the same listing the enrichment already
+  performs. A search result now says where in the tree it sits, not just which
+  workspace and how recent.
+- Verified with a real subagent and the search index enabled (live-checks
+  --with-subagent): the child's "SUBAGENT-OK" hit carried its parent.
+
 ## 0.34.0
 
 - `session_list` gained an `origin` filter (`root` | `subagent`), applied before the

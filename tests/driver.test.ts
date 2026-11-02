@@ -542,6 +542,45 @@ describe('DshDriver updateQueue', () => {
     })
   })
 
+  it('marks a subagent hit with its parent so search results show the tree', async () => {
+    const sessions = fakeSessions()
+    ;(sessions.controller as Record<string, unknown>).search = async () => ({
+      items: [
+        { sessionId: 'session-1', snippet: 'parent hit' },
+        { sessionId: 'session-child', snippet: 'child hit' },
+      ],
+      hasMore: false,
+    })
+    sessions.controller.list = async () => ({
+      items: [
+        { sessionId: 'session-1', cwd: '/tmp', running: false, blank: false, updatedAt: 2 },
+        {
+          sessionId: 'session-child',
+          cwd: '/tmp',
+          running: false,
+          blank: false,
+          updatedAt: 1,
+          parentSessionId: 'session-1',
+          origin: 'subagent',
+        },
+      ],
+    })
+    const { driver } = driverWith(sessions)
+    const result = await driver.searchSessions({ query: 'hit' })
+    expect(result.items).toEqual([
+      { sessionId: 'session-1', snippet: 'parent hit', cwd: '/tmp', updatedAt: 2, running: false },
+      {
+        sessionId: 'session-child',
+        snippet: 'child hit',
+        cwd: '/tmp',
+        updatedAt: 1,
+        running: false,
+        parentSessionId: 'session-1',
+        origin: 'subagent',
+      },
+    ])
+  })
+
   it('still returns the matches when the listing for context fails', async () => {
     const driver = searchable(
       { items: [{ sessionId: 'a', snippet: 'hit' }], hasMore: false },

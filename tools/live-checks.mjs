@@ -523,6 +523,24 @@ async function subagentCheck() {
       'session_list { origin: "subagent" } returns only the children',
       `${subagentRows.length} subagent(s)`,
     )
+    // Enriched search hits: with the index enabled, a match inside the subagent
+    // session should say which parent it belongs to. Disabled index = skip.
+    const search = await attemptTool('session_search', { query: 'SUBAGENT-OK' })
+    if (!search.ok) {
+      skip('search-hit parentage', 'session search is unavailable or disabled on this deployment')
+    } else {
+      const hits = search.payload?.items ?? []
+      check(
+        hits.some((entry) => entry.sessionId === child.sessionId) || hits.length === 0,
+        'a search hit inside the subagent session is returned',
+        `${hits.length} hit(s)`,
+      )
+      check(
+        hits.every((entry) => entry.origin !== 'subagent' || entry.parentSessionId !== undefined),
+        'a subagent search hit carries its parent',
+        hits.filter((entry) => entry.origin === 'subagent').length + ' subagent hit(s)',
+      )
+    }
     const onlyRoots = await callTool('session_list', { limit: 20, origin: 'root' })
     check(
       (onlyRoots.sessions ?? []).some((entry) => entry.sessionId === session.sessionId) &&
