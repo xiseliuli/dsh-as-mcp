@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.54
+
+- The acceptance run now pins fork accounting instead of only "inherited > 0": the child's
+  `inherited` must equal the parent's total at the cut, a fresh child's `totals` must be zero,
+  and after the child runs one turn its `totals` must equal that reply's usage while
+  `inherited` stays the parent's figure (with exactly one `byTurn` row). The acceptance run
+  goes from 163 to 166 checks and is green; both READMEs carry the new count.
+
 ## 0.52.53
 
 - Prompt image attachments now have live coverage: one real turn carries a 1×1 PNG and

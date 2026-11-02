@@ -1050,6 +1050,11 @@ try {
 
   section('fork')
   {
+    // The parent's spend at the cut becomes the child's `inherited`; the child's
+    // `totals` must cover only what the child itself runs.
+    const parentTokens = usageReported
+      ? (await must('session_usage', { sessionId })).sessions?.[0]?.usage?.totals?.totalTokens
+      : undefined
     // Forking copies the conversation prefix, so the child continues the same
     // context for the price of one turn instead of a replay.
     const forked = await must('session_fork', { sessionId })
@@ -1069,6 +1074,16 @@ try {
       const childUsage = await must('session_usage', { sessionId: forked.sessionId })
       const inherited = childUsage.sessions?.[0]?.usage?.inherited?.totalTokens ?? 0
       check(inherited > 0, 'usage separates the inherited prefix from the child\'s own spend', `${inherited} inherited tokens`)
+      check(
+        typeof parentTokens === 'number' && inherited === parentTokens,
+        'the inherited figure is exactly the parent\'s spend at the cut',
+        `${inherited} inherited vs parent ${parentTokens ?? '?'}`,
+      )
+      check(
+        childUsage.sessions?.[0]?.usage?.totals?.totalTokens === 0,
+        'a freshly forked child has no spend of its own yet',
+        String(childUsage.sessions?.[0]?.usage?.totals?.totalTokens),
+      )
     }
 
     const childReply = await must('session_prompt', {
@@ -1081,6 +1096,19 @@ try {
       'the forked session continues the conversation',
       (childReply.turn?.reply ?? 'no reply').slice(0, 60),
     )
+    if (usageReported) {
+      const after = await must('session_usage', { sessionId: forked.sessionId, includeTurns: true })
+      const row = after.sessions?.[0]
+      const ownTokens = row?.usage?.totals?.totalTokens
+      const inheritedAfter = row?.usage?.inherited?.totalTokens
+      const turns = row?.usage?.byTurn ?? []
+      check(
+        ownTokens === childReply.turn?.usage?.totalTokens && turns.length === 1 &&
+          inheritedAfter === parentTokens,
+        'the child\'s own turn is counted in totals, the prefix stays inherited',
+        `own ${ownTokens ?? '?'} (reply ${childReply.turn?.usage?.totalTokens ?? '?'}), inherited ${inheritedAfter ?? '?'}`,
+      )
+    }
 
     const listed = await must('session_list', { limit: 50 })
     check(
