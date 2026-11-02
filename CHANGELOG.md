@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.27
+
+- `session_fork`'s two cut forms now have negative live checks: passing both `atSeq` and
+  `atTurn` is refused ("pass atSeq or atTurn, not both"), and an unknown `atTurn` lists the
+  turns the log actually records instead of failing vaguely. Both reuse the two-turn
+  session `--with-model` already has, so they cost no turns.
+
 ## 0.52.26
 
 - `file_read_image` format coverage: the live check classifies a **GIF**, **WEBP** and

@@ -2118,6 +2118,26 @@ async function modelSelectionCheck() {
 
     // Fork by turn boundary: the child's transcript must stop before the later turn.
     if (has('session_fork')) {
+      const ambiguous = await attemptTool('session_fork', {
+        sessionId: session.sessionId,
+        atSeq: 1,
+        atTurn: firstTurn,
+      })
+      check(
+        ambiguous.ok === false && /not both/.test(ambiguous.error ?? ''),
+        'naming both a seq and a turn for the fork cut is refused',
+        ambiguous.error?.slice(0, 60),
+      )
+      const unknownTurn = await attemptTool('session_fork', {
+        sessionId: session.sessionId,
+        atTurn: 99_999,
+      })
+      check(
+        unknownTurn.ok === false && /not in session .* log/.test(unknownTurn.error ?? '') &&
+          /the turns it records are/.test(unknownTurn.error ?? ''),
+        'forking at a turn the log does not record says which turns it does',
+        unknownTurn.error?.slice(0, 80),
+      )
       const forked = await callTool('session_fork', { sessionId: session.sessionId, atTurn: firstTurn })
       const childTranscript = await callTool('session_messages', { sessionId: forked.sessionId, limit: 50 })
       const childText = (childTranscript.messages ?? []).map((message) => String(message.text ?? '')).join('\n')
