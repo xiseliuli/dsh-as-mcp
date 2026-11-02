@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.53
+
+- Prompt image attachments now have live coverage: one real turn carries a 1×1 PNG and
+  settles (the path is read through the filesystem seam and becomes an image block), a
+  five-image prompt is refused before any turn runs, and an unreadable image path is an error
+  that names the file.
+- The first attempt also documented a real distinction: the 1×1 PNG used by the image-reading
+  check (a valid header, enough for `file_read_image`'s byte sniffing) was refused as
+  "Unsupported or malformed image data" when attached to a prompt — the prompt path decodes
+  the image. The check now embeds a normally-encoded 2×2 PNG, and both READMEs say that
+  attachments must be decodable, not just sniffable. Full shape after the fix: 150/150.
+
 ## 0.52.52
 
 - Live-verified `approval.policy`: with `allow`, `session_create` reports

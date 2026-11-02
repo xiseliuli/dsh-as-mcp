@@ -1898,6 +1898,60 @@ async function orchestrationCheck() {
   }
 }
 
+// --- images attached to a prompt -------------------------------------------
+
+/**
+ * A prompt can carry screenshots. The path is read through the same filesystem seam and
+ * becomes an image block for the model, so this checks the accepted path end to end (one
+ * real turn) and the refusals that cost nothing: more than four images, and an unreadable
+ * path.
+ */
+async function promptImageCheck() {
+  section('prompt images (real turn)')
+  if (!has('session_prompt') || !has('shell_run')) {
+    skip('prompt image check', 'needs session_prompt and shell_run')
+    return
+  }
+  const png = join('/tmp', `dsh-as-mcp-live-prompt-${process.pid}.png`)
+  const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP8zwACTGCSAQANHQEDgslx/wAAAABJRU5ErkJggg=='
+  try {
+    await callTool('shell_run', {
+      command: `node -e "require('node:fs').writeFileSync('${png}', Buffer.from('${base64}','base64'))"`,
+    })
+    const session = await callTool('session_create', { cwd: process.cwd() })
+    const attached = await callTool('session_prompt', {
+      sessionId: session.sessionId,
+      prompt: 'Reply with exactly: IMAGE OK',
+      images: [{ path: png }],
+      timeoutMs: 300_000,
+    })
+    check(/IMAGE OK/.test(attached.turn?.reply ?? ''), 'a prompt can carry an image and still settle', attached.turn?.reply?.slice(0, 40))
+
+    const five = Array.from({ length: 5 }, () => ({ path: png }))
+    const tooMany = await attemptTool('session_prompt', {
+      sessionId: session.sessionId,
+      prompt: 'too many',
+      images: five,
+      wait: false,
+    })
+    check(tooMany.ok === false, 'more than four prompt images is refused before the turn', tooMany.error?.slice(0, 60))
+
+    const unreadable = await attemptTool('session_prompt', {
+      sessionId: session.sessionId,
+      prompt: 'missing image',
+      images: [{ path: `${png}.missing` }],
+      wait: false,
+    })
+    check(
+      unreadable.ok === false && /missing/.test(unreadable.error ?? ''),
+      'an unreadable prompt image names the path',
+      unreadable.error?.slice(0, 70),
+    )
+  } finally {
+    rmSync(png, { force: true })
+  }
+}
+
 // --- idempotent retry across clients ---------------------------------------
 
 /**
@@ -2417,6 +2471,7 @@ try {
       await midTurnSwitchCheck()
       await steerCheck()
       await idempotencyCheck()
+      await promptImageCheck()
       await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()
     }
