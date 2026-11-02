@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.40
+
+- Hardened the progress-notification check after one full-shape run reported 144/1 that
+  could not be reproduced (three later runs: 145/0, 145/0, 145/0). The suspect assertion
+  required **two** notifications more than 500 ms apart, but the sender is rate-limited to
+  roughly one a second, so a fast turn can legitimately emit a single one. The check now
+  requires that the first notification arrived *during* the turn (the actual promise: not
+  batched at the end) and that, when several arrive, they are spread out. Two full-shape runs
+  and a session-shape run are green afterwards (146/146 and 87/87 — splitting the assertion
+  added one check), and both READMEs carry the new counts.
+
 ## 0.52.39
 
 - `session_prompt { mode: "steer" }` now has live evidence, separate from the queue-steer

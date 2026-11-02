@@ -938,8 +938,8 @@ build:
 
 | Tool groups enabled | Tools advertised | Last result |
 | --- | --- | --- |
-| all six | 28 | live-checks 145/145 with `--with-model`; acceptance run 163/163 |
-| `session`, `usage` only | 13 | live-checks 86/86 with `--with-model` (file/shell/workspace sections skip) |
+| all six | 28 | live-checks 146/146 with `--with-model`; acceptance run 163/163 |
+| `session`, `usage` only | 13 | live-checks 87/87 with `--with-model` (file/shell/workspace sections skip) |
 | `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 59/59 (a disabled group's reason names its `tools.<group>` switch) |
 | `files`, `shell` only | 11 | live-checks 65/65 (session/usage/queue/search sections skip) |
 

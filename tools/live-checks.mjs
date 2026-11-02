@@ -1493,10 +1493,19 @@ async function progressCheck(sessionId) {
     }
   }
   const reply = final?.result?.content?.[0]?.text ? JSON.parse(final.result.content[0].text) : undefined
-  check(arrivals.length > 0, 'progress notifications are sent', `${arrivals.length} in ${Date.now() - startedAt}ms`)
+  const totalMs = Date.now() - startedAt
+  check(arrivals.length > 0, 'progress notifications are sent', `${arrivals.length} in ${totalMs}ms`)
+  // A fast turn can legitimately produce a single notification (the sender is
+  // rate-limited to about one a second). What must hold is that it arrived *during*
+  // the turn: a batched-at-the-end implementation would only deliver after the reply.
   check(
-    arrivals.length >= 2 && arrivals[arrivals.length - 1] - arrivals[0] > 500,
-    'they arrive while the turn runs, not batched at the end',
+    arrivals[0] < totalMs - 100,
+    'progress arrives while the turn runs, not only at the end',
+    `first at ${arrivals[0] ?? '?'}ms of ${totalMs}ms`,
+  )
+  check(
+    arrivals.length === 1 || arrivals[arrivals.length - 1] - arrivals[0] > 500,
+    'when more than one arrives, they are spread across the turn',
     arrivals.slice(0, 5).join(','),
   )
   check(/PROGRESS OK/.test(reply?.turn?.reply ?? ''), 'the turn still settles', reply?.turn?.reply)
