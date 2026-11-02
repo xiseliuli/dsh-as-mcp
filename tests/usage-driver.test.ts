@@ -909,6 +909,30 @@ describe('DshDriver.sessionUsage', () => {
     expect(segment.sessions[0]?.usage?.projectionTotals).toBeUndefined()
   })
 
+  it('bills a turn range and refuses an inverted one', async () => {
+    const twoTurns: DshSessionEvent[] = [
+      event('user/message', { role: 'user', content: [{ type: 'text', text: 'go' }], source: { kind: 'user', rpcId: 'r-1' } }, 0),
+      ...completedTurn(1, 1, [{ step: 0, text: 'one', usage: tokenUsage(100, 10) }]),
+      ...completedTurn(4, 2, [{ step: 0, text: 'two', usage: tokenUsage(30, 3) }]),
+    ]
+    const harness = fakeHarness({ logs: { 'session-1': twoTurns }, summaries: [summary('session-1')] })
+    const { driver } = makeDriver(harness)
+
+    const second = await driver.sessionUsage({
+      sessionId: 'session-1',
+      includeTurns: true,
+      fromTurn: 2,
+      limit: 5,
+    })
+    expect(second.sessions[0]?.usage?.totals.totalTokens).toBe(33)
+    expect(second.sessions[0]?.usage?.turnRange).toEqual({ from: 2 })
+    expect(second.sessions[0]?.usage?.byTurn.map((turn) => turn.turn)).toEqual([2])
+    expect(second.sessions[0]?.usage?.verifiedAgainstProjection).toBe(false)
+
+    await expect(driver.sessionUsage({ sessionId: 'session-1', fromTurn: 3, toTurn: 1, limit: 5 }))
+      .rejects.toThrow(/turn range is inclusive/)
+  })
+
   it('does not mark a settled session partial', async () => {
     const harness = fakeHarness({ logs: { 'session-1': FIRST_TURN }, summaries: [summary('session-1')] })
     const { driver } = makeDriver(harness)

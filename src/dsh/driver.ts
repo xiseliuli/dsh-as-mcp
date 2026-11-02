@@ -2665,11 +2665,20 @@ export class DshDriver {
     includeCost?: boolean
     /** Fold each row from this seq onward, for a segment of a long session. */
     sinceSeq?: number
+    /** Fold only the turns in this inclusive range (billing by task phase). */
+    fromTurn?: number
+    toTurn?: number
     limit: number
   }): Promise<SessionUsageReport> {
     const includeSubagents = request.includeSubagents ?? true
     const includeTurns = request.includeTurns ?? false
     const includeCost = request.includeCost ?? true
+    if (request.fromTurn !== undefined && request.toTurn !== undefined && request.fromTurn > request.toTurn) {
+      throw new Error(
+        `fromTurn (${request.fromTurn}) is greater than toTurn (${request.toTurn}); a turn range is inclusive and `
+          + 'needs an empty or ascending interval',
+      )
+    }
     const notes: string[] = []
     const rows: SessionUsageRow[] = []
     let hiddenSessions = 0
@@ -2715,6 +2724,8 @@ export class DshDriver {
         parentSessionId,
         includeCost,
         request.sinceSeq,
+        request.fromTurn,
+        request.toTurn,
       ))
     }
 
@@ -3005,12 +3016,21 @@ export class DshDriver {
     parentSessionId?: string,
     includeCost = true,
     sinceSeq?: number,
+    fromTurn?: number,
+    toTurn?: number,
   ): Promise<SessionUsageRow> {
     try {
       const cut = await this.readUsageCut(sessionId)
+      const range = fromTurn === undefined && toTurn === undefined
+        ? undefined
+        : {
+          ...(fromTurn === undefined ? {} : { from: fromTurn }),
+          ...(toTurn === undefined ? {} : { to: toTurn }),
+        }
       const report = buildUsageReport(cut, {
         includeTurns,
         ...(sinceSeq === undefined ? {} : { sinceSeq }),
+        ...(range === undefined ? {} : { turnRange: range }),
         ...(hasOpenTurn(cut.events) ? { partial: true } : {}),
       })
       const cost = includeCost

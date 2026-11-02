@@ -954,6 +954,21 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .boolean()
             .optional()
             .describe('Also return the per-turn breakdown of each row. Defaults to false.'),
+          fromTurn: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              'With toTurn, fold only the turns in this inclusive range (bill a task phase rather than the whole '
+              + 'session). Like a sinceSeq window, it is not compared with the harness projection.',
+            ),
+          toTurn: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('Inclusive upper turn bound; defaults to the last turn.'),
           sinceSeq: z
             .number()
             .int()
@@ -1004,6 +1019,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         ...(args.includeTurns === undefined ? {} : { includeTurns: args.includeTurns }),
         ...(args.includeCost === undefined ? {} : { includeCost: args.includeCost }),
         ...(args.sinceSeq === undefined ? {} : { sinceSeq: args.sinceSeq }),
+        ...(args.fromTurn === undefined ? {} : { fromTurn: args.fromTurn }),
+        ...(args.toTurn === undefined ? {} : { toTurn: args.toTurn }),
         limit: args.limit ?? 20,
       }))),
     )

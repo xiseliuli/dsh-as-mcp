@@ -3,6 +3,20 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.46.0
+
+- `session_usage` gained `fromTurn`/`toTurn`: fold only the turns in that inclusive
+  range, so a caller can bill a task phase (say "the turns after the review started")
+  instead of the whole session. The range is echoed as `turnRange`, totals/byModel/
+  byTurn describe only those turns, and — like a `sinceSeq` window — the report is not
+  projection-verified. An inverted range is refused with the inclusive-interval rule.
+- Fold and driver tests cover the subset totals, the echoed range, the single-turn
+  case and the inverted-range refusal; the acceptance run bills the session's last
+  turn as a one-turn phase (19 398 of ~77 500 tokens). The first live run returned the
+  whole tally and exposed that the new arguments had been wired into the
+  `session_messages` handler/schema rather than `session_usage` — caught before release
+  and fixed. Both READMEs updated.
+
 ## 0.45.0
 
 - `session_usage` gained `sinceSeq`: fold each row from that event seq onward, for an

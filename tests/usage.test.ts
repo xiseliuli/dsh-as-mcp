@@ -72,6 +72,20 @@ describe('foldSessionUsage', () => {
     expect(folded.ignoredSamples).toBe(0)
   })
 
+  it('folds only the requested turn range', () => {
+    const events = [
+      settlement(1, 1, 1, usage(100, 0, 10)),
+      settlement(2, 2, 1, usage(20, 0, 2)),
+      settlement(3, 3, 1, usage(5, 0, 1)),
+    ]
+    const middle = foldSessionUsage(events, { turnRange: { from: 2, to: 3 } })
+    expect(middle.byTurn.map((turn) => turn.turn)).toEqual([2, 3])
+    expect(middle.totals.totalTokens).toBe(28)
+    const first = foldSessionUsage(events, { turnRange: { to: 1 } })
+    expect(first.totals.totalTokens).toBe(110)
+    expect(first.samples).toBe(1)
+  })
+
   it('names the routes that charged each turn', () => {
     const folded = foldSessionUsage([
       settlement(1, 1, 1, usage(10, 0, 1), { provider: 'deepseek', model: 'cheap' }),

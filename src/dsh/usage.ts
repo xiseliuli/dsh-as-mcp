@@ -369,9 +369,14 @@ function turnCell(cells: Map<number, TurnCell>, turn: number): TurnCell {
  */
 export function foldSessionUsage(
   events: readonly DshSessionEvent[],
-  options: { readonly fromSeq?: number } = {},
+  options: {
+    readonly fromSeq?: number
+    /** Inclusive turn bounds; samples outside them are not part of the fold. */
+    readonly turnRange?: { readonly from?: number; readonly to?: number }
+  } = {},
 ): SessionUsage {
   const fromSeq = options.fromSeq ?? 0
+  const range = options.turnRange
   const turns = new Map<number, TurnCell>()
   const models = new Map<string, ModelCell>()
   const turnStarts = new Map<number, number>()
@@ -407,6 +412,10 @@ export function foldSessionUsage(
     if (sample === undefined) continue
     const position = positionOf(event)
     if (position === undefined) continue
+    if (range !== undefined) {
+      if (range.from !== undefined && position.turn < range.from) continue
+      if (range.to !== undefined && position.turn > range.to) continue
+    }
 
     const buckets = bucketsFrom(sample.usage)
     if (buckets === undefined) {

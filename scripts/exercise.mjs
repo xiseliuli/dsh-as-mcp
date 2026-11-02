@@ -756,6 +756,26 @@ try {
       )
     }
 
+    // Bill a phase by turn range: only those turns' tokens, echoed as turnRange.
+    const turnNumbers = perTurn.map((turn) => turn.turn).filter((turn) => typeof turn === 'number')
+    const lastTurn = turnNumbers.length > 0 ? Math.max(...turnNumbers) : undefined
+    if (lastTurn !== undefined) {
+      const phases = await must('session_usage', {
+        sessionId,
+        includeTurns: true,
+        fromTurn: lastTurn,
+        toTurn: lastTurn,
+      })
+      const phaseRow = phases.sessions?.find((row) => row.origin === 'self')
+      check(
+        phaseRow?.usage?.turnRange?.from === lastTurn && phaseRow.usage.turnRange.to === lastTurn &&
+          phaseRow.usage.byTurn.length === 1 && phaseRow.usage.byTurn[0]?.turn === lastTurn &&
+          phaseRow.usage.totals.totalTokens <= receipt.totals.totalTokens,
+        'a turn-range receipt bills exactly that phase',
+        `turn ${lastTurn}: ${phaseRow?.usage?.totals?.totalTokens ?? '?'} tokens`,
+      )
+    }
+
     check(
       typeof receipt.cost?.available === 'boolean',
       'the receipt states whether money is available',

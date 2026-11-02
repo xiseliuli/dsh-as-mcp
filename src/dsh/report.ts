@@ -84,6 +84,8 @@ export interface UsageSummary {
    * the whole log, so `verifiedAgainstProjection` is false for it by construction.
    */
   readonly sinceSeq?: number
+  /** Set when the report was folded to an inclusive turn range. */
+  readonly turnRange?: { readonly from?: number; readonly to?: number }
   /**
    * True when the turn being described had not finished, so these totals can
    * still grow: a turn still running when the log was read, or a settle that was
@@ -106,6 +108,8 @@ export interface UsageBuildOptions {
   readonly partial?: boolean
   /** Fold only events at or after this seq (an incremental segment). */
   readonly sinceSeq?: number
+  /** Fold only samples inside this inclusive turn range. */
+  readonly turnRange?: { readonly from?: number; readonly to?: number }
 }
 
 /** How many turns and steps a fold covered. */
@@ -133,21 +137,31 @@ export function buildUsageReport(cut: UsageCut, options: UsageBuildOptions = {})
   // session's spend either way.
   const sinceSeq = options.sinceSeq !== undefined && options.sinceSeq > baseFrom ? options.sinceSeq : undefined
   const fromSeq = sinceSeq ?? baseFrom
-  const own = foldSessionUsage(cut.events, { fromSeq })
+  const turnRange = options.turnRange
+  // A turn range is a window in the same sense as sinceSeq: the totals describe the
+  // requested slice, not the whole log, so the projection comparison does not apply.
+  const windowed = sinceSeq !== undefined || turnRange !== undefined
+  const own = foldSessionUsage(cut.events, {
+    fromSeq,
+    ...(turnRange === undefined ? {} : { turnRange }),
+  })
   // The inherited prefix is derived as "whole log minus own spend" rather than by
   // folding the prefix on its own: the fold's replacement rule is sequential, so
   // the two are only guaranteed to add up when one is defined from the other. A
   // windowed report has no whole-log baseline to subtract from, so it reports the
   // window alone rather than a misleading "inherited" figure.
-  const inherited = sinceSeq !== undefined || baseFrom === 0
+  const inherited = windowed || baseFrom === 0
     ? undefined
     : subtractTotals(foldSessionUsage(cut.events).totals, own.totals)
-  const compaction = foldCompactionUsage(cut.events, { fromSeq })
+  const compaction = foldCompactionUsage(cut.events, {
+    fromSeq,
+    ...(turnRange === undefined ? {} : { turnRange }),
+  })
 
   // The harness projection covers the whole log, inherited prefix included,
   // while `totals` is this session's own spend. Comparing the two therefore
   // means comparing the projection with the sum, not with `totals` alone.
-  const projection = sinceSeq === undefined ? projectionTotals(cut.projection) : undefined
+  const projection = windowed ? undefined : projectionTotals(cut.projection)
   const comparable = inherited === undefined ? own.totals : sumTotals([inherited, own.totals])
   const verified = projection !== undefined && projectionMatches(projection, comparable)
 
@@ -166,6 +180,7 @@ export function buildUsageReport(cut: UsageCut, options: UsageBuildOptions = {})
     ...(projection === undefined || verified ? {} : { projectionTotals: projection }),
     ...(own.ignoredSamples === 0 ? {} : { ignoredSamples: own.ignoredSamples }),
     ...(sinceSeq === undefined ? {} : { sinceSeq }),
+    ...(turnRange === undefined ? {} : { turnRange }),
     ...(options.partial === true ? { partial: true } : {}),
     // The aggregate path asks for totals only: a merged report of many sessions
     // would otherwise carry a per-turn array per row for no reader.
