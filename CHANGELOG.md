@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.78
+
+- Two more options are asserted by their effect rather than their acceptance:
+  `session_list { running: false }` must list an idle session that `running: true` excludes, and
+  `session_usage` with `includeTurns: false` / `includeCost: false` must omit the `byTurn` and
+  `byTurn` empty and cost unavailable. A filter that is accepted but ignored would pass a
+  one-directional test.
+- The first version of the omission assertion expected the fields to be *absent*; the contract
+  is an empty `byTurn` array and `cost.available: false`, so the shape is asserted instead. The
+  failure was my assertion, not the code. Measured after the fix: full 161/161, session-only
+  93/93, cheap subset 110/47/64/68; README tables updated.
+
 ## 0.52.77
 
 - `session_usage`'s `includeSubagents` is now asserted both ways: with it (the default), the

@@ -814,9 +814,9 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 
 | 启用的工具组 | 公布工具数 | 最近结果 |
 | --- | --- | --- |
-| 全部六组 | 28 | `--with-model` 下 live-checks 159/159；验收 166/166 |
-| 仅 `session`、`usage` | 13 | `--with-model` 下 live-checks 91/91（文件/shell/工作区段落跳过） |
-| `workspace`、`session`、`agentTools`、`usage` | 18 | live-checks 63/63（被关闭的组会在原因里点名 `tools.<group>` 开关） |
+| 全部六组 | 28 | `--with-model` 下 live-checks 161/161；验收 166/166 |
+| 仅 `session`、`usage` | 13 | `--with-model` 下 live-checks 93/93（文件/shell/工作区段落跳过） |
+| `workspace`、`session`、`agentTools`、`usage` | 18 | live-checks 64/64（被关闭的组会在原因里点名 `tools.<group>` 开关） |
 | 仅 `files`、`shell` | 11 | live-checks 68/68（会话/用量/队列/搜索段落跳过） |
 
 第五个形态 `mountonly` 以 `http.enabled: false` + `mountOnWebServer: true` 启动，经 DSH 自己的
@@ -830,7 +830,7 @@ web 服务器验证端点：109/109，全部廉价，其中包含 `dsh_info` 必
 116/116。
 
 带 `--with-model` 的两行是含真实轮次的计数；`tools/release.sh --shapes` 不加该参数时只跑廉价子集，
-同样四个组形态报 109/46/63/68。
+同样四个组形态报 110/47/64/68。
 
 `node tools/shapes.mjs [--with-model]` 用一条命令复现上面的表：为每个形态建临时 profile、装入打包产物、
 等 harness 服务真正挂载（socket 会比服务先应答）、跑 `tools/live-checks.mjs`、打印计数，并清理所有

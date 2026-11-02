@@ -1350,6 +1350,18 @@ async function listChecks() {
   } else {
     // The harness requires a directory: there is no "some default workspace" form.
     const created = await callTool('session_create', { cwd: process.cwd() })
+    // The `running` filter must select, not merely be accepted: a freshly created
+    // session is idle, so it belongs in `false` and not in `true`.
+    if (has('session_list')) {
+      const idleList = await callTool('session_list', { running: false, limit: 50 })
+      const busyList = await callTool('session_list', { running: true, limit: 50 })
+      check(
+        (idleList.sessions ?? []).some((row) => row.sessionId === created.sessionId) &&
+          !(busyList.sessions ?? []).some((row) => row.sessionId === created.sessionId),
+        'the running filter selects idle sessions and excludes them from the busy list',
+        `idle ${(idleList.sessions ?? []).length}, busy ${(busyList.sessions ?? []).length}`,
+      )
+    }
     sessionId = created.sessionId
     // `approval.policy` is a security posture, so the reply must say which stance the
     // session actually got: "allow" switches it to the harness's unattended mode, and a
@@ -2593,6 +2605,20 @@ async function modelSelectionCheck() {
       observed?.verifiedAgainstProjection === true && observed?.projectionTotals === undefined,
       "the receipt's folded totals are verified against the harness's own projection",
       `verified ${String(observed?.verifiedAgainstProjection)}`,
+    )
+
+    // Both switches must remove their block, not merely be accepted: a caller that
+    // asked for less should not have to ignore a field it did not ask for.
+    const bare = await callTool('session_usage', {
+      sessionId: session.sessionId,
+      includeTurns: false,
+      includeCost: false,
+    })
+    check(
+      (bare.sessions?.[0]?.usage?.byTurn ?? []).length === 0 &&
+        bare.sessions?.[0]?.cost?.available === false,
+      'includeTurns:false empties byTurn and includeCost:false reports cost unavailable',
+      `byTurn ${(bare.sessions?.[0]?.usage?.byTurn ?? []).length}, cost ${String(bare.sessions?.[0]?.cost?.available)}`,
     )
 
     // DSH's own price plugin, when installed, is the only source of money: the info

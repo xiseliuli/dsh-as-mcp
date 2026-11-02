@@ -938,9 +938,9 @@ build:
 
 | Tool groups enabled | Tools advertised | Last result |
 | --- | --- | --- |
-| all six | 28 | live-checks 159/159 with `--with-model`; acceptance run 166/166 |
-| `session`, `usage` only | 13 | live-checks 91/91 with `--with-model` (file/shell/workspace sections skip) |
-| `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 63/63 (a disabled group's reason names its `tools.<group>` switch) |
+| all six | 28 | live-checks 161/161 with `--with-model`; acceptance run 166/166 |
+| `session`, `usage` only | 13 | live-checks 93/93 with `--with-model` (file/shell/workspace sections skip) |
+| `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 64/64 (a disabled group's reason names its `tools.<group>` switch) |
 | `files`, `shell` only | 11 | live-checks 68/68 (session/usage/queue/search sections skip) |
 
 A fifth shape, `mountonly`, boots with `http.enabled: false` and `mountOnWebServer: true` and
@@ -956,7 +956,7 @@ web-server entry, a rename made there is what the listener reports, and admissio
 both doors (no bearer or a wrong one is `401` + `WWW-Authenticate: Bearer`). 116/116.
 
 The two turn-running rows are measured with `--with-model`; `tools/release.sh --shapes` without it
-exercises the cheap subset and reports 109/46/63/68 for the same four group shapes.
+exercises the cheap subset and reports 110/47/64/68 for the same four group shapes.
 
 `node tools/shapes.mjs [--with-model]` reproduces that table in one command: for each shape it boots a
 throwaway profile with that shape's `tools` block, installs the packaged tarball, waits until the harness
