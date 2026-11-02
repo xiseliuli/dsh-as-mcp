@@ -2203,6 +2203,34 @@ async function secondEntryChecks() {
     }
     // Same host, two doors: a session must be the same object through either one, or a
     // client handed the wrong URL sees a different instance's state.
+    // Admission is the same on both doors: the same bearer is accepted, and a request
+    // without one is refused with the header that names the scheme.
+    {
+      const body = JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'bare', version: '1' } },
+      })
+      const bare = await fetch(alsoUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+        body,
+      })
+      check(
+        bare.status === 401 && /Bearer/.test(bare.headers.get('www-authenticate') ?? ''),
+        'the second entry refuses an unauthenticated request the same way',
+        `HTTP ${bare.status}`,
+      )
+      const wrong = await fetch(alsoUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: 'Bearer not-the-token',
+        },
+        body,
+      })
+      check(wrong.status === 401, 'the second entry refuses a wrong bearer too', `HTTP ${wrong.status}`)
+    }
     if (has('session_create') && has('session_list')) {
       const created = await callTool('session_create', { cwd: process.cwd() })
       const seenFromOther = (await other.callTool('session_list', { limit: 50 })).sessions ?? []

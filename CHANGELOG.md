@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.72
+
+- Hybrid deployments now also check admission on the second entry: a request without a bearer is
+  refused with `401` + `WWW-Authenticate: Bearer`, and a wrong bearer is refused too. The two
+  entries share a token file, but that is configuration — the check is what the route does.
+  Hybrid shape measured at 116/116; both READMEs say so.
+
 ## 0.52.71
 
 - The hybrid cross-entry section now also checks state: a session created through the plugin
