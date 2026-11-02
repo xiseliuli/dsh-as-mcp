@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.25.0
+
+- **`session_search`** (26th tool): a literal search over session *message content*
+  that returns each match as `sessionId` plus a snippet, bounded at 20 with
+  `hasMore`. It answers "which conversation discussed this?" without listing,
+  reading and grepping transcripts, and it needs `sessionController.search` (the
+  capability is reported as `sessionSearch` in `dsh_info.harnessServices`).
+
 ## 0.24.3
 
 - Added `tools/live-checks.mjs` (maintainer-only, not in the published package): a

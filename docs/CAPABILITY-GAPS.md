@@ -79,6 +79,7 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 | `permissionPresets` | `permissionPresets` | catalog permission presets |
 | `sandboxPolicy` | `sandboxPolicy` | catalog sandbox mode; read-only gating of `workspace_create` |
 | `approval` | `approval` | `approval.policy: "allow"` (the harness's unattended stance) |
+| `sessionSearch` | `sessionController.search` | content search over sessions (`session_search`) |
 | `sessionRename` / `sessionModel` / `sessionFork` | `sessionController` members | controller features whose presence is version-dependent |
 | `shellBackground` | `shell` members | `start`/`execute` shape needed by background jobs |
 
@@ -552,6 +553,9 @@ progress notifications (§6.3) — all cheap and none of them contentious.
   `partial` whenever any row was read mid-turn;
 - list contracts: `session_list` `cwd`/`running` filters with `total`/`truncated`, `shell_list`
   `running`;
+- **`session_search`** (0.25.0): literal message-content search returning `sessionId` + snippet,
+  bounded at 20 with `hasMore`, so a caller can find the session that discussed something before
+  prompting it;
 - `workspace_delete` (unregister only — files and session history untouched);
 - **`approval.policy: "allow"` implemented** — it had been documented and parsed but never applied;
   create/fork now switch the session to the harness's unattended stance and report
@@ -580,11 +584,11 @@ author chose specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 (25 as of plugin 0.24.1) |
+| MCP tools registered on 0.1.5-rc.1 | 12 (26 as of plugin 0.25.0) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |
-| Services the plugin probes (`dsh_info.harnessServices`) | 20 |
+| Services the plugin probes (`dsh_info.harnessServices`) | 21 |
 | Services the plugin meaningfully uses | 15 (+1 for plumbing: `webServer` for the mount) |
 | Driver methods exposed to tools | 29 |
 | DSH built-in model-visible tools | 53 names / 55 registration sites |

@@ -274,7 +274,7 @@ describe('MCP Streamable HTTP endpoint', () => {
     const groups: Record<string, string[]> = {
       workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
       session: [
-        'session_create', 'session_list', 'session_fork', 'session_rename',
+        'session_create', 'session_list', 'session_search', 'session_fork', 'session_rename',
         'session_set_model', 'session_prompt', 'session_messages', 'session_cancel',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
@@ -291,7 +291,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(25)
+      expect(all).toHaveLength(26)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {
@@ -505,6 +505,26 @@ describe('MCP Streamable HTTP endpoint', () => {
       expect(payload.messages).toHaveLength(1)
       expect(payload.total).toBe(4)
       expect(payload.truncated).toBe(true)
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('forwards session_search query and limit', async () => {
+    const seen: unknown[] = []
+    const own = await boot(stubDriver({
+      searchSessions: async (request) => {
+        seen.push(request)
+        return { items: [{ sessionId: 'a', snippet: 'hit' }], hasMore: false }
+      },
+    }), testConfig({ session: true }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_search', { query: 'needle', limit: 5 })
+      expect(isError).toBe(false)
+      expect(seen).toEqual([{ query: 'needle', limit: 5 }])
+      const payload = JSON.parse(text) as { items: { sessionId: string }[]; hasMore: boolean }
+      expect(payload.items[0]?.sessionId).toBe('a')
+      expect(payload.hasMore).toBe(false)
     } finally {
       await own.stop()
     }

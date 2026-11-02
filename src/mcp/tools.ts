@@ -57,6 +57,7 @@ export type McpDriver = Pick<
   | 'renameSession'
   | 'setSessionModel'
   | 'listSessions'
+  | 'searchSessions'
   | 'promptSession'
   | 'cancelSession'
   | 'readTranscript'
@@ -448,6 +449,30 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           ...(listed.total > listed.sessions.length ? { truncated: true } : {}),
         })
       }),
+    )
+
+    server.registerTool(
+      'session_search',
+      {
+        title: 'Search session content',
+        description:
+          'Search the message content of the sessions this DSH knows, returning each match as sessionId '
+          + 'plus a snippet. Use it to find the session that discussed a topic before prompting or reading '
+          + 'it. Results match tokens and phrases (FTS), not arbitrary substrings, and multiple terms must all match (AND). The harness bounds one '
+          + 'search at 20 matches and reports hasMore; sessions are matched on messages, not titles. Search '
+          + 'is opt-in: a profile whose session-query index is configured with openAt "never" fails with an '
+          + 'explanation instead of searching.',
+        inputSchema: z.object({
+          query: z.string().trim().min(1).describe('Literal text to look for in session messages.'),
+          limit: z.number().int().positive().max(20).optional()
+            .describe('Cap the matches returned (the harness caps a search at 20).'),
+        }),
+        annotations: { readOnlyHint: true },
+      },
+      guard('session_search', log, async (args) => ok(await driver.searchSessions({
+        query: args.query,
+        ...(args.limit === undefined ? {} : { limit: args.limit }),
+      }))),
     )
 
     server.registerTool(

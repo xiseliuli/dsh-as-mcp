@@ -254,6 +254,20 @@ export interface DshSessionController {
 
   cancel(request: { readonly sessionId: string }): { readonly accepted: true }
 
+  /**
+   * Literal content search over visible sessions, without activating any of them.
+   *
+   * Optional: it needs `sessionQuery` on the host, and a profile without that
+   * reports the capability as absent rather than failing the whole tool set.
+   */
+  search?(
+    request: { readonly query: string },
+    signal: AbortSignal,
+  ): Promise<{
+    readonly items: readonly { readonly sessionId: string; readonly snippet: string }[]
+    readonly hasMore: boolean
+  }>
+
   inspect(
     sessionId: string,
     signal?: AbortSignal,

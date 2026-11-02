@@ -242,6 +242,7 @@ section('surface')
     'session_messages',
     'session_prompt',
     'session_rename',
+    'session_search',
     'session_set_model',
     ...(usageReported ? ['session_usage'] : []),
     'shell_kill',
@@ -255,7 +256,7 @@ section('surface')
   ]
   check(
     JSON.stringify(names) === JSON.stringify(expected),
-    usageReported ? 'tools/list exposes all 25 tools' : 'tools/list exposes all 24 tools (usage reporting off)',
+    usageReported ? 'tools/list exposes all 26 tools' : 'tools/list exposes all 25 tools (usage reporting off)',
     `${names.length} tools`,
   )
   check(
@@ -936,6 +937,32 @@ try {
       list.some((entry) => entry.role === 'assistant'),
       'the transcript contains the reply',
     )
+
+    // Content search: find the session by something it said, without activating it.
+    // Search is opt-in in shipped compositions (`session-query` ships with
+    // `openAt: "never"`), so a disabled index must be reported with the fix, not
+    // read as a broken search.
+    const search = await tool('session_search', { query: 'FizzBuzz' })
+    if (search.ok) {
+      // Matches are relevance-ordered and capped at 20, so our own session is not
+      // guaranteed to be on the first page; what must hold is that the search
+      // answered with matches and said whether more exist.
+      const matches = search.payload?.items ?? []
+      check(
+        matches.length > 0 &&
+          matches.every((item) => typeof item.sessionId === 'string' && typeof item.snippet === 'string') &&
+          typeof search.payload?.hasMore === 'boolean' &&
+          (matches.some((item) => item.sessionId === sessionId) || search.payload?.hasMore === true),
+        'session_search answers with matches and hasMore',
+        `${matches.length} match(es), hasMore=${search.payload?.hasMore}`,
+      )
+    } else {
+      check(
+        /openAt/.test(search.error ?? '') && /first-search|startup/.test(search.error ?? ''),
+        'a disabled session-search index reports how to enable it',
+        (search.error ?? '').slice(0, 60),
+      )
+    }
 
     // The tail window keeps the newest messages; `total` says how many matched, so
     // a poll that missed older ones can tell.

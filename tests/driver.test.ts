@@ -220,6 +220,83 @@ describe('locateTurn', () => {
   })
 })
 
+describe('DshDriver.searchSessions', () => {
+  function searchable(result: { items: { sessionId: string; snippet: string }[]; hasMore: boolean }): DshDriver {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', {
+      create: async () => ({ sessionId: 's' }),
+      list: async () => ({ items: [] }),
+      prompt: async () => ({ accepted: true }),
+      cancel: () => ({ accepted: true }),
+      inspect: async () => ({ events: [] }),
+      search: async (request: { query: string }) => {
+        if (request.query.trim() === '') throw new Error('empty query reached the harness')
+        return result
+      },
+    } as never)
+    return new DshDriver(ctx, () => testConfig())
+  }
+
+  it('passes the harness matches and hasMore through', async () => {
+    const driver = searchable({ items: [{ sessionId: 'a', snippet: '…needle…' }], hasMore: true })
+    await expect(driver.searchSessions({ query: 'needle' }))
+      .resolves.toEqual({ items: [{ sessionId: 'a', snippet: '…needle…' }], hasMore: true })
+  })
+
+  it('applies a caller limit and reports that it cut', async () => {
+    const driver = searchable({
+      items: [
+        { sessionId: 'a', snippet: 'one' },
+        { sessionId: 'b', snippet: 'two' },
+      ],
+      hasMore: false,
+    })
+    await expect(driver.searchSessions({ query: 'x', limit: 1 }))
+      .resolves.toEqual({ items: [{ sessionId: 'a', snippet: 'one' }], hasMore: true })
+  })
+
+  it('refuses an empty query instead of sending it to the harness', async () => {
+    await expect(searchable({ items: [], hasMore: false }).searchSessions({ query: '   ' }))
+      .rejects.toThrow(/must not be empty/)
+  })
+
+  it('turns the disabled-index failure into operator guidance', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', {
+      create: async () => ({ sessionId: 's' }),
+      list: async () => ({ items: [] }),
+      prompt: async () => ({ accepted: true }),
+      cancel: () => ({ accepted: true }),
+      inspect: async () => ({ events: [] }),
+      search: async () => {
+        throw new Error('SessionQueryError: session search is disabled: this deployment configures the session-query index with openAt "never"')
+      },
+    } as never)
+    const driver = new DshDriver(ctx, () => testConfig())
+    await expect(driver.searchSessions({ query: 'x' }))
+      .rejects.toThrow(/openAt "never"/)
+    await expect(driver.searchSessions({ query: 'x' }))
+      .rejects.toThrow(/first-search/)
+  })
+
+  it('names the missing capability when the controller cannot search', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', {
+      create: async () => ({ sessionId: 's' }),
+      list: async () => ({ items: [] }),
+      prompt: async () => ({ accepted: true }),
+      cancel: () => ({ accepted: true }),
+      inspect: async () => ({ events: [] }),
+    } as never)
+    const driver = new DshDriver(ctx, () => testConfig())
+    await expect(driver.searchSessions({ query: 'x' }))
+      .rejects.toThrow(/no sessionController.search/)
+  })
+})
+
 describe('per-session serialization', () => {
   it('does not submit a second prompt on one session until the first wait settles', async () => {
     // Two callers on one session must not interleave: the second prompt waits for

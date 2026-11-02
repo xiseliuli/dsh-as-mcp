@@ -674,6 +674,7 @@ export class DshDriver {
       approval: this.approvalService() !== undefined,
       // Controller operations whose absence is version-dependent, not
       // configuration-dependent: a caller can tell "refused" from "unavailable".
+      sessionSearch: typeof (this.sessionController() as { search?: unknown } | undefined)?.search === 'function',
       sessionRename: typeof (this.sessionController() as { rename?: unknown } | undefined)?.rename === 'function',
       sessionModel: typeof (this.sessionController() as { selectModel?: unknown } | undefined)?.selectModel === 'function',
       // Forking is a controller operation, not a store one.
@@ -1685,6 +1686,64 @@ export class DshDriver {
   /** Ask the live agent to cancel its current turn. */
   cancelSession(sessionId: string): { accepted: true } {
     return this.requireSessionController().cancel({ sessionId })
+  }
+
+  /**
+   * Search visible session content for a literal query.
+   *
+   * The harness bounds one search at 20 items and reports `hasMore`, so this
+   * passes both through rather than pretending the list is complete. Sessions are
+   * matched on their message content, not titles: a title search would miss the
+   * case a caller usually has — "which conversation mentioned this token?" — and
+   * the harness does not offer one.
+   */
+  async searchSessions(request: { query: string; limit?: number }): Promise<{
+    items: readonly { sessionId: string; snippet: string }[]
+    hasMore: boolean
+  }> {
+    const query = request.query.trim()
+    if (query === '') throw new Error('a search query must not be empty')
+    const controller = this.requireSessionController()
+    const search = (controller as { search?: unknown }).search
+    if (typeof search !== 'function') {
+      throw new Error(
+        'this DSH profile provides no sessionController.search(), so sessions cannot be searched. '
+          + 'The @deepseek-ai/dsh-api-session-controller package provides it, and it needs sessionQuery.',
+      )
+    }
+    let result: { items: readonly { sessionId: string; snippet: string }[]; hasMore: boolean }
+    try {
+      result = await (search as (
+        request: { query: string },
+        signal: AbortSignal,
+      ) => Promise<{ items: readonly { sessionId: string; snippet: string }[]; hasMore: boolean }>).call(
+        controller,
+        { query },
+        new AbortController().signal,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // Shipped compositions configure the session-query index with `openAt:
+      // "never"`, which turns full-text search off while leaving every exact read
+      // working. The harness message names the code but not the fix, so add it.
+      if (/SESSION_QUERY_SEARCH_DISABLED|search is disabled/i.test(message)) {
+        throw new Error(
+          'session search is disabled in this deployment: the session-query index is configured with '
+            + 'openAt "never". Set the `session-query-sqlite` row\'s openAt to "startup" or "first-search" '
+            + 'in the profile patch (search is opt-in in shipped compositions), or use session_list and '
+            + 'session_messages instead. '
+            + `(${message})`,
+        )
+      }
+      throw error
+    }
+    // A caller's own cap is applied on top of the harness bound; when it actually
+    // cut something, `hasMore` says so even if the harness said false.
+    const limit = request.limit === undefined ? undefined : Math.max(1, request.limit)
+    return {
+      items: limit === undefined ? result.items : result.items.slice(0, limit),
+      hasMore: limit !== undefined && result.items.length > limit ? true : result.hasMore,
+    }
   }
 
   /**
