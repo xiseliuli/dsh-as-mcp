@@ -352,6 +352,27 @@ describe('DshDriver.promptSession', () => {
     expect(seen.reply).toBe('ok')
   })
 
+  it('does not gate prompting or scoped usage on this process having created the session', async () => {
+    // After a DSH restart nothing is "owned" yet, and a caller that knows the id
+    // must be able to continue the work and read its bill. Ownership only decides
+    // the unscoped default, never access by id.
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    expect(driver.ownsSession('session-1')).toBe(false)
+
+    const pending = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: false,
+      timeoutMs: 1_000,
+    })
+    await expect(pending).resolves.toMatchObject({ accepted: true })
+    await expect(driver.sessionUsage({ sessionId: 'session-1', limit: 5 }))
+      .resolves.toMatchObject({ scope: 'session' })
+    expect(sessions.prompts.length).toBe(1)
+  })
+
   it('reports which model routes answered the turn', async () => {
     const sessions = fakeSessions()
     const { driver } = driverWith(sessions)

@@ -358,6 +358,10 @@ DSH 没有「会话结束」事件，所以没有可订阅的钩子，也没有�
 不带 `sessionId` 指的是**本 DSH 进程里由本端点创建的**会话。harness 并不记录这种归属，所以重启之后
 请传 id；改用 `all: true` 则扫描这个 DSH 知道的全部会话，被 limit 截断时会在 `notes` 里说明。
 
+**DSH 重启之后，知道 id 就够。** 实机验证过：重启前创建的会话仍可读取，`session_usage { sessionId }`
+返回同样的总量，对它 `session_prompt` 会继续对话，累计用量横跨两个进程。只有"按归属"的默认值会复位
+——不带 id 的 `session_usage` 只报本进程创建的会话，并在 `notes` 里说明。
+
 **四个桶互不重叠**，就是 provider 报的原样，`totalTokens` 是它们的和：
 
 | 字段 | 含义 |

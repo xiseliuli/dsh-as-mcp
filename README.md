@@ -389,6 +389,12 @@ No `sessionId` means the sessions **this endpoint created in this DSH process**.
 harness records that ownership, so after a restart pass the id; `all: true` instead walks every
 session this DSH knows, and says so in `notes` when the limit cut it short.
 
+**After a DSH restart, an id is still enough.** Verified live: a session created before a restart
+stays readable, `session_usage { sessionId }` returns the same totals, and `session_prompt` on it
+continues the conversation with cumulative usage spanning both processes. Only the
+ownership-based defaults reset — unscoped `session_usage` reports nothing it did not create, and
+says so in `notes`.
+
 **The buckets are disjoint**, exactly as the provider reports them, and `totalTokens` is their
 sum:
 

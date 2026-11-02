@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.20.3
+
+- Docs and tests only. Recorded and verified post-restart continuity: a session
+  created before a DSH restart stays readable, `session_usage { sessionId }`
+  returns the same totals, and `session_prompt` continues it with cumulative
+  usage spanning both processes; only ownership-based defaults reset. Added a
+  regression test that owning a session never gates prompting or scoped usage.
+
 ## 0.20.2
 
 - `workspace_create` on a path that exists as a file now says "exists but is not
