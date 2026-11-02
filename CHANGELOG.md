@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.11
+
+- The drift check now owns one more number that had drifted before: the capability-probe
+  count in `docs/CAPABILITY-GAPS.md`'s appendix must equal what `describeCapabilities()`
+  reports (22 today). Proven by lowering the doc to 21 — the check answers
+  `DRIFT: ... says 21 capability probes, describeCapabilities() reports 22` — then
+  restoring it. Both READMEs list the new check.
+
 ## 0.52.10
 
 - The subagent live check now proves the documented split between two views: a prompt

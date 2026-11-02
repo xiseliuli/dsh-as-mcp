@@ -104,6 +104,47 @@ for (const block of toolBlocks) {
   }
 }
 
+// --- the probe count in docs/CAPABILITY-GAPS.md -----------------------------
+//
+// That page's appendix states how many capability probes `dsh_info.harnessServices`
+// reports. The number drifted once already (a probe was added and the table was not),
+// and a stale count there is a claim about the code that no other check owns.
+
+const driverSource = read('src/dsh/driver.ts')
+const describeAt = driverSource.indexOf('describeCapabilities(): Record<string, boolean> {')
+if (describeAt === -1) {
+  problems.push('could not find describeCapabilities() in src/dsh/driver.ts')
+} else {
+  const returnAt = driverSource.indexOf('return {', describeAt)
+  const probeObject = returnAt === -1 ? undefined : balanced(driverSource, driverSource.indexOf('{', returnAt))
+  if (probeObject === undefined) {
+    problems.push('could not read the probe object of describeCapabilities()')
+  } else {
+    const probes = []
+    let indent
+    for (const line of probeObject.text.split('\n')) {
+      const match = /^(\s+)([A-Za-z][A-Za-z0-9]*):/.exec(line)
+      if (match === null) continue
+      if (indent === undefined || match[1].length < indent) {
+        indent = match[1].length
+        probes.length = 0
+      }
+      if (match[1].length === indent) probes.push(match[2])
+    }
+    const claim = read('docs/CAPABILITY-GAPS.md')
+      .match(/Services the plugin probes \(`dsh_info\.harnessServices`\) \| (\d+) \|/)
+    if (claim === null) {
+      problems.push('docs/CAPABILITY-GAPS.md no longer states the capability-probe count')
+    } else if (Number(claim[1]) !== probes.length) {
+      problems.push(
+        `docs/CAPABILITY-GAPS.md says ${claim[1]} capability probes, describeCapabilities() reports ${probes.length}`,
+      )
+    } else {
+      notes.push(`capability probes: ${probes.length} (matches docs/CAPABILITY-GAPS.md)`)
+    }
+  }
+}
+
 // --- the tool tables in both READMEs --------------------------------------
 
 function tableRows(path, heading) {
