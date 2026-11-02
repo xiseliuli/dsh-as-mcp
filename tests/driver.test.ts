@@ -220,6 +220,103 @@ describe('locateTurn', () => {
   })
 })
 
+describe('DshDriver.updateQueue', () => {
+  function withQueue(
+    updateQueue?: (request: unknown) => Promise<{ accepted: true }>,
+  ): DshDriver {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', {
+      create: async () => ({ sessionId: 's' }),
+      list: async () => ({ items: [] }),
+      prompt: async () => ({ accepted: true }),
+      cancel: () => ({ accepted: true }),
+      inspect: async () => ({ events: [] }),
+      ...(updateQueue === undefined ? {} : { updateQueue }),
+    } as never)
+    return new DshDriver(ctx, () => testConfig())
+  }
+
+  it('forwards remove with the message id and reports what it did', async () => {
+    const seen: unknown[] = []
+    const driver = withQueue(async (request) => {
+      seen.push(request)
+      return { accepted: true }
+    })
+    await expect(driver.updateQueue({ sessionId: 's1', messageId: 'm1', action: 'remove' }))
+      .resolves.toEqual({ accepted: true, action: 'remove' })
+    expect(seen).toEqual([{ sessionId: 's1', itemId: 'm1', action: { kind: 'remove' } }])
+  })
+
+  it('wraps edit text as a text block and refuses an empty replacement', async () => {
+    const seen: unknown[] = []
+    const driver = withQueue(async (request) => {
+      seen.push(request)
+      return { accepted: true }
+    })
+    await expect(driver.updateQueue({ sessionId: 's1', messageId: 'm1', action: 'edit', content: 'new text' }))
+      .resolves.toEqual({ accepted: true, action: 'edit' })
+    expect(seen).toEqual([{
+      sessionId: 's1',
+      itemId: 'm1',
+      action: { kind: 'edit', content: [{ type: 'text', text: 'new text' }] },
+    }])
+    await expect(driver.updateQueue({ sessionId: 's1', messageId: 'm1', action: 'edit', content: '  ' }))
+      .rejects.toThrow(/non-empty content/)
+  })
+
+  it('names the missing capability when the controller cannot mutate a queue', async () => {
+    await expect(withQueue().updateQueue({ sessionId: 's', messageId: 'm', action: 'steer' }))
+      .rejects.toThrow(/no sessionController.updateQueue/)
+  })
+})
+
+describe('DshDriver.readQueue', () => {
+  it('lists pending inbox rows with the ids queue mutations address', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionQuery', {
+      observeSession: async () => ({
+        header: { id: 's1', cwd: '/tmp' },
+        inheritedEventCount: 0,
+        events: [],
+        projections: {
+          asOfSeq: 3,
+          values: {
+            inbox: {
+              'next-turn': [
+                {
+                  id: 'm-1',
+                  content: [
+                    { type: 'text', text: 'second task' },
+                    { type: 'image', mediaType: 'image/png', data: 'AAA' },
+                  ],
+                  source: { kind: 'user', rpcId: 'r1' },
+                },
+              ],
+            },
+          },
+        },
+        [Symbol.dispose]: () => undefined,
+      }),
+    } as never)
+    const driver = new DshDriver(ctx, () => testConfig())
+    await expect(driver.readQueue('s1')).resolves.toEqual({
+      queued: [{ id: 'm-1', text: 'second task', images: 1, source: 'user' }],
+    })
+  })
+
+  it('explains that the queue is unreadable rather than reporting it empty', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionQuery', { readSession: async () => ({ session: { id: 's' }, inheritedEventCount: 0, events: [] }) } as never)
+    const driver = new DshDriver(ctx, () => testConfig())
+    const queue = await driver.readQueue('s')
+    expect(queue.queued).toEqual([])
+    expect(queue.note).toMatch(/observeSession/)
+  })
+})
+
 describe('DshDriver.searchSessions', () => {
   function searchable(
     result: { items: { sessionId: string; snippet: string }[]; hasMore: boolean },
@@ -441,6 +538,10 @@ describe('bounded replies', () => {
 
     const newest = await driver.readTranscript('session-1', 2)
     expect(newest.messages.map((message) => message.text)).toEqual(['message 3', 'message 4'])
+    // The id that queue mutations address travels with each message.
+    expect(newest.messages[0]?.id).toMatch(/^m-/)
+    expect(newest.messages[0]?.id).not.toBe(newest.messages[1]?.id)
+
     // Page from the oldest seq already held; the tail of that window comes back.
     const older = await driver.readTranscript('session-1', 2, { beforeSeq: newest.messages[0]?.seq })
     expect(older.messages.map((message) => message.text)).toEqual(['message 1', 'message 2'])

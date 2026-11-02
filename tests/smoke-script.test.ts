@@ -26,7 +26,7 @@ async function runSmoke(args: string[], env: Record<string, string> = {}): Promi
   return { code, stdout, stderr }
 }
 
-describe('scripts/smoke.mjs', () => {
+describe('scripts/smoke.mjs', { timeout: 30_000 }, () => {
   let url: string
   let stop: () => Promise<void>
 

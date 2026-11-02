@@ -453,6 +453,8 @@ interface ShellJobState {
 /** One message projected onto the caller-facing transcript. */
 export interface TranscriptMessage {
   readonly role: 'user' | 'assistant'
+  /** The harness message id; queue mutations address a pending message by it. */
+  readonly id?: string
   /** The message text, cut to the caller's per-message cap when one was given. */
   readonly text: string
   readonly time: number
@@ -674,6 +676,7 @@ export class DshDriver {
       approval: this.approvalService() !== undefined,
       // Controller operations whose absence is version-dependent, not
       // configuration-dependent: a caller can tell "refused" from "unavailable".
+      sessionQueue: typeof (this.sessionController() as { updateQueue?: unknown } | undefined)?.updateQueue === 'function',
       sessionSearch: typeof (this.sessionController() as { search?: unknown } | undefined)?.search === 'function',
       sessionRename: typeof (this.sessionController() as { rename?: unknown } | undefined)?.rename === 'function',
       sessionModel: typeof (this.sessionController() as { selectModel?: unknown } | undefined)?.selectModel === 'function',
@@ -1689,6 +1692,99 @@ export class DshDriver {
   }
 
   /**
+   * The messages waiting in a session's inbox, with the ids queue mutations use.
+   *
+   * Queued messages are a *live* projection (`inbox["next-turn"]`), not durable
+   * log events: an accepted-but-not-yet-run message has no event of its own, which
+   * is why `session_messages` cannot show it and why this reads the projection.
+   * Only a session this process holds can answer; a cold one reports a note rather
+   * than an empty queue that would be indistinguishable from "nothing waiting".
+   */
+  async readQueue(sessionId: string): Promise<{
+    queued: { id: string; text: string; source?: string; images: number }[]
+    note?: string
+  }> {
+    const query = this.sessionQuery()
+    if (query === undefined || typeof query.observeSession !== 'function') {
+      return {
+        queued: [],
+        note: 'this DSH profile mounts no sessionQuery.observeSession(), so the pending queue cannot be read',
+      }
+    }
+    const observation = await query.observeSession(sessionId, { projectionMode: 'all' })
+    try {
+      const values = observation.projections?.values as Record<string, unknown> | undefined
+      const inbox = values?.['inbox'] as { 'next-turn'?: unknown } | undefined
+      const rows = Array.isArray(inbox?.['next-turn']) ? (inbox['next-turn'] as unknown[]) : []
+      const queued = rows.flatMap((row) => {
+        const record = (typeof row === 'object' && row !== null ? row : {}) as Record<string, unknown>
+        const id = typeof record['id'] === 'string' ? record['id'] : undefined
+        if (id === undefined || id === '') return []
+        const blocks = Array.isArray(record['content']) ? (record['content'] as unknown[]) : []
+        const text = blocks
+          .map((block) => {
+            const part = (typeof block === 'object' && block !== null ? block : {}) as Record<string, unknown>
+            return part['type'] === 'text' && typeof part['text'] === 'string' ? part['text'] : ''
+          })
+          .join('')
+        const images = blocks.filter((block) => {
+          const part = (typeof block === 'object' && block !== null ? block : {}) as Record<string, unknown>
+          return part['type'] === 'image'
+        }).length
+        const source = (record['source'] as { kind?: unknown } | undefined)?.kind
+        return [{
+          id,
+          text,
+          ...(typeof source === 'string' ? { source } : {}),
+          images,
+        }]
+      })
+      return { queued }
+    } finally {
+      // Release the prepared-observation lease, exactly as the usage read does.
+      ;(observation as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.()
+    }
+  }
+
+  /**
+   * Edit, withdraw or steer one *pending* queued message.
+   *
+   * A caller that queued work with `wait: false` may need to retract it before it
+   * runs — the difference between one more turn and none. The harness addresses a
+   * pending message by its message id (from `session_messages`) and this is the
+   * only surface that mutates the queue; cancellation cancels the running turn,
+   * not the next one.
+   */
+  async updateQueue(request: {
+    sessionId: string
+    messageId: string
+    action: 'remove' | 'edit' | 'steer'
+    content?: string
+  }): Promise<{ accepted: true; action: 'remove' | 'edit' | 'steer' }> {
+    if (request.action === 'edit' && (request.content ?? '').trim() === '') {
+      throw new Error('editing a queued message needs non-empty content')
+    }
+    const controller = this.requireSessionController()
+    const update = (controller as {
+      updateQueue?: (request: unknown) => Promise<{ accepted: true }>
+    }).updateQueue
+    if (typeof update !== 'function') {
+      throw new Error(
+        'this DSH profile provides no sessionController.updateQueue(), so a queued message cannot be edited or withdrawn',
+      )
+    }
+    const action = request.action === 'edit'
+      ? { kind: 'edit' as const, content: [{ type: 'text' as const, text: request.content ?? '' }] }
+      : { kind: request.action }
+    await update.call(controller, {
+      sessionId: request.sessionId,
+      itemId: request.messageId,
+      action,
+    })
+    return { accepted: true, action: request.action }
+  }
+
+  /**
    * Search visible session content for a literal query.
    *
    * The harness bounds one search at 20 items and reports `hasMore`, so this
@@ -1933,6 +2029,11 @@ export class DshDriver {
         ? 'user' as const
         : event.type === 'assistant/message' ? 'assistant' as const : undefined
       if (role === undefined) continue
+      // The message id is what queue mutations address (`SessionUpdateQueue`), so
+      // a caller that queued work can withdraw or redirect it later.
+      const messageId = role === 'user'
+        ? (event.data as { id?: unknown } | undefined)?.id
+        : (event.data as { message?: { id?: unknown } } | undefined)?.message?.id
       if (options.role !== undefined && options.role !== role) continue
       if (options.sinceSeq !== undefined && event.seq <= options.sinceSeq) continue
       if (options.beforeSeq !== undefined && event.seq >= options.beforeSeq) continue
@@ -1944,6 +2045,7 @@ export class DshDriver {
       const truncated = cap !== undefined && text.length > cap
       messages.push({
         role,
+        ...(typeof messageId === 'string' && messageId !== '' ? { id: messageId } : {}),
         text: truncated ? truncateText(text, cap) : text,
         time: event.time,
         seq: event.seq,

@@ -255,6 +255,21 @@ export interface DshSessionController {
   cancel(request: { readonly sessionId: string }): { readonly accepted: true }
 
   /**
+   * Mutate one pending queued message (edit/remove/steer), addressed by message id.
+   *
+   * Optional like the other additive members: a profile without it simply cannot
+   * retract queued work.
+   */
+  updateQueue?(request: {
+    readonly sessionId: string
+    readonly itemId: string
+    readonly action:
+      | { readonly kind: 'edit'; readonly content: readonly unknown[] }
+      | { readonly kind: 'remove' }
+      | { readonly kind: 'steer' }
+  }): Promise<{ readonly accepted: true }>
+
+  /**
    * Literal content search over visible sessions, without activating any of them.
    *
    * Optional: it needs `sessionQuery` on the host, and a profile without that

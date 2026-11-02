@@ -79,6 +79,7 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 | `permissionPresets` | `permissionPresets` | catalog permission presets |
 | `sandboxPolicy` | `sandboxPolicy` | catalog sandbox mode; read-only gating of `workspace_create` |
 | `approval` | `approval` | `approval.policy: "allow"` (the harness's unattended stance) |
+| `sessionQueue` | `sessionController.updateQueue` | edit/remove/steer a pending queued message |
 | `sessionSearch` | `sessionController.search` | content search over sessions (`session_search`) |
 | `sessionRename` / `sessionModel` / `sessionFork` | `sessionController` members | controller features whose presence is version-dependent |
 | `shellBackground` | `shell` members | `start`/`execute` shape needed by background jobs |
@@ -556,6 +557,8 @@ progress notifications (§6.3) — all cheap and none of them contentious.
 - **`session_search`** (0.25.0): literal message-content search returning `sessionId` + snippet,
   bounded at 20 with `hasMore`, so a caller can find the session that discussed something before
   prompting it;
+- **`session_queue`** (0.29.0): edit/remove/steer one pending queued message by message id, so a
+  caller that queued work with `wait: false` can retract it before it spends a turn;
 - `workspace_delete` (unregister only — files and session history untouched);
 - **`approval.policy: "allow"` implemented** — it had been documented and parsed but never applied;
   create/fork now switch the session to the harness's unattended stance and report
@@ -584,11 +587,11 @@ author chose specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 (26 as of plugin 0.25.0) |
+| MCP tools registered on 0.1.5-rc.1 | 12 (27 as of plugin 0.29.0) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |
-| Services the plugin probes (`dsh_info.harnessServices`) | 21 |
+| Services the plugin probes (`dsh_info.harnessServices`) | 22 |
 | Services the plugin meaningfully uses | 15 (+1 for plumbing: `webServer` for the mount) |
 | Driver methods exposed to tools | 29 |
 | DSH built-in model-visible tools | 53 names / 55 registration sites |

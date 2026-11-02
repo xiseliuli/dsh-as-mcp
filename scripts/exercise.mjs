@@ -241,6 +241,7 @@ section('surface')
     'session_list',
     'session_messages',
     'session_prompt',
+    'session_queue',
     'session_rename',
     'session_search',
     'session_set_model',
@@ -256,7 +257,7 @@ section('surface')
   ]
   check(
     JSON.stringify(names) === JSON.stringify(expected),
-    usageReported ? 'tools/list exposes all 26 tools' : 'tools/list exposes all 25 tools (usage reporting off)',
+    usageReported ? 'tools/list exposes all 27 tools' : 'tools/list exposes all 26 tools (usage reporting off)',
     `${names.length} tools`,
   )
   check(
@@ -1005,6 +1006,15 @@ try {
     } else {
       check(true, 'beforeSeq paging skipped (transcript shorter than 3 messages)', `${tailMessages.length} messages`)
     }
+
+    // The pending queue is a live projection, not transcript events: listing it
+    // must either answer with rows or say why this profile cannot see them.
+    const queue = await must('session_queue', { sessionId })
+    check(
+      Array.isArray(queue.queued) && (queue.note === undefined || typeof queue.note === 'string'),
+      'session_queue lists the pending inbox or explains it cannot',
+      `${queue.queued?.length ?? 0} queued${queue.note === undefined ? '' : ' (note)'}`,
+    )
   }
 
   section('failure paths are legible')

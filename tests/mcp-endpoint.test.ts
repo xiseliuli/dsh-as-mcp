@@ -275,7 +275,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
       session: [
         'session_create', 'session_list', 'session_search', 'session_fork', 'session_rename',
-        'session_set_model', 'session_prompt', 'session_messages', 'session_cancel',
+        'session_set_model', 'session_prompt', 'session_messages', 'session_queue', 'session_cancel',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -291,7 +291,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(26)
+      expect(all).toHaveLength(27)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {
@@ -505,6 +505,42 @@ describe('MCP Streamable HTTP endpoint', () => {
       expect(payload.messages).toHaveLength(1)
       expect(payload.total).toBe(4)
       expect(payload.truncated).toBe(true)
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('lists the pending queue when session_queue is called without an action', async () => {
+    const own = await boot(stubDriver({
+      readQueue: async () => ({ queued: [{ id: 'm-1', text: 'later', images: 0 }] }),
+    }), testConfig({ session: true }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_queue', { sessionId: 's' })
+      expect(isError).toBe(false)
+      expect(JSON.parse(text)).toEqual({ queued: [{ id: 'm-1', text: 'later', images: 0 }] })
+      const half = await callTool(own.url, 'session_queue', { sessionId: 's', action: 'remove' })
+      expect(half.isError).toBe(true)
+      expect(half.text).toMatch(/pass messageId and action together/)
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('forwards session_queue mutations', async () => {
+    const seen: unknown[] = []
+    const own = await boot(stubDriver({
+      updateQueue: async (request) => {
+        seen.push(request)
+        return { accepted: true, action: request.action }
+      },
+    }), testConfig({ session: true }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_queue', {
+        sessionId: 's', messageId: 'm', action: 'remove',
+      })
+      expect(isError).toBe(false)
+      expect(seen).toEqual([{ sessionId: 's', messageId: 'm', action: 'remove' }])
+      expect(JSON.parse(text)).toEqual({ accepted: true, action: 'remove' })
     } finally {
       await own.stop()
     }

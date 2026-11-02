@@ -58,6 +58,8 @@ export type McpDriver = Pick<
   | 'setSessionModel'
   | 'listSessions'
   | 'searchSessions'
+  | 'updateQueue'
+  | 'readQueue'
   | 'probeSessionSearch'
   | 'promptSession'
   | 'cancelSession'
@@ -755,6 +757,41 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           total: transcript.total,
           ...(transcript.total > transcript.messages.length ? { truncated: true } : {}),
         })
+      }),
+    )
+
+    server.registerTool(
+      'session_queue',
+      {
+        title: 'Inspect or mutate the pending queue',
+        description:
+          'Without action/messageId: list the messages waiting in this session\'s inbox, each with the id '
+          + 'queue mutations address (a queued message has no transcript event yet, which is why '
+          + 'session_messages cannot show it). With action/messageId: mutate one pending message — remove it '
+          + 'so it never runs, replace its text, or steer it into the running turn. session_cancel stops the '
+          + 'current turn; this changes the work waiting behind it.',
+        inputSchema: z.object({
+          sessionId: z.string(),
+          messageId: z.string().optional().describe('The queued message id from a listing; pass it with action.'),
+          action: z.enum(['remove', 'edit', 'steer']).optional()
+            .describe('remove, edit (needs content), or steer. Omit, with messageId, to list the queue.'),
+          content: z.string().optional().describe('Replacement text; required for edit, ignored otherwise.'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_queue', log, async (args) => {
+        if (args.action === undefined && args.messageId === undefined) {
+          return ok(await driver.readQueue(args.sessionId))
+        }
+        if (args.action === undefined || args.messageId === undefined) {
+          throw new Error('pass messageId and action together, or neither of them to list the queue')
+        }
+        return ok(await driver.updateQueue({
+          sessionId: args.sessionId,
+          messageId: args.messageId,
+          action: args.action,
+          ...(args.content === undefined ? {} : { content: args.content }),
+        }))
       }),
     )
 

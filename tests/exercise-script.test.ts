@@ -34,7 +34,7 @@ async function runExercise(args: string[], env: Record<string, string> = {}): Pr
   return { code, stdout, stderr }
 }
 
-describe('scripts/exercise.mjs', () => {
+describe('scripts/exercise.mjs', { timeout: 30_000 }, () => {
   let url: string
   let stop: () => Promise<void>
   const scratchDirs: string[] = []

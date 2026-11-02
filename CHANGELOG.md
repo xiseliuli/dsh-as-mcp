@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.29.0
+
+- **`session_queue`** (27th tool): edit, withdraw or steer one *pending* queued
+  message, addressed by the message id now carried by `session_messages`. A caller
+  that queued work with `wait: false` can retract it before it spends a turn —
+  `session_cancel` stops the running turn, this changes the work waiting behind it.
+  With only `sessionId` it lists the pending inbox from the live `inbox`
+  projection — the only place a queued message exists before its turn starts.
+  The capability is reported as `sessionQueue` in `dsh_info.harnessServices`.
+
 ## 0.28.0
 
 - `session_messages` gained `beforeSeq`: a transcript longer than the 500-message
