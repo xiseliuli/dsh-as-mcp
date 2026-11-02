@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.23.2
+
+- Verified the settings panel's live-write chain end to end (the same path the
+  panel uses, driven by a throwaway plugin that calls `ctx.settings.update`): the
+  write landed in the composed config without a restart, `dsh_info` reported the
+  new `limits.maxReadBytes`, and the very next `file_read` was capped by it
+  (2048 instead of the previous 1 MiB). Unit tests already covered the per-call
+  read; this is the first time the settings service itself was in the loop.
+- Also confirmed `file_read` paging metadata is complete for a capped read:
+  `offset`, `bytes` (returned), `nextOffset` (continuation) and `size` (the whole
+  file) are all present, so a clamped default read is still continuable.
+
 ## 0.23.1
 
 - Verified live (not only in unit tests) that tool-group toggles work end to end:
