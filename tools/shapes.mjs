@@ -41,6 +41,14 @@ const SHAPES = [
     model: true,
   },
   {
+    id: 'mountonly',
+    label: 'mounted on the DSH web server only',
+    groups: { workspace: true, session: true, files: true, shell: true, agentTools: true, usage: true },
+    liveArgs: ['--mounted-only'],
+    model: false,
+    mountedOnly: true,
+  },
+  {
     id: 'session',
     label: 'session + usage',
     groups: { workspace: false, session: true, files: false, shell: false, agentTools: false, usage: true },
@@ -205,7 +213,7 @@ try {
     }
     writeFileSync(join(profileDir, 'cordis.patch.yml'), `- id: dsh-as-mcp
   config:
-    http: { enabled: true, host: 127.0.0.1, port: ${endpointPort}, path: /mcp, mountOnWebServer: false }
+    http: { enabled: ${shape.mountedOnly === true ? 'false' : 'true'}, host: 127.0.0.1, port: ${endpointPort}, path: /mcp, mountOnWebServer: ${shape.mountedOnly === true ? 'true' : 'false'} }
     tools: { ${Object.entries(shape.groups).map(([group, on]) => `${group}: ${on}`).join(', ')} }
     agentTools: { allow: [], deny: [] }
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900000, scope: all }
@@ -221,8 +229,9 @@ try {
       detached: false,
     })
     try {
-      const ready = await waitForEndpoint(`http://127.0.0.1:${endpointPort}/mcp`, 60_000)
-        && await waitForServices(`http://127.0.0.1:${endpointPort}/mcp`, 60_000)
+      const base = shape.mountedOnly === true ? webPort : endpointPort
+      const ready = await waitForEndpoint(`http://127.0.0.1:${base}/mcp`, 60_000)
+        && await waitForServices(`http://127.0.0.1:${base}/mcp`, 60_000)
       if (!ready) {
         process.stdout.write(`  endpoint never answered; server log:\n${readFileSync(serverLog, 'utf8').split('\n').slice(-6).join('\n')}\n`)
         results.push({ shape, passed: 0, failed: 1, detail: 'endpoint never answered' })
@@ -232,7 +241,7 @@ try {
       const output = await new Promise((resolve) => {
         const child = spawn(process.execPath, [
           'tools/live-checks.mjs',
-          '--url', `http://127.0.0.1:${endpointPort}/mcp`,
+          '--url', `http://127.0.0.1:${base}/mcp`,
           ...liveArgs,
         ], {
           cwd: process.cwd(),

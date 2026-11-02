@@ -55,6 +55,7 @@ const resolveDshHome = () =>
     : join(homedir(), '.dsh')
 
 let endpoint = option('--url', process.env.DSH_AS_MCP_URL ?? 'http://127.0.0.1:8790/mcp')
+const mountedOnly = process.argv.includes('--mounted-only')
 const urlSource = option('--url', undefined) !== undefined ? 'arg' : process.env.DSH_AS_MCP_URL !== undefined ? 'env' : 'default'
 if (!endpoint.endsWith('/mcp') && !endpoint.includes('?')) endpoint = endpoint.replace(/\/+$/, '') + '/mcp'
 
@@ -356,12 +357,28 @@ async function infoCoherenceChecks() {
     'dsh_info reports the built version this checkout produces',
     `${info.version} (repo ${repoVersion})`,
   )
-  check(
-    typeof info.endpoint === 'string' && info.endpoint.replace(/\/+$/, '') === endpoint.replace(/\/+$/, ''),
-    'dsh_info echoes the endpoint the caller reached',
-    info.endpoint,
-  )
-  check(info.listening === true && info.listenError === null, 'dsh_info health says the listener is up')
+  if (mountedOnly) {
+    // Served by DSH's web server with the plugin listener disabled: the URL the caller
+    // reached is not one the plugin owns, so `endpoint` must say where it actually lives
+    // instead of echoing the URL back.
+    check(
+      info.listening === false && info.listenError === null && info.mountedOnDshWebServer === true,
+      'a mounted-only endpoint reports no listener and the web-server mount',
+      `listening ${String(info.listening)}, mounted ${String(info.mountedOnDshWebServer)}`,
+    )
+    check(
+      typeof info.endpoint === 'string' && info.endpoint.startsWith('/') && /web server/.test(info.endpoint),
+      'a mounted-only endpoint says where it lives instead of printing a URL',
+      String(info.endpoint).slice(0, 70),
+    )
+  } else {
+    check(
+      typeof info.endpoint === 'string' && info.endpoint.replace(/\/+$/, '') === endpoint.replace(/\/+$/, ''),
+      'dsh_info echoes the endpoint the caller reached',
+      info.endpoint,
+    )
+    check(info.listening === true && info.listenError === null, 'dsh_info health says the listener is up')
+  }
   // The endpoint string must mean what it looks like: a dialable URL while the listener
   // is up, and explicitly not a URL when the endpoint is served elsewhere (mounted-only
   // deployments report an explanation rather than an unreachable address).

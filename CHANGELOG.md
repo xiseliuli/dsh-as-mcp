@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.69
+
+- `tools/shapes.mjs` gained a `mountonly` shape: `http.enabled: false` +
+  `mountOnWebServer: true`, served on DSH's web server, checked over that route. live-checks
+  understands `--mounted-only` and then expects `listening: false`,
+  `mountedOnDshWebServer: true` and an endpoint string that describes where it lives instead of
+  echoing a URL. The mounted-only deployment previously had only a hand probe per release.
+  Measured on this build with `--with-model`: 158 full, 90 session, 63 narrow, 68 files+shell,
+  109 mounted-only; cheap subset 109/46/63/68. Both README tables updated.
+
 ## 0.52.68
 
 - `dsh_info`'s endpoint/listening pair is now asserted as a relation in every live run: the

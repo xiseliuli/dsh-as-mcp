@@ -938,13 +938,18 @@ build:
 
 | Tool groups enabled | Tools advertised | Last result |
 | --- | --- | --- |
-| all six | 28 | live-checks 153/153 with `--with-model`; acceptance run 166/166 |
-| `session`, `usage` only | 13 | live-checks 89/89 with `--with-model` (file/shell/workspace sections skip) |
-| `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 59/59 (a disabled group's reason names its `tools.<group>` switch) |
-| `files`, `shell` only | 11 | live-checks 65/65 (session/usage/queue/search sections skip) |
+| all six | 28 | live-checks 158/158 with `--with-model`; acceptance run 166/166 |
+| `session`, `usage` only | 13 | live-checks 90/90 with `--with-model` (file/shell/workspace sections skip) |
+| `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 63/63 (a disabled group's reason names its `tools.<group>` switch) |
+| `files`, `shell` only | 11 | live-checks 68/68 (session/usage/queue/search sections skip) |
+
+A fifth shape, `mountonly`, boots with `http.enabled: false` and `mountOnWebServer: true` and
+checks the endpoint over DSH's own web server: 109/109, all cheap, including the assertions that
+`dsh_info` reports `listening: false`, `mountedOnDshWebServer: true` and an endpoint string that
+describes where it lives rather than echoing a URL.
 
 The two turn-running rows are measured with `--with-model`; `tools/release.sh --shapes` without it
-exercises the cheap subset and reports 108/45/62/65 for the same four shapes.
+exercises the cheap subset and reports 109/46/63/68 for the same four group shapes.
 
 `node tools/shapes.mjs [--with-model]` reproduces that table in one command: for each shape it boots a
 throwaway profile with that shape's `tools` block, installs the packaged tarball, waits until the harness
