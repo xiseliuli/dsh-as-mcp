@@ -517,8 +517,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'Branch a live session into a child that inherits its event prefix up to an optional boundary. The '
           + 'child continues the same conversation without re-sending or re-priming it, so trying an alternative '
           + 'direction costs one new turn instead of a replay. The source may be a session that is live right now '
-          + 'or one restored from disk. The child is tracked as this endpoint\'s session and its inherited prefix '
-          + 'is reported separately from its own spend by session_usage.',
+          + 'or one restored from disk, but it needs at least one completed turn: a session that has never '
+          + 'answered has no prefix to branch from, and the harness refuses it with that explanation. The child '
+          + 'is tracked as this endpoint\'s session and its inherited prefix is reported separately from its own '
+          + 'spend by session_usage.',
         inputSchema: z.object({
           sessionId: z.string().describe('Live source session id.'),
           atSeq: z

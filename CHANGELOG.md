@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.38.0
+
+- `session_fork`'s description (and both READMEs) now state the precondition the
+  live check found: the source needs at least one completed turn. A session that has
+  never answered has no prefix to branch from and the harness refuses it with
+  "has no completed turn to fork from" — accurate, but previously undocumented, so a
+  caller forking a freshly created session was surprised. The live check now asserts
+  that refusal is legible; the positive fork path stays covered by the acceptance and
+  smoke runs, which fork a session that has answered.
+- `tools/live-checks.mjs` gained a fork/rename section: titles are stored trimmed and
+  come back through `session_list`, an unknown session id is a legible error, and an
+  empty title is refused before it reaches the harness.
+
 ## 0.37.14
 
 - `tools/live-checks.mjs` checks the `dsh_tool_list`/`dsh_tool_call` promises: the

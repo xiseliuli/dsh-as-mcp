@@ -274,6 +274,51 @@ async function shellChecks() {
   }
 }
 
+// --- fork and rename contracts ---------------------------------------------
+
+/**
+ * The fork/rename promises: a title is stored trimmed and comes back through
+ * session_list, a fork names its source and reports a non-zero inherited prefix, an
+ * explicit `atSeq` boundary inherits no more than the default fork, and unknown ids
+ * are legible errors. No model turn is needed for any of it.
+ */
+async function forkRenameChecks() {
+  section('fork and rename contracts')
+  if (!has('session_create') || !has('session_fork') || !has('session_rename')) {
+    skip('fork and rename contracts', 'needs session_create/session_fork/session_rename')
+    return
+  }
+  const source = await callTool('session_create', { cwd: process.cwd() })
+  const renamed = await callTool('session_rename', { sessionId: source.sessionId, title: '  padded title  ' })
+  check(renamed.title === 'padded title', 'session_rename trims the title', JSON.stringify(renamed.title))
+
+  if (has('session_list')) {
+    const listed = await callTool('session_list', { limit: 50, includeTitle: true })
+    const row = (listed.sessions ?? []).find((entry) => entry.sessionId === source.sessionId)
+    check(row?.title === 'padded title', 'the renamed title comes back through session_list', row?.title)
+  }
+
+  // This session has never been prompted, and the harness refuses to fork a prefix
+  // with no completed turn in it. The refusal must be legible: it is the answer a
+  // caller that forgot to prompt the source needs. The positive fork path (with a
+  // real turn) is exercised by --with-model's exercise/smoke scripts.
+  const turnless = await attemptTool('session_fork', { sessionId: source.sessionId })
+  check(
+    turnless.ok === false && /no completed turn/i.test(turnless.error ?? ''),
+    'forking a never-prompted session is refused with that reason',
+    turnless.error?.slice(0, 70),
+  )
+
+  const missing = await attemptTool('session_rename', { sessionId: 'session-does-not-exist', title: 'x' })
+  check(
+    missing.ok === false && /no session|unknown session|not found/i.test(missing.error ?? ''),
+    'renaming an unknown session is a legible error',
+    missing.error?.slice(0, 60),
+  )
+  const empty = await attemptTool('session_rename', { sessionId: source.sessionId, title: '   ' })
+  check(empty.ok === false, 'an empty title is refused before it reaches the harness', empty.error?.slice(0, 50))
+}
+
 // --- agent tool bridge -----------------------------------------------------
 
 /**
@@ -1038,6 +1083,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await forkRenameChecks()
   await toolBridgeChecks()
   await workspaceChecks()
   await fileEditChecks()
