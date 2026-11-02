@@ -523,6 +523,31 @@ async function subagentCheck() {
       'session_list { origin: "subagent" } returns only the children',
       `${subagentRows.length} subagent(s)`,
     )
+    // One recorded result from the subagent's own transcript, fetched by call id:
+    // the debug path an operator takes after seeing a failure in the call list.
+    const childTranscript = await callTool('session_messages', {
+      sessionId: child.sessionId,
+      limit: 50,
+      includeToolCalls: true,
+    })
+    const completedCall = (childTranscript.messages ?? [])
+      .flatMap((message) => message.toolCalls ?? [])
+      .find((call) => typeof call.id === 'string' && typeof call.resultChars === 'number')
+    if (completedCall === undefined) {
+      skip('session_tool_result on the subagent', 'its transcript has no completed tool call')
+    } else {
+      const fetched = await callTool('session_tool_result', {
+        sessionId: child.sessionId,
+        callId: completedCall.id,
+        maxChars: 500,
+      })
+      check(
+        fetched.chars === completedCall.resultChars && typeof fetched.text === 'string' && fetched.text.length <= 500,
+        'session_tool_result reads a subagent tool result by id',
+        `${fetched.chars} chars`,
+      )
+    }
+
     // Enriched search hits: with the index enabled, a match inside the subagent
     // session should say which parent it belongs to. Disabled index = skip.
     const search = await attemptTool('session_search', { query: 'SUBAGENT-OK' })

@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.36.1
+
+- `tools/live-checks.mjs --with-subagent` also exercises the debug path end to end:
+  it reads the subagent's transcript with `includeToolCalls`, takes a completed call
+  id, fetches that result with `session_tool_result`, and checks the returned length
+  equals the transcript's `resultChars`. Skips cleanly when the child made no call.
+
 ## 0.36.0
 
 - **`session_tool_result`** (28th tool): read one recorded tool result by call id —
