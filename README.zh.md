@@ -200,7 +200,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | --- | --- |
 | `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`，以及 `toolAvailability`（通过全部规则的 `availableTools`，可与 `tools/list` 对照；以及本部署无法服务的工具及原因）；`probeSearch` 可验证搜索是否真的可用。 |
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建；传 `createDirectory: false` 则要求它已存在）。 |
-| `workspace_list` | 列出所有工作区：id、路径、标题、会话数、目录是否还在。 |
+| `workspace_list` | 列出所有工作区：id、路径、标题、目录是否还在，以及**挂在该注册下**的会话数（用 `workspaceId` 创建的会话）——这不是"cwd 恰好是该目录"的会话数，后者由 `session_list { cwd }` 回答。 |
 | `workspace_delete` | 注销一个工作区（文件与会话历史不受影响）；幂等。 |
 | `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话。 |
 | `session_fork` | 把一个会话（存活的，或从磁盘恢复的）分叉成继承其事件前缀的子会话（可用 `atSeq` 指定事件位置，或用 `atTurn` 指定轮次边界；不指定时 harness 取最近一个完整轮次）。从该点继续只需一轮，不用重放历史；`session_usage` 会单独报出继承前缀的用量。 |

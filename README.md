@@ -211,7 +211,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | --- | --- |
 | `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, the `catalog` of accepted providers, agent presets and sandbox mode, and `toolAvailability` — the tools that passed every rule (`availableTools`, comparable with `tools/list`), those this deployment cannot serve, and why. `probeSearch` additionally exercises a real search to say whether the index answers, rather than just whether the tool is enabled. |
 | `workspace_create` | Register a directory as a DSH workspace (creating it if needed; pass `createDirectory: false` to require that it already exists). |
-| `workspace_list` | Every registered workspace with id, path, title, session count, directory status. |
+| `workspace_list` | Every registered workspace with id, path, title, directory status, and the sessions **attached to the registration** (created with `workspaceId`) — that count is not the number of sessions whose `cwd` happens to be the directory; `session_list { cwd }` answers that. |
 | `workspace_delete` | Unregister a workspace (files and session history untouched); idempotent. |
 | `session_create` | Start a DSH agent session bound to a workspace or bare directory. |
 | `session_fork` | Branch a session (live or restored from disk) into a child that inherits its event prefix, optionally up to `atSeq` (event position) or `atTurn` (turn boundary); with no boundary the harness picks the latest completed turn. Continuing from that point costs one turn, not a replay, and `session_usage` reports the inherited prefix separately. |

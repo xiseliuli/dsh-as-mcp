@@ -3,6 +3,22 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.62
+
+- Found a real ambiguity while adding a cross-view check: `workspace_list`'s `sessionCount` is
+  the registry's **attach list** (sessions created with `workspaceId`), while a session created
+  by `cwd` alone is not attached — so the row can read 0 while `session_list { cwd }` shows a
+  session. The docs now say exactly that, and the live check asserts both halves: a session
+  created through the registration moves the count, one created by cwd alone does not.
+- The first version of the check asserted the two tallies were equal, which failed live
+  ("workspace 0 vs listing 1") and exposed the ambiguity instead of endorsing a wrong reading.
+
+## 0.52.61
+
+- `workspace_list`'s `sessionCount` is now checked against a session the endpoint actually
+  creates in that directory: it must move by one. The listing check alone only proved the field
+  was a number; this proves it is the harness's own tally for the right workspace.
+
 ## 0.52.60
 
 - The configuration-sample check now covers **both** READMEs: the Chinese sample was compared

@@ -1082,6 +1082,29 @@ async function workspaceChecks() {
       `${row?.sessionCount ?? '?'} session(s), ${row?.status ?? '?'}`,
     )
 
+    // `sessionCount` is the registry's own attach list, not "sessions whose cwd is this
+    // directory": a session created through the registration is counted, one created by
+    // cwd alone is not. Both halves are checked, because the row reads like a cwd tally.
+    if (has('session_create')) {
+      const countNow = async () => (await callTool('workspace_list')).workspaces
+        ?.find((entry) => entry.id === workspace?.id)?.sessionCount
+      const beforeCount = await countNow()
+      await callTool('session_create', { workspaceId: workspace?.id })
+      const attachedCount = await countNow()
+      check(
+        typeof beforeCount === 'number' && attachedCount === beforeCount + 1,
+        'a session created through the registration is counted on it',
+        `${beforeCount} -> ${attachedCount ?? '?'}`,
+      )
+      await callTool('session_create', { cwd: dir })
+      const cwdCount = await countNow()
+      check(
+        cwdCount === attachedCount,
+        'a session created by cwd alone is not attached to the registration',
+        `${attachedCount} -> ${cwdCount ?? '?'}`,
+      )
+    }
+
     // Deleting an id this instance does not know is a no-op with a boolean, not an error.
     const unknownDelete = await callTool('workspace_delete', { workspaceId: 'no-such-workspace' })
     check(unknownDelete.deleted === false, 'workspace_delete of an unknown id answers deleted: false')
