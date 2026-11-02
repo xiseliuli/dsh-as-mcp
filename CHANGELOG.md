@@ -3,6 +3,20 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.20
+
+- `session_set_model { reasoningEffort }` now has live evidence: the selection is applied
+  and echoed back (`reasoningEffort: "high"`, same model). Probed first, then wired into
+  `live-checks --with-model` as a no-turn assertion (it skips rather than fails when a
+  route rejects the effort, so the check does not assume every provider has one).
+
+## 0.52.19
+
+- The file-edit live check now covers the compare-and-swap direction that only writes had:
+  a hash read before another client changed the file makes `file_edit` refuse with the
+  current hash and leaves the file intact, and the same edit succeeds once the hash is
+  re-read. This is the lost-update window for edits, stated in the docs and now exercised.
+
 ## 0.52.18
 
 - Two more documented options now have live evidence: `dsh_tool_call { maxResultChars }`

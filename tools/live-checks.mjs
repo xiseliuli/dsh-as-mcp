@@ -1032,6 +1032,34 @@ async function fileEditChecks() {
       `${(shallow.entries ?? []).length} entr(ies)`,
     )
 
+    // The edit honours the same compare-and-swap as a write: a hash read before the
+    // file changed must not be allowed to rewrite it.
+    const before = await callTool('file_read', { path, sha256: true })
+    await callTool('file_write', { path, content: 'changed elsewhere\n' })
+    const staleEdit = await attemptTool('file_edit', {
+      path,
+      oldText: 'changed elsewhere',
+      newText: 'clobbered',
+      expectedSha256: before.sha256,
+    })
+    check(
+      staleEdit.ok === false && /current sha256 is/.test(staleEdit.error ?? '') &&
+        (await callTool('file_read', { path })).text === 'changed elsewhere\n',
+      'a stale expectedSha256 refuses the edit and leaves the file intact',
+      staleEdit.error?.slice(0, 60),
+    )
+    const fresh = await callTool('file_read', { path, sha256: true })
+    await callTool('file_edit', {
+      path,
+      oldText: 'changed elsewhere',
+      newText: 'alpha\nbeta\ngamma',
+      expectedSha256: fresh.sha256,
+    })
+    check(
+      (await callTool('file_read', { path })).text === 'alpha\nbeta\ngamma\n',
+      'the edit succeeds with the current hash',
+    )
+
     const ambiguous = await attemptTool('file_edit', { path, oldText: 'a', newText: 'A' })
     check(
       ambiguous.ok === false && /occur|match|unique|ambiguous/i.test(ambiguous.error ?? ''),
@@ -1769,6 +1797,24 @@ async function modelSelectionCheck() {
     model: firstModel.id,
   })
   check(session.model === route, 'session_create selects the advertised route', session.model)
+
+  // `reasoningEffort` is passed through to the harness selection and echoed back; it
+  // costs no turn, so it can be checked before the turns this section spends.
+  const effort = await attemptTool('session_set_model', {
+    sessionId: session.sessionId,
+    provider: first.provider,
+    model: firstModel.id,
+    reasoningEffort: 'high',
+  })
+  if (effort.ok) {
+    check(
+      effort.payload?.reasoningEffort === 'high' && effort.payload?.model === firstModel.id,
+      'session_set_model { reasoningEffort } is applied and echoed',
+      String(effort.payload?.reasoningEffort ?? 'absent'),
+    )
+  } else {
+    skip('session_set_model { reasoningEffort }', effort.error?.slice(0, 60))
+  }
 
   const reply = await callTool('session_prompt', {
     sessionId: session.sessionId,
