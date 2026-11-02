@@ -77,6 +77,9 @@ step "typecheck (host + client)"
 ./node_modules/.bin/tsc --noEmit
 ./node_modules/.bin/tsc -p tsconfig.client.json --noEmit
 
+step "docs consistency"
+node tools/check-docs.mjs
+
 if [[ $SKIP_TESTS -eq 0 ]]; then
   step "tests"
   # The proxy variables make Node's fetch route a loopback request through a

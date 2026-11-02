@@ -3,6 +3,20 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.6
+
+- Added `tools/check-docs.mjs` and a `docs consistency` step in
+  `tools/release.sh`. It compares the two README tool tables with the tools the
+  code registers, the package version with the newest changelog heading, the
+  shipped `files` list with what exists on disk (and with maintainer-only
+  directories), and every `docs/*.md` / script path the READMEs reference.
+- It immediately found real drift that prose review had missed: the en tool table
+  was missing `session_queue` (the row edit had silently not applied), and the zh
+  table had 24 rows, a duplicated `session_create`, and seven missing tools
+  (`workspace_delete`, `file_edit`, `file_read_image`, `shell_start`,
+  `shell_output`, `shell_kill`, `shell_list`). Both tables now list all 27, and
+  the check was negative-tested (renaming a row makes it exit 1).
+
 ## 0.30.5
 
 - `tools/release.sh` gained `--acceptance`: it boots a throwaway profile under a
