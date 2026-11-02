@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.15
+
+- The drift check now catches the class of defect 0.52.14 fixed by hand: a tool option
+  referenced in one README and not the other. Per tool it compares which `inputSchema`
+  option names each README mentions (as code spans) and fails when the sets differ — proven
+  by removing `` `probeSearch` `` from the en README, which now answers
+  `DRIFT: README.md never mentions option "probeSearch" of dsh_info, while README.zh.md
+  does`, then restoring. It does not demand every option be documented, only that coverage
+  be symmetric.
+
 ## 0.52.14
 
 - Fixed an English/Chinese row-content drift: the zh `dsh_info` row documented

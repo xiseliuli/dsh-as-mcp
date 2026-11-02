@@ -104,6 +104,55 @@ for (const block of toolBlocks) {
   }
 }
 
+// --- option references are translated together -------------------------------
+//
+// A tool option documented in one README and not the other is how `probeSearch` drifted:
+// it was in the zh `dsh_info` row and absent from the en one. The set of tool rows was
+// equal, so nothing noticed. This compares, per tool, which schema option names each
+// README mentions at least once (as a code span); the two sets must match. It does not
+// demand every option be documented, only that coverage be symmetric.
+
+function schemaOptionsOf(source) {
+  const tools = []
+  for (const match of source.matchAll(/registerTool\(\s*'([a-z_]+)'/g)) {
+    const start = match.index
+    const next = source.indexOf('registerTool(', start + 1)
+    const segment = source.slice(start, next === -1 ? source.length : next)
+    const schemaAt = segment.indexOf('inputSchema: z.object(')
+    if (schemaAt === -1) continue
+    const object = balanced(segment, segment.indexOf('{', schemaAt))
+    if (object === undefined) continue
+    const keys = []
+    let indent
+    for (const line of object.text.split('\n')) {
+      const key = /^(\s+)([A-Za-z][A-Za-z0-9]*):/.exec(line)
+      if (key === null) continue
+      const width = key[1].length
+      if (indent === undefined || width < indent) {
+        indent = width
+        keys.length = 0
+      }
+      if (width === indent) keys.push(key[2])
+    }
+    tools.push({ name: match[1], keys })
+  }
+  return tools
+}
+
+const enReadme = read('README.md')
+const zhReadme = read('README.zh.md')
+for (const tool of schemaOptionsOf(toolsSource)) {
+  for (const key of tool.keys) {
+    const inEn = enReadme.includes(`\`${key}\``)
+    const inZh = zhReadme.includes(`\`${key}\``)
+    if (inEn !== inZh) {
+      problems.push(
+        `README.md ${inEn ? 'documents' : 'never mentions'} option "${key}" of ${tool.name}, while README.zh.md ${inZh ? 'does' : 'does not'}`,
+      )
+    }
+  }
+}
+
 // --- the probe count in docs/CAPABILITY-GAPS.md -----------------------------
 //
 // That page's appendix states how many capability probes `dsh_info.harnessServices`
