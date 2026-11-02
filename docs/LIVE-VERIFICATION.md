@@ -15,7 +15,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 | Harness | DSH `0.2.1-rc.5` (the installed desktop app's runtime), plus `0.1.7-rc.2` and `0.1.5-rc.1` checkouts for API-shape questions |
 | Profile | `dsh --profile <name> --from-default-profile web` with a `cordis.patch.yml` that enables `dsh-as-mcp` on `127.0.0.1:8821`, run headless with `--no-open --port 8822` |
 | Client | a plain MCP client over Streamable HTTP (`fetch`, no SDK), so the wire format is what a third-party client would see |
-| Reusable scripts | `scripts/smoke.mjs` (wire up), `scripts/exercise.mjs` (142 checks, real prompts), `tools/live-checks.mjs` (protocol + cheap contracts; `--with-model` adds progress/cancellation) |
+| Reusable scripts | `scripts/smoke.mjs` (wire up), `scripts/exercise.mjs` (142 checks, real prompts), `tools/live-checks.mjs` (protocol + cheap contracts; `--with-model` adds progress/cancellation, `--with-subagent` a real subagent turn), and `tools/release.sh --acceptance` (boots a throwaway profile under a temporary `DSH_HOME`, runs the whole list, tears it down) |
 | Transcript/composition | every session, prompt and tool call below ran as an external caller would; the desktop app itself was never driven for these checks |
 
 ## Verified behaviours

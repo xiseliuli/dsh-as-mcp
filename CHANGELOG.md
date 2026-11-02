@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.5
+
+- `tools/release.sh` gained `--acceptance`: it boots a throwaway profile under a
+  temporary `DSH_HOME` (OS-chosen free ports, isolated session store, the
+  operator's provider credentials copied into the 0700 directory so real turns
+  work), runs the full acceptance script against it, and tears everything down
+  through an EXIT trap. Verified live: 142/142 checks, cwd runs, no leftover
+  profile, process or `/tmp` directory.
+
 ## 0.30.4
 
 - Added `tools/release.sh`: the release checklist as an executable (both

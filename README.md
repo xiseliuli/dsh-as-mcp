@@ -929,7 +929,8 @@ things that are *not* verified here and why.
 
 `tools/release.sh` is the release checklist as an executable: both typechecks, the test suite, the two
 bundles, the pack, an assertion that the package contains no maintainer-only directory, optional live
-checks (`--live URL [--with-subagent]`), and optional install into the desktop profile with a rollback
+checks (`--live URL [--with-subagent]`), an optional full acceptance run against a throwaway profile it
+boots and tears down (`--acceptance`), and optional install into the desktop profile with a rollback
 directory (`--install`). It refuses to reinstall the version already in that profile, because pnpm
 treats the same tarball path as already-installed.
 

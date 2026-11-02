@@ -16,6 +16,8 @@
 #                                        # install into the desktop profile, with a
 #                                        # rollback directory alongside
 #   tools/release.sh --skip-tests        # for a docs-only round
+#   tools/release.sh --acceptance        # ...and run the full acceptance script
+#                                        # against a throwaway profile it boots
 #
 # Exit code is non-zero on the first failing step. Nothing is installed unless
 # --install is passed.
@@ -27,6 +29,7 @@ LIVE_URL=""
 LIVE_ARGS=()
 INSTALL=0
 SKIP_TESTS=0
+ACCEPTANCE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --live)
@@ -43,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-tests)
       SKIP_TESTS=1
+      shift
+      ;;
+    --acceptance)
+      ACCEPTANCE=1
       shift
       ;;
     -h|--help)
@@ -100,6 +107,94 @@ if [[ -n "$LIVE_URL" ]]; then
   step "live checks against $LIVE_URL"
   env -u http_proxy -u https_proxy -u all_proxy -u NODE_USE_ENV_PROXY \
     node tools/live-checks.mjs --url "$LIVE_URL" "${LIVE_ARGS[@]}"
+fi
+
+if [[ $ACCEPTANCE -eq 1 ]]; then
+  step "acceptance against a throwaway profile"
+  [[ -x "$RUNTIME/cli/bin/dsh" ]] || fail "no DSH runtime at $RUNTIME"
+  PROFILE="release-check-$$"
+  PROFILE_DIR="$HOME/.dsh/profiles/$PROFILE"
+  WORK="$(mktemp -d /tmp/release-acceptance-XXXXXX)"
+  LOG="$WORK/harness.log"
+  HARNESS_PID=""
+  cleanup() {
+    if [[ -n "$HARNESS_PID" ]] && kill -0 "$HARNESS_PID" 2>/dev/null; then
+      kill "$HARNESS_PID" 2>/dev/null || true
+      wait "$HARNESS_PID" 2>/dev/null || true
+    fi
+    rm -rf "$WORK"
+  }
+  trap cleanup EXIT
+
+  # Two free ports, chosen by the OS rather than assumed: a stale temp instance or
+  # the user's own endpoint must not turn this into a "port in use" failure.
+  read -r PLUGIN_PORT WEB_PORT < <(node -e '
+    const net = require("node:net")
+    // Both listeners must be open before either port is read: closing the first
+    // lets the OS hand the same port back for the second.
+    const listen = () => new Promise((resolve) => {
+      const server = net.createServer()
+      server.listen(0, "127.0.0.1", () => resolve(server))
+    })
+    ;(async () => {
+      const first = await listen()
+      const second = await listen()
+      console.log(first.address().port, second.address().port)
+      first.close()
+      second.close()
+    })()
+  ')
+
+  # The throwaway profile lives in the throwaway DSH_HOME: the run creates and
+  # prompts sessions, and mixing those into the operator's real session store would
+  # be a side effect of a release check.
+  ACCEPT_HOME="$WORK/dsh-home"
+  mkdir -p "$ACCEPT_HOME"
+  PROFILE_DIR="$ACCEPT_HOME/profiles/$PROFILE"
+  # Provider credentials are per-DSH_HOME; a throwaway home has none, and without
+  # them every model call fails with MISSING_CREDENTIAL. Copy the operator's
+  # credential store into the 0700 throwaway directory (the file stays 0600) so the
+  # acceptance run exercises real turns, and it disappears with $WORK.
+  if [[ -f "$HOME/.dsh/.credentials.yaml" ]]; then
+    cp "$HOME/.dsh/.credentials.yaml" "$ACCEPT_HOME/.credentials.yaml"
+    chmod 600 "$ACCEPT_HOME/.credentials.yaml"
+  else
+    echo "warning: no ~/.dsh/.credentials.yaml; the acceptance run's model turns will fail" >&2
+  fi
+  DSH_HOME="$ACCEPT_HOME" "$RUNTIME/cli/bin/dsh" --profile "$PROFILE" --from-default-profile web --dump-config >/dev/null
+  DSH_HOME="$ACCEPT_HOME" "$RUNTIME/cli/bin/dsh" plugin --profile "$PROFILE" add "$TARBALL" >/dev/null
+  cat > "$PROFILE_DIR/cordis.patch.yml" <<EOF
+- id: dsh-as-mcp
+  config:
+    http: { enabled: true, host: 127.0.0.1, port: ${PLUGIN_PORT}, path: /mcp, mountOnWebServer: false }
+    tools: { workspace: true, session: true, files: true, shell: true, agentTools: true, usage: true }
+    agentTools: { allow: [], deny: [] }
+    session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900000, scope: all }
+    limits: { maxReadBytes: 1048576, shellTimeoutMs: 120000, agentToolTimeoutMs: 120000 }
+    approval: { policy: inherit }
+EOF
+
+  (cd "$WORK" && DSH_HOME="$ACCEPT_HOME" "$RUNTIME/cli/bin/dsh" \
+    --profile "$PROFILE" --no-open --port "$WEB_PORT" >"$LOG" 2>&1) &
+  HARNESS_PID=$!
+
+  READY=0
+  for _ in $(seq 1 60); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/${PLUGIN_PORT}") 2>/dev/null; then
+      exec 3>&- 3<&-
+      READY=1
+      break
+    fi
+    sleep 1
+  done
+  if [[ $READY -eq 0 ]]; then
+    tail -20 "$LOG" || true
+    fail "the throwaway harness did not start listening on ${PLUGIN_PORT}"
+  fi
+
+  ACCEPTANCE_HOME="$ACCEPT_HOME" DSH_HOME="$ACCEPT_HOME" \
+    env -u http_proxy -u https_proxy -u all_proxy -u NODE_USE_ENV_PROXY \
+    node scripts/exercise.mjs --url "http://127.0.0.1:${PLUGIN_PORT}/mcp" --dir "$WORK/files"
 fi
 
 if [[ $INSTALL -eq 1 ]]; then
