@@ -809,6 +809,16 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
                              # 用量与 `session_usage` 回执是否一致，并确认失败路径可读
 ```
 
+由于 `tools/live-checks.mjs` 会先读取实际公布的工具面，它也能验证**收窄**部署，而不只是全开部署。
+以下形态都用当前构建实测过：
+
+| 启用的工具组 | 公布工具数 | 最近结果 |
+| --- | --- | --- |
+| 全部六组 | 28 | `--with-model` 下 live-checks 130/130；验收 163/163 |
+| 仅 `session`、`usage` | 13 | `--with-model` 下 live-checks 84/84（文件/shell/工作区段落跳过） |
+| `workspace`、`session`、`agentTools`、`usage` | 18 | live-checks 59/59（被关闭的组会在原因里点名 `tools.<group>` 开关） |
+| 仅 `files`、`shell` | 11 | live-checks 65/65（会话/用量/队列/搜索段落跳过） |
+
 `docs/LIVE-VERIFICATION.md` 记录哪些行为真正在真实 harness 上验证过、各自从哪个版本开始提供、如何复现，
 以及一份"**未在此验证**"的清单与原因。
 

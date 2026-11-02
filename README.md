@@ -932,6 +932,17 @@ service it stands in for. That class produced four real failures here, three in 
 case, so run it after any change to the driver. `docs/STUB-FIDELITY-AUDIT.md` is the audit that
 enumerated the class; it is worth reading before writing a double for a harness service.
 
+Because `tools/live-checks.mjs` reads the advertised surface first, it can validate a **narrowed**
+deployment too, not only a fully-enabled one. These shapes have each been run against the current
+build:
+
+| Tool groups enabled | Tools advertised | Last result |
+| --- | --- | --- |
+| all six | 28 | live-checks 130/130 with `--with-model`; acceptance run 163/163 |
+| `session`, `usage` only | 13 | live-checks 84/84 with `--with-model` (file/shell/workspace sections skip) |
+| `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 59/59 (a disabled group's reason names its `tools.<group>` switch) |
+| `files`, `shell` only | 11 | live-checks 65/65 (session/usage/queue/search sections skip) |
+
 `docs/LIVE-VERIFICATION.md` records which behaviours have been checked against a real harness,
 with the version that shipped each one and how to reproduce the check — including the list of
 things that are *not* verified here and why.

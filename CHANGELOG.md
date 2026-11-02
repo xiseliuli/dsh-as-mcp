@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.34
+
+- Both READMEs now carry the deployment-shape matrix the last four rounds produced: all six
+  groups (28 tools, 130/130 with `--with-model`, 163/163 acceptance), `session+usage`
+  (13 tools, 84/84), `workspace+session+agentTools+usage` (18 tools, 59/59) and
+  `files+shell` (11 tools, 65/65), with the skip behaviour stated so an operator comparing a
+  narrowed deployment knows what was and was not exercised.
+
 ## 0.52.33
 
 - Verified the **session-only** deployment shape — the one a client that just wants to drive
