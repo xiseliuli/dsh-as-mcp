@@ -3,6 +3,20 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.31
+
+- The availability contract now checks the disabled-group path: on a profile with
+  `tools.files: false` and `tools.shell: false` it asserts each disabled group's reason
+  names the switch an operator would flip (`tools.files: false`), while `availableTools`
+  still equals the advertised `tools/list` set (probed first: 18 tools advertised, 18
+  available, `file_read` reason "the files tool group is disabled"). Default profiles skip
+  this check because no group is off.
+- Running the suite against that narrowed profile also exposed a real defect in
+  `live-checks.mjs` itself: the workspace section wrote a file unconditionally and aborted
+  with "Tool file_write not found" when the files group was off. It now gates that part on
+  the advertised surface and reports it as skipped, so the script can verify a narrowed
+  deployment instead of crashing on it.
+
 ## 0.52.30
 
 - Four edge contracts now have live checks, all probed first: `workspace_delete` of an

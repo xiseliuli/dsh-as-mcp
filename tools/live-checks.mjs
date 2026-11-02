@@ -1065,8 +1065,12 @@ async function workspaceChecks() {
       again.workspace?.id,
     )
 
-    rmSync(kept, { force: true })
-    await callTool('file_write', { path: kept, content: 'keep me' })
+    // The file tools are a separate group; this section must still run when they are off.
+    const canTouchFiles = has('file_write') && has('file_read')
+    if (canTouchFiles) {
+      rmSync(kept, { force: true })
+      await callTool('file_write', { path: kept, content: 'keep me' })
+    }
     const listed = await callTool('workspace_list')
     const row = (listed.workspaces ?? []).find((entry) => entry.id === workspace?.id)
     check(
@@ -1085,10 +1089,14 @@ async function workspaceChecks() {
       !(after.workspaces ?? []).some((entry) => entry.id === workspace.id),
       'the deleted workspace leaves the list',
     )
-    check(
-      existsSync(kept) && (await callTool('file_read', { path: kept })).text === 'keep me',
-      'deleting a workspace leaves its directory and files untouched',
-    )
+    if (canTouchFiles) {
+      check(
+        existsSync(kept) && (await callTool('file_read', { path: kept })).text === 'keep me',
+        'deleting a workspace leaves its directory and files untouched',
+      )
+    } else {
+      skip('workspace deletion leaves files untouched', 'the files tool group is off')
+    }
     const idempotent = await callTool('workspace_delete', { workspaceId: workspace.id })
     check(idempotent.deleted === false, 'deleting an unknown workspace answers deleted:false, not an error')
 
@@ -1426,6 +1434,20 @@ async function availabilityCheck() {
   )
   const reasonless = (availability.unavailable ?? []).filter((entry) => typeof entry.reason !== 'string' || entry.reason === '')
   check(reasonless.length === 0, 'every unavailable tool explains why', `${(availability.unavailable ?? []).length} unavailable`)
+
+  // On a profile that turned a group off, the reason must name the switch an operator
+  // would flip — otherwise "unavailable" is a dead end.
+  const disabledGroups = Object.entries(info.enabledToolGroups ?? {})
+    .filter(([, enabled]) => enabled !== true)
+    .map(([group]) => group)
+  if (disabledGroups.length > 0) {
+    const gated = (availability.unavailable ?? []).filter((entry) => entry.reason.includes('tool group is disabled'))
+    check(
+      disabledGroups.every((group) => gated.some((entry) => entry.reason.includes(`tools.${group}: false`))),
+      'a disabled tool group names the config switch in its reason',
+      `${disabledGroups.join(', ')} disabled`,
+    )
+  }
 }
 
 // --- model-spending checks -------------------------------------------------
