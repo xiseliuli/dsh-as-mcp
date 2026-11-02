@@ -382,8 +382,9 @@ left the live store, or was created by an earlier DSH run — as long as you kno
 | `includeCost` | Read money from `dsh-cost-meter`. Default `true`; set `false` on a wide scan, where pricing costs one ledger read per row and a session list usually does not need money. |
 | `limit` | Sessions to scan when no `sessionId` is given. Default 20, max 200. |
 
-A row read while the session's newest turn is still running carries `partial: true`: the fold is a
-snapshot that will grow, so do not finalize a bill from it.
+A read taken while the session's newest turn is still running marks that row `partial: true`; when
+any included row is partial the report itself also carries `partial: true` and says so in `notes`,
+because the totals are a snapshot that will grow. Do not finalize a bill from a partial report.
 
 No `sessionId` means the sessions **this endpoint created in this DSH process**. Nothing in the
 harness records that ownership, so after a restart pass the id; `all: true` instead walks every

@@ -358,6 +358,14 @@ export interface SessionUsageReport {
    * Read off the rows rather than the request flag: `false` means the number may
    * understate what the task cost, which is exactly what a caller has to know.
    */
+  /**
+   * True when at least one included row was read mid-turn.
+   *
+   * The rows carry their own `partial`; this is the same fact at the level a
+   * caller bills from, because reading only `totals` would otherwise treat a
+   * snapshot that is still growing as final.
+   */
+  readonly partial?: true
   readonly subagentsIncluded: boolean
   /** True when the subagent cap stopped the walk before every child was read. */
   readonly truncatedSubagents?: boolean
@@ -2191,6 +2199,13 @@ export class DshDriver {
         reason: 'some sessions were not scanned (row cap), so this total is incomplete',
       }
       : combinedCost
+    const openRows = rows.filter((row) => row.usage?.partial === true)
+    if (openRows.length > 0) {
+      notes.push(
+        `${openRows.length} of ${rows.length} session(s) had an unfinished turn when read; `
+          + 'their totals and this report will still grow.',
+      )
+    }
     const errored = rows.filter((row) => row.error !== undefined)
     if (errored.length > 0) {
       notes.push(`${errored.length} of ${rows.length} session(s) could not be read; the totals exclude them.`)
@@ -2223,6 +2238,7 @@ export class DshDriver {
       scope,
       sessions: rows,
       totals,
+      ...(openRows.length > 0 ? { partial: true as const } : {}),
       byModel: combined.byModel,
       // Reported from what the rows actually contain, not from the flag: a
       // caller reading `true` may assume the number covers subagent spend, and a

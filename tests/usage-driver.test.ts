@@ -792,6 +792,10 @@ describe('DshDriver.sessionUsage', () => {
 
     expect(report.sessions[0]?.usage?.partial).toBe(true)
     expect(report.sessions[0]?.usage?.totals.totalTokens).toBe(110)
+    // The same fact must be visible at the level a caller bills from, and said in
+    // words: reading only `totals` must not look like a final receipt.
+    expect(report.partial).toBe(true)
+    expect((report.notes ?? []).some((note) => /unfinished turn/.test(note))).toBe(true)
   })
 
   it('does not mark a settled session partial', async () => {
@@ -799,6 +803,7 @@ describe('DshDriver.sessionUsage', () => {
     const { driver } = makeDriver(harness)
     const report = await driver.sessionUsage({ sessionId: 'session-1', limit: 5 })
     expect(report.sessions[0]?.usage?.partial).toBeUndefined()
+    expect(report.partial).toBeUndefined()
   })
 
   it('folds subagent children into their own rows and adds their tokens to the totals', async () => {

@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.20.4
+
+- `session_usage` now also carries `partial: true` on the report itself when any
+  included row was read mid-turn, plus a note saying the totals will still grow.
+  Previously only the individual rows were marked, so a caller reading `totals`
+  could take a snapshot for a final bill.
+
 ## 0.20.3
 
 - Docs and tests only. Recorded and verified post-restart continuity: a session
