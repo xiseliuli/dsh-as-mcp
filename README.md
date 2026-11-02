@@ -210,12 +210,12 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | Tool | What it does |
 | --- | --- |
 | `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, the `catalog` of accepted providers, agent presets and sandbox mode, and `toolAvailability` — the tools that passed every rule (`availableTools`, comparable with `tools/list`), those this deployment cannot serve, and why. `probeSearch` additionally exercises a real search to say whether the index answers, rather than just whether the tool is enabled. |
-| `workspace_create` | Register a directory as a DSH workspace (creating it if needed). |
+| `workspace_create` | Register a directory as a DSH workspace (creating it if needed, or only with `createDirectory: true` when the path must not be made implicitly). |
 | `workspace_list` | Every registered workspace with id, path, title, session count, directory status. |
 | `workspace_delete` | Unregister a workspace (files and session history untouched); idempotent. |
 | `session_create` | Start a DSH agent session bound to a workspace or bare directory. |
-| `session_fork` | Branch a session (live or restored from disk) into a child that inherits its event prefix, optionally up to `atSeq`; with no boundary the harness picks the latest completed turn. Continuing from that point costs one turn, not a replay, and `session_usage` reports the inherited prefix separately. |
-| `session_set_model` | Change the provider route and model later turns use: start cheap, escalate for a hard turn, or fall back when a route is unavailable. The reply's per-model usage shows which route spent what. |
+| `session_fork` | Branch a session (live or restored from disk) into a child that inherits its event prefix, optionally up to `atSeq` (event position) or `atTurn` (turn boundary); with no boundary the harness picks the latest completed turn. Continuing from that point costs one turn, not a replay, and `session_usage` reports the inherited prefix separately. |
+| `session_set_model` | Change the provider route and model later turns use: start cheap, escalate for a hard turn, or fall back when a route is unavailable. `reasoningEffort` optionally raises the thinking budget for the same route. The reply's per-model usage shows which route spent what. |
 | `session_rename` | Set an explicit user title on a session, so what an external harness names a task stays the name a human sees in the DSH UI (and automatic title generation stops). A session currently held open by another DSH process is refused by the harness. |
 | `session_search` | Search session **message content** (FTS tokens/phrases), returning `sessionId`, a snippet, and (when the session listing is readable) the match's `cwd`/`updatedAt`/`running` plus `parentSessionId`/`origin` for subagent sessions; the harness caps a search at 20 and reports `hasMore`. Matching is FTS tokens/phrases (not arbitrary substrings), and multiple terms must all match. **Opt-in:** shipped compositions configure `session-query` with `openAt: "never"`, in which case the tool explains how to enable the index instead of searching. |
 | `session_list` | Live session summaries, most recently updated first; `includeTitle` also folds each session's latest title (one log read per session), and `cwd`/`running` filter before the limit applies. A subagent session carries `parentSessionId` and `origin: "subagent"`, and `origin` (`root` / `subagent`) filters before the limit, so the flat list becomes a tree view. The reply carries `total` (matches before the cut) and `truncated` when the limit hid some. |
@@ -227,16 +227,16 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | `session_usage` | Token usage per session (its subagents included by default): exact bucket counts, a per-model breakdown, optional per-turn detail, and money when a price plugin is installed. Pass `sessionIds` to tally several known sessions in one receipt, or `cwd` to total every session that ran in one workspace directory. |
 | `file_read` | Read a UTF-8 file through DSH's filesystem service. Bounded by a byte limit; `offset`/`nextOffset` page through a larger file, `maxBytes` asks for a smaller window so reading a slice costs less, and `sha256: true` returns the whole file's hash as the compare-and-swap value for a later write/edit. |
 | `file_read_image` | Read an image (png/jpeg/gif/webp/bmp, detected from the bytes) and return it as an MCP image block, preceded by a metadata block (path, mimeType, bytes), so you can look at a screenshot or chart instead of guessing. Capped at 8 MiB. |
-| `file_write` | Create or replace a file through DSH's filesystem service. |
-| `file_edit` | Replace literal text in one file: exact match, unique unless `replaceAll`, nothing written on an ambiguous match. Editing no longer costs a full read + write of the file. |
-| `file_list` | List a directory through DSH's filesystem service; `recursive` walks subdirectories (bounded, with `truncated`) and gives each entry a relative `path`. |
+| `file_write` | Create or replace a file through DSH's filesystem service. `createDirectories: true` creates missing parents, and `expectedSha256` makes the write compare-and-swap: it is refused when the file changed since the hash was read. |
+| `file_edit` | Replace literal text (`oldText` → `newText`) in one file: exact match, unique unless `replaceAll`, nothing written on an ambiguous match, and `expectedSha256` refuses the edit when the file changed since it was read. Editing no longer costs a full read + write of the file. |
+| `file_list` | List a directory through DSH's filesystem service; `recursive` walks subdirectories (bounded by `maxDepth` and an entry cap, with `truncated`) and gives each entry a relative `path`; `sha256: true` hashes each file for bulk change detection. |
 | `shell_run` | Run one command through DSH's shell service and wait for it. |
 | `shell_start` | Start a command in the background (build, test run, dev server) and return a job id; optional watchdog. At most 16 jobs are retained: a finished one is evicted to make room, but a 17th *running* job is refused rather than silently stopping someone else's process. |
 | `shell_output` | Read a background job's new output, once each, with `done`/`status`/`pendingBytes`; `truncated` says something was not delivered and `lossy` says the shell service itself dropped bytes (spill paths then hold the full stream). |
-| `shell_kill` | Stop a background job and wait briefly for it to settle (idempotent). |
+| `shell_kill` | Stop a background job (`jobId`) and wait briefly (`waitMs`) for it to settle; idempotent. |
 | `shell_list` | Every background job with status, timestamps, exit code and unread bytes. |
 | `dsh_tool_list` | The agent tools this endpoint permits, with the schema DSH's own agent sees. |
-| `dsh_tool_call` | Run one of them directly, through the same pipeline the agent uses. |
+| `dsh_tool_call` | Run one of them directly, through the same pipeline the agent uses. `maxResultChars` caps what comes back so a large tool result does not flood the caller. |
 
 The typical coding flow:
 

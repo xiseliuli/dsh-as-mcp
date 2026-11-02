@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.16
+
+- Documented the non-obvious options that were absent from **both** READMEs, in parallel:
+  `session_fork { atTurn }`, `session_set_model { reasoningEffort }`, the compare-and-swap
+  `expectedSha256` of `file_write`/`file_edit`, `file_write { createDirectories }`,
+  `file_read`/`file_list { sha256 }`, `file_list { maxDepth }`, `shell_kill { jobId,
+  waitMs }`, `dsh_tool_call { maxResultChars }`, `workspace_create { createDirectory }`,
+  and the `oldText`/`newText` names of `file_edit`. The zh `file_read` row also gained the
+  `sha256` sentence the en row already had. Options that are self-describing
+  (`command`, `provider`, `content`, `timeoutMs`) are still described in prose only.
+
 ## 0.52.15
 
 - The drift check now catches the class of defect 0.52.14 fixed by hand: a tool option

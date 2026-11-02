@@ -199,12 +199,12 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | 工具 | 作用 |
 | --- | --- |
 | `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`，以及 `toolAvailability`（通过全部规则的 `availableTools`，可与 `tools/list` 对照；以及本部署无法服务的工具及原因）；`probeSearch` 可验证搜索是否真的可用。 |
-| `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建）。 |
+| `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建；`createDirectory: true` 时才会隐式创建）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、会话数、目录是否还在。 |
 | `workspace_delete` | 注销一个工作区（文件与会话历史不受影响）；幂等。 |
 | `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话。 |
-| `session_fork` | 把一个会话（存活的，或从磁盘恢复的）分叉成继承其事件前缀的子会话（可用 `atSeq` 指定分叉点；不指定时 harness 取最近一个完整轮次）。从该点继续只需一轮，不用重放历史；`session_usage` 会单独报出继承前缀的用量。 |
-| `session_set_model` | 切换后续轮次使用的 provider 路由与模型：先用便宜模型、难任务时升级、或某路由不可用时回退。回复里的按模型用量会显示每条路由各花了多少。 |
+| `session_fork` | 把一个会话（存活的，或从磁盘恢复的）分叉成继承其事件前缀的子会话（可用 `atSeq` 指定事件位置，或用 `atTurn` 指定轮次边界；不指定时 harness 取最近一个完整轮次）。从该点继续只需一轮，不用重放历史；`session_usage` 会单独报出继承前缀的用量。 |
+| `session_set_model` | 切换后续轮次使用的 provider 路由与模型：先用便宜模型、难任务时升级、或某路由不可用时回退；`reasoningEffort` 可为同一路由提高思考预算。回复里的按模型用量会显示每条路由各花了多少。 |
 | `session_rename` | 给会话设置显式的用户标题，让外部 harness 为任务起的名字在 DSH 界面里保持不变（同时停止自动生成标题）。若该会话正被另一个 DSH 进程持有写句柄，harness 会拒绝并在错误里说明。 |
 | `session_search` | 对会话**消息内容**做搜索（FTS 词/短语），每条命中返回 `sessionId`、一段 snippet，以及（会话列表可读时）该匹配的 `cwd`/`updatedAt`/`running`，subagent 会话还带 `parentSessionId`/`origin`；harness 单次上限 20 条并给 `hasMore`。匹配的是词/短语（不是任意子串），多个词须同时命中。**需要开启**：随包组合把 `session-query` 配成 `openAt: "never"`，此时该工具会说明如何启用索引，而不是假装搜索过。 |
 | `session_list` | 存活会话摘要，按最近更新排序；`includeTitle` 附加每个会话的最新标题（每会话一次日志读取），`cwd`/`running` 会在 limit 生效前过滤。subagent 会话会带 `parentSessionId` 与 `origin: "subagent"`；`origin`（`root`/`subagent`）在 limit 之前过滤，因此扁平列表可当树视图用。回复带 `total`（截断前匹配数）以及 limit 有隐藏时的 `truncated`。 |
@@ -214,18 +214,18 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `session_tool_result` | 读取某次工具调用的结果，可用 `callId`（来自 `session_messages { includeToolCalls: true }`）或 `toolName`（该工具最近一次已完成的调用）定位：返回文本、原始长度、harness 是否标记为错误；`maxChars` 截断，`from: "end"` 保留尾部（堆栈与错误通常在末尾）。调试失败的工具而不必重读整段记录。 |
 | `session_cancel` | 让 agent 停下当前这一轮。 |
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。传 `sessionIds` 可一次结算多个已知会话，传 `cwd` 可汇总某个工作目录里跑过的所有会话。 |
-| `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件，`maxBytes` 用更小的窗口降低单次开销。 |
+| `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件，`maxBytes` 用更小的窗口降低单次开销；`sha256: true` 返回整个文件的哈希，作为后续写入/编辑的比较并交换值。 |
 | `file_read_image` | 读取图片（png/jpeg/gif/webp/bmp，按字节嗅探）并以 MCP image block 返回，让你直接看截图或图表而不是靠猜。上限 8 MiB。 |
-| `file_write` | 经 DSH 文件系统服务创建或覆盖文件。 |
-| `file_edit` | 在一个文件里替换字面文本：精确匹配，除非 `replaceAll` 否则要求唯一，歧义匹配不写入。不再需要"整读 + 整写"。 |
-| `file_list` | 经 DSH 文件系统服务列目录；`recursive` 递归遍历子目录（有上限并带 `truncated`），每个条目给相对 `path`。 |
+| `file_write` | 经 DSH 文件系统服务创建或覆盖文件。`createDirectories: true` 会创建缺失的父目录；`expectedSha256` 让写入变成比较并交换：文件在读到哈希后变过就会被拒绝。 |
+| `file_edit` | 在一个文件里替换字面文本（`oldText` → `newText`）：精确匹配，除非 `replaceAll` 否则要求唯一，歧义匹配不写入，`expectedSha256` 在文件读后变过时拒绝编辑。不再需要"整读 + 整写"。 |
+| `file_list` | 经 DSH 文件系统服务列目录；`recursive` 递归遍历子目录（受 `maxDepth` 与条目上限约束并带 `truncated`），每个条目给相对 `path`；`sha256: true` 为每个文件算哈希以便批量变更检测。 |
 | `shell_run` | 经 DSH shell 服务执行一条命令并等待它结束。 |
 | `shell_start` | 后台启动一条命令（构建、测试、开发服务器）并返回 job id；可选看门狗。最多保留 16 个任务：满了会先淘汰已结束的旧任务，但第 17 个**正在运行**的任务会被拒绝，而不会悄悄停掉别人的进程。 |
 | `shell_output` | 增量读取后台任务的输出（不重复返回已读部分）；`truncated` 表示有字节未送达，`lossy` 表示 shell 服务自身丢弃了字节（此时 spill 路径指向完整流）。 |
-| `shell_kill` | 结束一个后台任务。 |
+| `shell_kill` | 结束一个后台任务（`jobId`），最多等待 `waitMs` 让它收尾；幂等。 |
 | `shell_list` | 列出后台任务；`running` 只筛存活或已结束的。 |
 | `dsh_tool_list` | 本端点允许调用的 agent 工具，附 DSH 自己 agent 所见的结构。 |
-| `dsh_tool_call` | 直接运行其中之一，走与 agent 完全相同的管线。 |
+| `dsh_tool_call` | 直接运行其中之一，走与 agent 完全相同的管线。`maxResultChars` 限制返回量，避免大结果淹没调用方。 |
 
 典型的编码流程：
 
