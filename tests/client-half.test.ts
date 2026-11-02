@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { GROUPS, formatList, parseList, parseNumberDraft, readPath } from '../src/client/fields.js'
+import { endpointUrl } from '../src/client/snippet.js'
 import { normalizeConfig } from '../src/config.js'
 import { en, zh } from '../src/client/locales.js'
 import { clientSnippet, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from '../src/client/snippet.js'
@@ -326,5 +327,20 @@ describe('panel field invariants', () => {
         }
       }
     }
+  })
+})
+
+describe('the endpoint URL offered to a client', () => {
+  it('is built only once the port and path are both known', () => {
+    expect(endpointUrl('127.0.0.1', 8790, '/mcp')).toBe('http://127.0.0.1:8790/mcp')
+    // Half-read configuration: a URL ending in ":" or bare host looks copyable and is not.
+    expect(endpointUrl(undefined, undefined, undefined)).toBeUndefined()
+    expect(endpointUrl('127.0.0.1', undefined, '/mcp')).toBeUndefined()
+    expect(endpointUrl('127.0.0.1', 8790, undefined)).toBeUndefined()
+    expect(endpointUrl('127.0.0.1', 8790, 'mcp')).toBeUndefined()
+  })
+  it('advertises a dialable host for a wildcard bind', () => {
+    expect(endpointUrl('0.0.0.0', 8790, '/mcp')).toBe('http://127.0.0.1:8790/mcp')
+    expect(endpointUrl('', 8790, '/mcp')).toBe('http://127.0.0.1:8790/mcp')
   })
 })

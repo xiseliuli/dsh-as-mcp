@@ -4,7 +4,7 @@ import type { Config } from '../config.js'
 import type { EndpointStatus } from '../status.js'
 import type { SettingsPathOp, SettingsScopeSnapshot } from './contract.js'
 import { GROUPS, formatList, parseNumberDraft, parseList, pathKey, readPath, type FieldSpec, type GroupSpec } from './fields.js'
-import { clientSnippet, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from './snippet.js'
+import { clientSnippet, endpointUrl, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from './snippet.js'
 
 /** The bound settings namespace, as the section consumes it. */
 export interface SectionStore {
@@ -466,11 +466,11 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
     : status.tokenSource === 'settings' || status.tokenSource === 'config'
   const tokenIsSet = pinnedFromStatus ?? store.secretIsSet()
 
-  const host = readPath(value, ['http', 'host'])
-  const port = readPath(value, ['http', 'port'])
-  const path = readPath(value, ['http', 'path'])
-  const hostText = typeof host === 'string' && host !== '' ? host : '127.0.0.1'
-  const url = `http://${hostText === '0.0.0.0' ? '127.0.0.1' : hostText}:${String(port ?? '')}${String(path ?? '')}`
+  const url = endpointUrl(
+    readPath(value, ['http', 'host']),
+    readPath(value, ['http', 'port']),
+    readPath(value, ['http', 'path']),
+  )
 
   return (
     <div className="dshmcp">
@@ -512,16 +512,18 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
         </div>
       </section>
 
-      <ClientConfig
-        t={t}
-        url={url}
+      {url !== undefined && (
+        <ClientConfig
+          t={t}
+          url={url}
         mounted={readPath(value, ['http', 'mountOnWebServer']) === true}
         token={status?.token}
         tokenSource={status?.tokenSource}
         tokenFile={status?.tokenFile ?? tokenFile}
-        status={status}
-        statusRead={statusRead}
-      />
+          status={status}
+          statusRead={statusRead}
+        />
+      )}
     </div>
   )
 }

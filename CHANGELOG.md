@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.64
+
+- The panel's client configuration no longer appears while its configuration is half-read: it
+  used to render `http://127.0.0.1:` (port and path still missing) as if it were copyable. The
+  URL now comes from `endpointUrl`, which returns `undefined` until the port and path are both
+  known and rewrites a wildcard bind to a dialable host; the pane stays hidden until then.
+  Unit tests cover the half-read cases and the wildcard rewrite.
+
 ## 0.52.63
 
 - Two views of one background job are now checked against each other: a row in

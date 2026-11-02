@@ -64,3 +64,20 @@ export function sourceLabel(t: (key: string) => string, source: string | undefin
   const text = t(key)
   return text === key ? source : text
 }
+
+/**
+ * The endpoint URL the panel offers, or `undefined` until both the port and the path are
+ * known.
+ *
+ * A half-read configuration used to render `http://127.0.0.1:` while the panel was still
+ * loading — a URL that looks copyable and is not. Returning `undefined` lets the pane stay
+ * hidden until the host has actually reported the shape of the endpoint.
+ */
+export function endpointUrl(host: unknown, port: unknown, path: unknown): string | undefined {
+  const hostText = typeof host === 'string' && host !== '' ? host : '127.0.0.1'
+  const portText = typeof port === 'number' && Number.isFinite(port) ? String(port) : ''
+  const pathText = typeof path === 'string' && path.startsWith('/') ? path : ''
+  if (portText === '' || pathText === '') return undefined
+  // A wildcard bind is not dialable; the panel advertises what a client can reach.
+  return `http://${hostText === '0.0.0.0' ? '127.0.0.1' : hostText}:${portText}${pathText}`
+}
