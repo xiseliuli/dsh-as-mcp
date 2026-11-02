@@ -768,6 +768,26 @@ no schemastery-free path to a panel, so the module is a declared peer and import
 without it the plugin cannot be imported at all, which is why the compatibility range below is
 what protects a host that cannot supply it.
 
+## Deployment requirements
+
+Every tool names what it needs and reports an actionable error when the service is absent, but an
+operator setting up a profile should be able to read the requirements in one place. "Required" means
+the tool does not work at all without it; "configured" means the service is present in normal profiles
+but a deployment can switch the capability off.
+
+| Tool group | Requires | Notes |
+| --- | --- | --- |
+| `dsh_info`, `session_usage` (by id) | nothing beyond the durable log | `session_usage` by id works as long as the log is readable (`sessionQuery`, or the controller's `inspect` fallback) |
+| `session_create` / `session_list` / `session_prompt` / `session_messages` / `session_cancel` / `session_fork` / `session_rename` / `session_set_model` | `sessionController` | the bridge waits for it only where it must (`session_create`/`prompt`); elsewhere the tool reports the missing service |
+| `session_search` | `sessionController.search` **and** a session-query index that is open | `session-query-sqlite` ships with `openAt: "never"`; set it to `startup` or `first-search` to enable search |
+| `workspace_*` | `workspaceRegistry` | provided by the base bundle in normal profiles |
+| `file_*` | `fs` | the deployment's sandbox policy still applies; `file_read_image` additionally needs a supported image format |
+| `shell_*` | `shell` | `shell_run` uses `run()` when present and `execute()` otherwise; background jobs need `start()` or `execute()` |
+| `dsh_tool_list` / `dsh_tool_call` | `tools` **and** `sessionController.resolveAgent` | the allow-list is applied on top of the session's own policy |
+| money in usage replies | `costMeter` | a third-party price plugin (`dsh-cost-meter`); absent by default, and the reply says so |
+| `approval.policy: "allow"` | `approval` **and** a resolvable agent | absent service or agent means the create/fork reply reports `approvalPolicyError` |
+| `http.mountOnWebServer` | `webServer` | the plugin waits for it and mounts; `dsh_info.mountNote` says while it is still waiting |
+
 ## Compatibility
 
 - **Harness** ≥ `0.1.5-rc.1`, declared as `peerDependencies["@deepseek-ai/dsh"]:

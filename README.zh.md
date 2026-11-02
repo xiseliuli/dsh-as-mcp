@@ -678,6 +678,24 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 免 schemastery 的面板路径，所以它作为 peer 直接 import——拿不到它插件根本无法被 import，这正是
 下面那条兼容范围要挡住的情况。
 
+## 部署要求
+
+每个工具在服务缺失时都会给出可操作的错误，但配置 profile 的人应当能在一处读到全部要求。"必需"表示
+没有它该工具完全不可用；"可配置关闭"表示常规 profile 自带该服务，但部署可以把它关掉。
+
+| 工具组 | 需要 | 说明 |
+| --- | --- | --- |
+| `dsh_info`、按 id 的 `session_usage` | 只需可读的会话日志 | 只要有 `sessionQuery`（或控制器的 `inspect` 回退）就能按 id 读用量 |
+| `session_create` / `session_list` / `session_prompt` / `session_messages` / `session_cancel` / `session_fork` / `session_rename` / `session_set_model` | `sessionController` | 只有必须等待的地方才等待（`session_create`/`prompt`）；其余工具会明确报缺失服务 |
+| `session_search` | `sessionController.search` **且** 会话查询索引已打开 | `session-query-sqlite` 默认 `openAt: "never"`；改为 `startup` 或 `first-search` 才启用搜索 |
+| `workspace_*` | `workspaceRegistry` | 常规 profile 由 base bundle 提供 |
+| `file_*` | `fs` | 部署的沙箱策略照样生效；`file_read_image` 还需要受支持的图片格式 |
+| `shell_*` | `shell` | `shell_run` 有 `run()` 用 `run()`、否则 `execute()`；后台任务需要 `start()` 或 `execute()` |
+| `dsh_tool_list` / `dsh_tool_call` | `tools` **且** `sessionController.resolveAgent` | allow-list 叠加在会话自身策略之上 |
+| 用量里的金额 | `costMeter` | 第三方价格插件（`dsh-cost-meter`）；默认没有，回复会说明 |
+| `approval.policy: "allow"` | `approval` **且** 能解析出 agent | 缺失时 create/fork 回复带 `approvalPolicyError` |
+| `http.mountOnWebServer` | `webServer` | 插件等待它出现再挂载；等待期间 `dsh_info.mountNote` 会说明 |
+
 ## 兼容性
 
 - **Harness** ≥ `0.1.5-rc.1`，声明为 `peerDependencies["@deepseek-ai/dsh"]: ">=0.1.5-rc.1"`，

@@ -27,6 +27,7 @@
  * @module dsh-as-mcp/tools/live-checks
  */
 
+import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -223,6 +224,25 @@ async function listChecks() {
     'file_read reports truncated, nextOffset and the whole size',
     `${sliced.bytes ?? '?'}/${sliced.size ?? '?'} bytes, next ${sliced.nextOffset ?? '?'}`,
   )
+
+  // Search is opt-in in shipped compositions, so both answers are legitimate: the
+  // match list (a fresh token appears nowhere, so it must be empty) or the
+  // disabled-index explanation naming the configuration to change.
+  const freshToken = randomUUID().replace(/-/g, '')
+  const search = await attemptTool('session_search', { query: freshToken })
+  if (search.ok) {
+    check(
+      (search.payload?.items ?? []).length === 0 && typeof search.payload?.hasMore === 'boolean',
+      'session_search answers a token that appears nowhere with no matches',
+      `${(search.payload?.items ?? []).length} match(es)`,
+    )
+  } else {
+    check(
+      /openAt/.test(search.error ?? '') && /first-search|startup/.test(search.error ?? ''),
+      'a disabled session-search index reports how to enable it',
+      (search.error ?? '').slice(0, 60),
+    )
+  }
 
   const usage = await callTool('session_usage', { cwd: '/tmp/definitely-no-sessions-here' })
   check(

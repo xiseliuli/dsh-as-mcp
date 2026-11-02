@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.25.1
+
+- Added a **Deployment requirements** section to both READMEs: one table of what
+  each tool group needs (service, and where the capability is configurable —
+  `session-query`'s `openAt`, `costMeter`, `approval`, `webServer`), so an
+  operator can see why a tool is unavailable without reading the source.
+- `tools/live-checks.mjs` now checks session search too, accepting both legitimate
+  deployments: a fresh token returns no matches when the index is open, and a
+  disabled index reports how to enable it. Verified live on both (stock profile
+  and `openAt: first-search`), 11/11 each.
+
 ## 0.25.0
 
 - **`session_search`** (26th tool): a literal search over session *message content*
