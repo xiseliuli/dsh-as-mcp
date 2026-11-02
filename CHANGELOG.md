@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.9
+
+- Refined the subagent route semantics: inheritance happens **at spawn time**, not at
+  session creation. A probe answered on `deepseek-official/deepseek-flash`, switched the
+  session to `deepseek-account/deepseek-flash`, then spawned — the child was billed on the
+  switched route. Both READMEs now say "the parent's route at spawn time", and the live
+  subagent check switches the parent's model before spawning and asserts the child follows
+  it (the earlier "child routes within parent routes" assertion is kept).
+
 ## 0.51.8
 
 - Documented and asserted **subagent route inheritance**: a child spawned by a session

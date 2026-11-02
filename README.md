@@ -450,9 +450,10 @@ would be worse; an aggregate report adds up the ignored counts across its rows a
   One report is bounded at 100 rows (`truncatedRows`, and the money total is marked `partial` when
   it applies), and if the session listing itself is unavailable the report says subagents could not
   be enumerated rather than claiming there were none. A spawned subagent runs on the **parent
-  session's selected route** (verified live: a parent created on `deepseek-account/deepseek-flash`
-  produced a child billed on the same route), so choosing the parent's model steers what its agents
-  spend.
+  session's route at spawn time** (verified live: a parent first answering on
+  `deepseek-official/deepseek-flash`, switched to `deepseek-account/deepseek-flash` before spawning,
+  produced a child billed on the switched route), so switching the parent's model before spawning
+  steers what its agents spend.
 - **An unreadable session** (pruned, corrupt) becomes a row with `error` instead of `usage`, is
   excluded from the totals, and is called out in `notes`, so one bad session does not fail the
   whole report.

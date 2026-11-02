@@ -1263,6 +1263,25 @@ async function cancellationCheck() {
 async function subagentCheck() {
   section('subagent accounting (real turn)')
   const session = await callTool('session_create', { cwd: process.cwd() })
+  // Steer the child through the parent: switch the parent's model before spawning, so
+  // the run also answers "is inheritance at spawn time, or fixed at session creation?".
+  // The probe that designed this check showed the child following the switched route.
+  let steeredRoute
+  if (has('session_set_model')) {
+    const info = await callTool('dsh_info', { includeModels: true })
+    const routes = (info.catalog?.providerModels ?? []).filter(
+      (entry) => typeof entry.provider === 'string' && Array.isArray(entry.models) && entry.models.length > 0,
+    )
+    if (routes.length >= 2) {
+      const target = routes[routes.length - 1]
+      steeredRoute = `${target.provider}/${target.models[0].id}`
+      await callTool('session_set_model', {
+        sessionId: session.sessionId,
+        provider: target.provider,
+        model: target.models[0].id,
+      })
+    }
+  }
   const prompted = await callTool('session_prompt', {
     sessionId: session.sessionId,
     prompt: 'Use your subagent tool to spawn one helper agent with the task "Reply with exactly: '
@@ -1274,6 +1293,13 @@ async function subagentCheck() {
     'the agent spawned a subagent and reported its answer',
     (prompted.turn?.reply ?? '').slice(0, 60),
   )
+  if (steeredRoute !== undefined) {
+    check(
+      (prompted.turn?.models ?? []).includes(steeredRoute),
+      'the switched route is what the spawning turn used',
+      `${(prompted.turn?.models ?? []).join(',') || '?'} (wanted ${steeredRoute})`,
+    )
+  }
 
   const report = await callTool('session_usage', {
     sessionId: session.sessionId,
@@ -1302,6 +1328,15 @@ async function subagentCheck() {
       "a subagent spends on its parent session's selected route",
       `child ${childRoutes.join(',') || '?'} within parent ${parentRoutes.join(',') || '?'}`,
     )
+    if (steeredRoute !== undefined) {
+      // Inheritance happens at spawn time: the parent answered on one route earlier,
+      // was switched, and the child followed the switch.
+      check(
+        childRoutes.includes(steeredRoute),
+        'the child follows the route the parent had selected when it spawned',
+        `child ${childRoutes.join(',')} (wanted ${steeredRoute})`,
+      )
+    }
 
     // Subagent sessions belong to the session tree: reading the child is reading
     // the cost of the parent, so this must work under session.scope "owned" too.
