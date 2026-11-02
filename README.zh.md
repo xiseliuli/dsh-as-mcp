@@ -823,6 +823,10 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 web 服务器验证端点：109/109，全部廉价，其中包含 `dsh_info` 必须报 `listening: false`、
 `mountedOnDshWebServer: true`，且端点串只描述"它在哪里"而不冒充 URL。
 
+第六个形态 `hybrid` **同时开启两个入口**（插件监听 + web 服务器挂载）：先经监听跑完整套件，
+再经第二个 URL 做三条跨入口检查——两个入口公布相同工具、报告相同构建与监听状态、看到相同
+的已注册工作区：112/112。
+
 带 `--with-model` 的两行是含真实轮次的计数；`tools/release.sh --shapes` 不加该参数时只跑廉价子集，
 同样四个组形态报 109/46/63/68。
 

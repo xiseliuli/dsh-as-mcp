@@ -948,6 +948,11 @@ checks the endpoint over DSH's own web server: 109/109, all cheap, including the
 `dsh_info` reports `listening: false`, `mountedOnDshWebServer: true` and an endpoint string that
 describes where it lives rather than echoing a URL.
 
+A sixth shape, `hybrid`, enables **both** entries (plugin listener and web-server mount). It runs
+the same suite through the listener and then three cross-entry checks through the second URL: both
+entries advertise the same tools, report the same build and listener state, and see the same
+registered workspaces: 112/112.
+
 The two turn-running rows are measured with `--with-model`; `tools/release.sh --shapes` without it
 exercises the cheap subset and reports 109/46/63/68 for the same four group shapes.
 

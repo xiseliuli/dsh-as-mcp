@@ -144,12 +144,12 @@ async function rpc(method, params) {
  * must be visible to and withdrawable by another. This models "the message came from a
  * different client" without needing the DSH UI's own client.
  */
-function secondaryClient() {
+function secondaryClient(url = endpoint) {
   let sequence = 50_000
   let initialized = false
   const exchange = async (method, params) => {
     const id = sequence++
-    const response = await fetch(endpoint, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
@@ -161,6 +161,18 @@ function secondaryClient() {
     return payload?.result
   }
   return {
+    async listTools() {
+      if (!initialized) {
+        await exchange('initialize', {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'live-checks-secondary', version: '1' },
+        })
+        initialized = true
+      }
+      const result = await exchange('tools/list', {})
+      return (result?.tools ?? []).map((tool) => tool.name)
+    },
     async callTool(name, args = {}) {
       if (!initialized) {
         await exchange('initialize', {
@@ -2132,6 +2144,68 @@ async function idempotencyCheck() {
   check(turns.length === 1, 'only one turn ran despite three send attempts', `${turns.length} turn(s)`)
 }
 
+
+// --- a second entry onto the same endpoint -----------------------------------
+
+/**
+ * `mountOnWebServer` adds a second way in: the same endpoint is reachable on DSH's own
+ * web server as well as the plugin's listener. Both entries must advertise the same tools
+ * and answer the same questions — a second entry that disagrees is a deployment that
+ * half-works depending on which URL a client was given.
+ *
+ * Without a listener (the `mountonly` shape) there is only one way in, so this needs the
+ * hybrid shape and its `--also` URL; it skips otherwise.
+ */
+async function secondEntryChecks() {
+  const also = option('--also', undefined)
+  if (also === undefined) {
+    skip('second entry', 'no --also URL (only a hybrid deployment has two entries)')
+    return
+  }
+  section('a second entry onto the same endpoint')
+  const alsoUrl = also.endsWith('/mcp') || also.includes('?') ? also : `${also.replace(/\/+$/, '')}/mcp`
+  const other = secondaryClient(alsoUrl)
+  try {
+    // The web-server mount happens *after* the plugin's own listener is up, so a hybrid
+    // deployment's second entry can refuse for a moment after the first one answers.
+    let otherTools
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      try {
+        otherTools = await other.listTools()
+        if (otherTools.length > 0) break
+      } catch {
+        // not mounted yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+    }
+    if (otherTools === undefined) otherTools = await other.listTools()
+    check(
+      otherTools.length === surface.size && otherTools.every((name) => surface.has(name)),
+      'both entries advertise the same tools',
+      `${otherTools.length} vs ${surface.size}`,
+    )
+    const otherInfo = await other.callTool('dsh_info')
+    const mainInfo = await callTool('dsh_info')
+    check(
+      otherInfo.version === mainInfo.version && otherInfo.listening === mainInfo.listening,
+      'both entries report the same build and listener state',
+      `${otherInfo.version}/${String(otherInfo.listening)}`,
+    )
+    if (has('workspace_list')) {
+      const otherWorkspaces = (await other.callTool('workspace_list')).workspaces ?? []
+      const mainWorkspaces = (await callTool('workspace_list')).workspaces ?? []
+      const ids = (rows) => rows.map((row) => row.id).sort().join(',')
+      check(
+        ids(otherWorkspaces) === ids(mainWorkspaces),
+        'both entries see the same registered workspaces',
+        `${otherWorkspaces.length} vs ${mainWorkspaces.length}`,
+      )
+    }
+  } catch (error) {
+    check(false, 'the second entry answers', error instanceof Error ? error.message : String(error))
+  }
+}
+
 // --- steering into a running turn ------------------------------------------
 
 /**
@@ -2595,6 +2669,7 @@ try {
   await fileEditChecks()
   await concurrencyChecks()
   await availabilityCheck()
+  await secondEntryChecks()
   const sessionId = await listChecks()
   const withSubagent = flag('--with-subagent')
   if (flag('--with-model') || withSubagent) {

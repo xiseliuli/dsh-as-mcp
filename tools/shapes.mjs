@@ -49,6 +49,14 @@ const SHAPES = [
     mountedOnly: true,
   },
   {
+    id: 'hybrid',
+    label: 'listener plus the DSH web server',
+    groups: { workspace: true, session: true, files: true, shell: true, agentTools: true, usage: true },
+    liveArgs: [],
+    model: false,
+    alsoOnWebServer: true,
+  },
+  {
     id: 'session',
     label: 'session + usage',
     groups: { workspace: false, session: true, files: false, shell: false, agentTools: false, usage: true },
@@ -213,7 +221,7 @@ try {
     }
     writeFileSync(join(profileDir, 'cordis.patch.yml'), `- id: dsh-as-mcp
   config:
-    http: { enabled: ${shape.mountedOnly === true ? 'false' : 'true'}, host: 127.0.0.1, port: ${endpointPort}, path: /mcp, mountOnWebServer: ${shape.mountedOnly === true ? 'true' : 'false'} }
+    http: { enabled: ${shape.mountedOnly === true ? 'false' : 'true'}, host: 127.0.0.1, port: ${endpointPort}, path: /mcp, mountOnWebServer: ${shape.mountedOnly === true || shape.alsoOnWebServer === true ? 'true' : 'false'} }
     tools: { ${Object.entries(shape.groups).map(([group, on]) => `${group}: ${on}`).join(', ')} }
     agentTools: { allow: [], deny: [] }
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900000, scope: all }
@@ -237,7 +245,11 @@ try {
         results.push({ shape, passed: 0, failed: 1, detail: 'endpoint never answered' })
         continue
       }
-      const liveArgs = [...shape.liveArgs, ...(flag('--with-model') && shape.model ? ['--with-model'] : [])]
+      const liveArgs = [
+        ...shape.liveArgs,
+        ...(shape.alsoOnWebServer === true ? ['--also', `http://127.0.0.1:${webPort}/mcp`] : []),
+        ...(flag('--with-model') && shape.model ? ['--with-model'] : []),
+      ]
       const output = await new Promise((resolve) => {
         const child = spawn(process.execPath, [
           'tools/live-checks.mjs',

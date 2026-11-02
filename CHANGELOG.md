@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.70
+
+- Added a `hybrid` shape (listener **and** `mountOnWebServer`) and a live cross-entry check: a
+  second MCP client going in through DSH's web server must advertise the same tools, report the
+  same build and listener state, and see the same registered workspaces as the plugin's own
+  listener. A second entry that disagreed would be a deployment that half-works depending on
+  which URL a client was handed. Measured: hybrid 112/112 (109 + 3 cross-entry), mountonly
+  109/109. Building the shape surfaced a bug in my own patch template: the hybrid profile rendered
+  `mountOnWebServer: false` (the flag only switched on `mountedOnly`), so the second entry was the
+  SPA fallback — the new cross-entry check caught exactly the half-working deployment it exists to
+  catch, and the template is fixed.
+
 ## 0.52.69
 
 - `tools/shapes.mjs` gained a `mountonly` shape: `http.enabled: false` +
