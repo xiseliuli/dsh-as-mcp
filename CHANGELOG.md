@@ -3,6 +3,23 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.11
+
+- **Fixed `shell_output.lossy`, which could never be true.** `drainShellJob` recorded a
+  shell-service loss only as `truncated` and never set `job.lossy`, so a page for a job
+  whose bytes the service had already dropped reported `truncated: true, lossy: false`
+  — exactly the ambiguous receipt the field exists to prevent. Found by the new
+  retention check: a 200 KiB writer came back as one 64 KiB page with no way to tell
+  *why* the rest was missing. The flag is now persisted, a regression test covers it,
+  and the live check requires both flags for that case.
+
+## 0.37.10
+
+- `tools/live-checks.mjs` checks the background-shell retention claim: a job that
+  writes 200 KiB in one go must come back bounded to the retained 128 KiB buffer,
+  report `truncated`, and finish reading; an unbounded or silently lossy job fails
+  the check. Cheap section, no model turn.
+
 ## 0.37.9
 
 - `tools/live-checks.mjs --with-model` now checks the claim `session_cancel` makes

@@ -590,6 +590,24 @@ describe('shell service shapes and background jobs', () => {
     expect(driver.listShellJobs()[0]).toMatchObject({ jobId: job.jobId, status: 'completed', exitCode: 2 })
   })
 
+  it('reports lossy when the shell service itself dropped bytes', async () => {
+    const { shell, processes } = shellShape('execute')
+    const driver = driverWith({ shell })
+    const job = await driver.startShellJob({ command: 'yes' })
+    const process = processes[0] as FakeProcess
+    // What the service retained, with its own loss flag: the page must not claim
+    // the bytes were all delivered just because our buffer was never trimmed.
+    ;(process as unknown as { readOutput: () => { delta: string; lossy: boolean } }).readOutput = () => ({
+      delta: 'survivor',
+      lossy: true,
+    })
+    expect(driver.readShellOutput({ jobId: job.jobId })).toMatchObject({
+      output: 'survivor',
+      truncated: true,
+      lossy: true,
+    })
+  })
+
   it('starts a job through the 0.1.5 start() shape', async () => {
     const { shell, processes } = shellShape('start')
     // One driver, so the job started through it is the job read back from it.

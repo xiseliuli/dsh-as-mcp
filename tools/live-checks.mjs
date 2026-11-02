@@ -240,6 +240,38 @@ async function shellChecks() {
     'the settled job leaves the running filter',
     `${(afterKill.jobs ?? []).length} running`,
   )
+
+  // The retention claim: a job that writes faster than it is polled loses the
+  // oldest bytes beyond the retained buffer and says so. 200 KiB written at once
+  // must not come back whole, and must not come back unboundedly either.
+  if (has('shell_output')) {
+    const loud = await callTool('shell_start', {
+      command: `node -e "process.stdout.write('x'.repeat(200000))"`,
+    })
+    let delivered = 0
+    let pages = 0
+    let sawTruncated = false
+    let sawLossy = false
+    let last
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      last = await callTool('shell_output', { jobId: loud.jobId })
+      pages += 1
+      delivered += Buffer.byteLength(last.output ?? '', 'utf8')
+      if (last.truncated === true) sawTruncated = true
+      if (last.lossy === true) sawLossy = true
+      if (last.done === true && (last.pendingBytes ?? 0) === 0) break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    // The shell service's own retention dropped part of the 200 KiB before this
+    // plugin ever saw it, so `lossy` must say so — the probe that found this bug
+    // showed `truncated: true, lossy: false` for exactly this case.
+    check(
+      sawTruncated && sawLossy && delivered <= 128 * 1024 && last?.done === true,
+      'a job that outruns polling is bounded and reports truncated + lossy',
+      `${delivered} bytes in ${pages} page(s)`,
+    )
+    await callTool('shell_kill', { jobId: loud.jobId }).catch(() => {})
+  }
 }
 
 // --- lists and paging ------------------------------------------------------

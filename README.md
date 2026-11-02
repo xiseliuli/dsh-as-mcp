@@ -232,7 +232,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | `file_list` | List a directory through DSH's filesystem service; `recursive` walks subdirectories (bounded, with `truncated`) and gives each entry a relative `path`. |
 | `shell_run` | Run one command through DSH's shell service and wait for it. |
 | `shell_start` | Start a command in the background (build, test run, dev server) and return a job id; optional watchdog. |
-| `shell_output` | Read a background job's new output, once each, with `done`/`status`/`pendingBytes` and spill paths when the service dropped bytes. |
+| `shell_output` | Read a background job's new output, once each, with `done`/`status`/`pendingBytes`; `truncated` says something was not delivered and `lossy` says the shell service itself dropped bytes (spill paths then hold the full stream). |
 | `shell_kill` | Stop a background job and wait briefly for it to settle (idempotent). |
 | `shell_list` | Every background job with status, timestamps, exit code and unread bytes. |
 | `dsh_tool_list` | The agent tools this endpoint permits, with the schema DSH's own agent sees. |

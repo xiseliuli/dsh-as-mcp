@@ -3852,7 +3852,15 @@ export class DshDriver {
       return
     }
     if (read.delta !== '') job.buffer += read.delta
-    if (read.lossy) job.truncated = true
+    if (read.lossy) {
+      // The distinction matters to a caller: `truncated` means something was not
+      // delivered, `lossy` means *this service* already dropped bytes (the spill
+      // paths hold the full stream). Setting only `truncated` left `lossy`
+      // permanently false on the page, which is what a probe against a 200 KiB
+      // writer showed.
+      job.truncated = true
+      job.lossy = true
+    }
     if (read.stdoutSpillPath !== undefined) job.stdoutSpillPath = read.stdoutSpillPath
     if (read.stderrSpillPath !== undefined) job.stderrSpillPath = read.stderrSpillPath
 

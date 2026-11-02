@@ -221,7 +221,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `file_list` | 经 DSH 文件系统服务列目录；`recursive` 递归遍历子目录（有上限并带 `truncated`），每个条目给相对 `path`。 |
 | `shell_run` | 经 DSH shell 服务执行一条命令并等待它结束。 |
 | `shell_start` | 后台启动一条命令（构建、测试、开发服务器）并返回 job id；可选看门狗。 |
-| `shell_output` | 增量读取后台任务的输出（不重复返回已读部分；超过上限时报告丢弃的字节数）。 |
+| `shell_output` | 增量读取后台任务的输出（不重复返回已读部分）；`truncated` 表示有字节未送达，`lossy` 表示 shell 服务自身丢弃了字节（此时 spill 路径指向完整流）。 |
 | `shell_kill` | 结束一个后台任务。 |
 | `shell_list` | 列出后台任务；`running` 只筛存活或已结束的。 |
 | `dsh_tool_list` | 本端点允许调用的 agent 工具，附 DSH 自己 agent 所见的结构。 |
