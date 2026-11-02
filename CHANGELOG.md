@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.38.4
+
+- `tools/live-checks.mjs` covers the listing and image limits: a non-recursive listing
+  is one level, a recursive one reaches nested files, `maxDepth` bounds the walk,
+  listing a file is a legible error, a real 1x1 PNG comes back as a metadata text
+  block plus an MCP image block, a text file is refused as "not an image", a missing
+  path says so, and a 9 MiB file is refused with the 8 MiB cap named. Both READMEs
+  note the metadata block that precedes the image.
+
 ## 0.38.3
 
 - `file_read`'s description now says precisely what a mid-character window does: each

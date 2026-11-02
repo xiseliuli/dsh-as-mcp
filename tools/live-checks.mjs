@@ -32,7 +32,7 @@
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { existsSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -271,6 +271,104 @@ async function shellChecks() {
       `${delivered} bytes in ${pages} page(s)`,
     )
     await callTool('shell_kill', { jobId: loud.jobId }).catch(() => {})
+  }
+}
+
+// --- listing and image limits ----------------------------------------------
+
+/**
+ * `file_list`'s walk bounds and `file_read_image`'s detection and cap. Cheap: a temp
+ * tree, a 1x1 PNG written through the shell, a text file and a sparse 9 MiB file.
+ */
+async function listingImageChecks() {
+  section('listing and image limits')
+  if (!has('file_list')) {
+    skip('listing and image limits', 'this endpoint advertises no file_list')
+  } else {
+    const root = join('/tmp', `dsh-as-mcp-live-tree-${process.pid}`)
+    rmSync(root, { recursive: true, force: true })
+    mkdirSync(join(root, 'sub', 'deep'), { recursive: true })
+    writeFileSync(join(root, 'top.txt'), 'top')
+    writeFileSync(join(root, 'sub', 'inner.txt'), 'inner')
+    writeFileSync(join(root, 'sub', 'deep', 'deeper.txt'), 'deeper')
+    try {
+      const flat = await callTool('file_list', { path: root })
+      // A non-recursive listing names entries by basename; recursive entries add a
+      // relative `path` (and `depth`).
+      const flatNames = (flat.entries ?? []).map((entry) => entry.name)
+      check(
+        flatNames.includes('top.txt') && flatNames.includes('sub') && !flatNames.includes('inner.txt'),
+        'a non-recursive listing shows one level with relative paths',
+        `${flat.entries?.length ?? 0} entr(ies)`,
+      )
+      const recursive = await callTool('file_list', { path: root, recursive: true })
+      check(
+        (recursive.entries ?? []).some((entry) => entry.path.endsWith('deep/deeper.txt')),
+        'a recursive listing reaches nested files',
+        `${recursive.entries?.length ?? 0} entr(ies)`,
+      )
+      const shallow = await callTool('file_list', { path: root, recursive: true, maxDepth: 1 })
+      check(
+        !(shallow.entries ?? []).some((entry) => String(entry.path ?? '').endsWith('deeper.txt')),
+        'maxDepth bounds the recursive walk',
+        `${shallow.entries?.length ?? 0} entr(ies)`,
+      )
+      const onFile = await attemptTool('file_list', { path: join(root, 'top.txt') })
+      check(onFile.ok === false && /director/i.test(onFile.error ?? ''), 'listing a file is a legible error', onFile.error?.slice(0, 50))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  if (!has('file_read_image') || !has('shell_run')) {
+    skip('image detection and cap', 'needs file_read_image and shell_run')
+    return
+  }
+  const png = join('/tmp', `dsh-as-mcp-live-1x1-${process.pid}.png`)
+  const big = join('/tmp', `dsh-as-mcp-live-big-${process.pid}`)
+  const text = join('/tmp', `dsh-as-mcp-live-text-${process.pid}.txt`)
+  const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
+  try {
+    await callTool('shell_run', {
+      command: `node -e "require('node:fs').writeFileSync('${png}', Buffer.from('${pngBase64}','base64'))"`,
+    })
+    writeFileSync(text, 'plain text')
+
+    const result = await rpc('tools/call', { name: 'file_read_image', arguments: { path: png } })
+    // The reply is a metadata text block followed by the image block, which is what
+    // lets a client show the picture while still knowing its size in bytes.
+    const meta = JSON.parse(result?.content?.[0]?.text ?? '{}')
+    const block = result?.content?.[1]
+    check(
+      result?.isError !== true && meta.mimeType === 'image/png' && block?.type === 'image' &&
+        block?.mimeType === 'image/png' && typeof block?.data === 'string' && block.data.length > 0,
+      'a real PNG comes back as metadata plus an MCP image block',
+      `${meta.mimeType ?? '?'}, ${block?.data?.length ?? 0} base64 chars`,
+    )
+    const notImage = await attemptTool('file_read_image', { path: text })
+    check(
+      notImage.ok === false && /not an image/.test(notImage.error ?? ''),
+      'a text file is refused as not an image',
+      notImage.error?.slice(0, 50),
+    )
+    const missing = await attemptTool('file_read_image', { path: `${text}.missing` })
+    check(
+      missing.ok === false && /does not exist/.test(missing.error ?? ''),
+      'a missing image path is a legible error',
+      missing.error?.slice(0, 50),
+    )
+
+    await callTool('shell_run', {
+      command: `node -e "require('node:fs').writeFileSync('${big}', Buffer.alloc(9*1024*1024, 0x89))"`,
+    })
+    const tooLarge = await attemptTool('file_read_image', { path: big })
+    check(
+      tooLarge.ok === false && /8388608-byte cap/.test(tooLarge.error ?? ''),
+      'an image over the 8 MiB cap is refused with the limit named',
+      tooLarge.error?.slice(0, 60),
+    )
+  } finally {
+    for (const path of [png, big, text]) rmSync(path, { force: true })
   }
 }
 
@@ -1232,6 +1330,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await listingImageChecks()
   await filePagingChecks()
   await promptInputChecks()
   await sessionCreateErrorChecks()

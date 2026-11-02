@@ -226,7 +226,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | `session_cancel` | Ask the agent to stop its current turn. |
 | `session_usage` | Token usage per session (its subagents included by default): exact bucket counts, a per-model breakdown, optional per-turn detail, and money when a price plugin is installed. Pass `sessionIds` to tally several known sessions in one receipt, or `cwd` to total every session that ran in one workspace directory. |
 | `file_read` | Read a UTF-8 file through DSH's filesystem service. Bounded by a byte limit; `offset`/`nextOffset` page through a larger file, and `maxBytes` asks for a smaller window so reading a slice costs less. |
-| `file_read_image` | Read an image (png/jpeg/gif/webp/bmp, detected from the bytes) and return it as an MCP image block, so you can look at a screenshot or chart instead of guessing. Capped at 8 MiB. |
+| `file_read_image` | Read an image (png/jpeg/gif/webp/bmp, detected from the bytes) and return it as an MCP image block, preceded by a metadata block (path, mimeType, bytes), so you can look at a screenshot or chart instead of guessing. Capped at 8 MiB. |
 | `file_write` | Create or replace a file through DSH's filesystem service. |
 | `file_edit` | Replace literal text in one file: exact match, unique unless `replaceAll`, nothing written on an ambiguous match. Editing no longer costs a full read + write of the file. |
 | `file_list` | List a directory through DSH's filesystem service; `recursive` walks subdirectories (bounded, with `truncated`) and gives each entry a relative `path`. |
