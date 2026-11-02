@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.20.7
+
+- Acceptance covers more filesystem and shell edges, all verified live first:
+  `maxBytes` reads report `truncated`/`nextOffset`; a symlink loop is listed but
+  never followed (a walk that recurses into one never ends); `file_read_image`
+  sniffs the bytes rather than the extension; and `shell_output` does not
+  re-deliver output already read.
+
 ## 0.20.6
 
 - A 401 now carries `WWW-Authenticate: Bearer realm="dsh-as-mcp"`. Without the

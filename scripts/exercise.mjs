@@ -31,7 +31,7 @@
  * @module dsh-as-mcp/scripts/exercise
  */
 
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { request as httpRequest } from 'node:http'
@@ -720,6 +720,14 @@ try {
       'file_read offset returns the requested window',
       `${JSON.stringify(tail.text)} at ${tail.offset}`,
     )
+    // A byte-bounded read of the middle of a file reports what it cut and where to
+    // continue; a caller paging large files relies on both.
+    const window = await must('file_read', { path, maxBytes: 4 })
+    check(
+      (window.text ?? '') === 'writ' && window.truncated === true && window.nextOffset === 4,
+      'file_read maxBytes reports truncated and nextOffset',
+      `${JSON.stringify(window.text)} next=${window.nextOffset}`,
+    )
 
     // file_edit: a literal replacement without re-sending the file each way, and
     // an ambiguous match that must be refused rather than guessed at.
@@ -746,6 +754,17 @@ try {
     check(image.mimeType === 'image/png', 'file_read_image sniffs the mime type', image.mimeType)
     check((image.bytes ?? 0) > 0, 'file_read_image reports the byte count', `${image.bytes} bytes`)
 
+    // The format comes from the bytes, not the extension: a text file named .png
+    // must be refused with the supported list rather than carried as an image.
+    const fakePng = join(projectPath, 'not-really.png')
+    await writeFile(fakePng, 'this is plain text\n')
+    const notImage = await tool('file_read_image', { path: fakePng })
+    check(
+      notImage.ok === false && /not an image/.test(notImage.error ?? '') && /png/.test(notImage.error ?? ''),
+      'file_read_image sniffs the bytes, not the extension',
+      (notImage.error ?? '').slice(0, 60),
+    )
+
     // The same picture pasted into a prompt: the agent must be able to see it.
     const vision = await tool('session_prompt', {
       sessionId,
@@ -764,6 +783,21 @@ try {
       (walked.entries ?? []).some((entry) => entry.name === 'fizzbuzz.mjs' && entry.path === 'fizzbuzz.mjs'),
       'file_list recursive reports relative paths',
       `${(walked.entries ?? []).length} entries`,
+    )
+
+    // A symlink pointing at its own ancestor must be listed, not followed: a walk
+    // that recurses into it never ends, and the endless walk is the bug users hit.
+    const loopDir = join(projectPath, 'loop-dir')
+    await mkdir(loopDir, { recursive: true })
+    await symlink(projectPath, join(loopDir, 'back'))
+    const loopWalk = await Promise.race([
+      must('file_list', { path: projectPath, recursive: true }),
+      new Promise((resolve) => setTimeout(() => resolve(undefined), 5_000)),
+    ])
+    check(
+      loopWalk !== undefined && (loopWalk.entries ?? []).some((entry) => entry.path === 'loop-dir/back'),
+      'file_list terminates on a symlink loop instead of following it',
+      loopWalk === undefined ? 'timed out' : `${(loopWalk.entries ?? []).length} entries`,
     )
   }
 
@@ -802,6 +836,14 @@ try {
       `${collected.length} bytes`,
     )
     check(page?.done === true && page.exitCode === 0, 'shell_output reports the job finished', `exit ${page?.exitCode}`)
+    // Each byte is delivered once: a polling loop that reads after the job ended
+    // must not see the output twice.
+    const reread = await must('shell_output', { jobId: job.jobId })
+    check(
+      (reread.output ?? '') === '' && reread.done === true,
+      'shell_output does not re-deliver output already read',
+      `${(reread.output ?? '').length} bytes`,
+    )
     const listed = await must('shell_list', {})
     check(
       (listed.jobs ?? []).some((entry) => entry.jobId === job.jobId),
