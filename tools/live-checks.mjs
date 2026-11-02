@@ -362,6 +362,16 @@ async function infoCoherenceChecks() {
     info.endpoint,
   )
   check(info.listening === true && info.listenError === null, 'dsh_info health says the listener is up')
+  // The endpoint string must mean what it looks like: a dialable URL while the listener
+  // is up, and explicitly not a URL when the endpoint is served elsewhere (mounted-only
+  // deployments report an explanation rather than an unreachable address).
+  check(
+    info.listening === false
+      ? !/^https?:\/\//.test(String(info.endpoint))
+      : /^https?:\/\/[^/\s]+/.test(String(info.endpoint)),
+    'the reported endpoint is a URL exactly when there is a listener to dial',
+    String(info.endpoint).slice(0, 70),
+  )
 
   const availability = info.toolAvailability ?? {}
   const availableTools = availability.availableTools ?? []

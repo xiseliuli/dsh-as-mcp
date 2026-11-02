@@ -121,6 +121,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 
 | The folded usage totals agree with the harness's own token projection | 0.52.56 | a real two-turn session's receipt carries `verifiedAgainstProjection: true` with no `projectionTotals` (the field that appears only on disagreement). live-checks now asserts this, so a shape change on either side fails a live run rather than a stub |
 | `http.port: 0` advertises the port the OS assigned | 0.52.67 | booted a profile with `port: 0`: the plugin bound `61532`, and `dsh_info` answered `endpoint: "http://127.0.0.1:61532/mcp", listening: true` — not `:0`, and not the configured placeholder. Combined with 0.52.66 the panel now prefers this live URL over the mirror |
+| A mounted-only endpoint's `dsh_info` is honest about where it lives | 0.52.68 | profile with `http.enabled: false` + `mountOnWebServer: true`: `initialize` works on `:8822/mcp`, no listener on the plugin port, and `dsh_info` answers `listening: false`, `mountedOnDshWebServer: true` with an endpoint string that is an **explanation**, not a URL. live-checks now asserts the endpoint/listening relation on every run |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:

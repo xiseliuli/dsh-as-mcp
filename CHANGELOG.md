@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.68
+
+- `dsh_info`'s endpoint/listening pair is now asserted as a relation in every live run: the
+  `endpoint` string is a dialable URL exactly when `listening` is true, and explicitly not a
+  URL when the endpoint is served elsewhere (the mounted-only explanation). The two fields were
+  recorded separately before, so a non-URL endpoint next to `listening: true` would have passed.
+  Live-verified the mounted-only configuration: `initialize` works on DSH's web server, the
+  plugin port has no listener, and `dsh_info` answers `listening: false`,
+  `mountedOnDshWebServer: true`, endpoint `/mcp (served by the DSH web server; ...)`. (A first
+  probe read a field name that does not exist — `mountedOnWebServer` instead of
+  `mountedOnDshWebServer` — and I re-ran it before recording anything.)
+
 ## 0.52.67
 
 - Live-verified the `port: 0` configuration end to end: the plugin bound an OS-assigned port
