@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.21.2
+
+- Verified the plugin on a deliberately degraded profile (workspace and
+  session-controller rows disabled): every missing-service tool names the service
+  and the bundle that provides it, while `file_read`, `shell_run` and `dsh_info`
+  keep working. One dead-end was fixed: with no session listing, the empty usage
+  report told the caller to try `all: true`, which cannot work there; it now says
+  to pass a known sessionId instead.
+
 ## 0.21.1
 
 - `session_messages` reports `total` (messages matched by `sinceSeq`/`role`) and

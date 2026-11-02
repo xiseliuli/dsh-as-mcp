@@ -815,6 +815,19 @@ describe('DshDriver.deleteWorkspace', () => {
 })
 
 describe('DshDriver capability gating', () => {
+  it('does not recommend all: true when no profile listing exists', async () => {
+    // A bare context has no sessionController, so `all: true` cannot work. The
+    // empty default report must not send the caller down that path.
+    const ctx = new Context()
+    contexts.push(ctx)
+    const driver = new DshDriver(ctx, () => testConfig())
+
+    const report = await driver.sessionUsage({ limit: 5 })
+    const notes = report.notes.join('\n')
+    expect(notes).toMatch(/pass a known sessionId/i)
+    expect(notes).not.toMatch(/all: true to scan every session/)
+  })
+
   it('names the missing service instead of failing obscurely', async () => {
     const ctx = new Context()
     contexts.push(ctx)

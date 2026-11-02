@@ -2145,9 +2145,15 @@ export class DshDriver {
         const known = new Map((summaries ?? []).map((summary) => [summary.sessionId, summary]))
         const created = [...this.ownedSessions].slice(-request.limit)
         if (created.length === 0) {
+          // `all: true` is a dead end when the listing itself is unavailable, so the
+          // advice must not offer it: measured on a profile whose
+          // sessionController row is disabled, following that note fails.
           notes.push(
-            'No session was created through this endpoint in the current DSH process. '
-            + 'Pass sessionId for one session, or all: true to scan every session this DSH knows.',
+            summaries === undefined
+              ? 'No session was created through this endpoint in the current DSH process, '
+                + 'and this profile cannot list sessions either; pass a known sessionId to read its usage.'
+              : 'No session was created through this endpoint in the current DSH process. '
+                + 'Pass sessionId for one session, or all: true to scan every session this DSH knows.',
           )
         }
         for (const sessionId of created) {
