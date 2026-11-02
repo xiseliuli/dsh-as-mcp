@@ -550,9 +550,9 @@ describe('MCP Streamable HTTP endpoint', () => {
   it('forwards session_tool_result lookups', async () => {
     const seen: unknown[] = []
     const own = await boot(stubDriver({
-      readToolResult: async (sessionId, callId, maxChars) => {
-        seen.push({ sessionId, callId, maxChars })
-        return { sessionId, callId, chars: 2, text: 'ok' }
+      readToolResult: async (request) => {
+        seen.push(request)
+        return { sessionId: request.sessionId, callId: request.callId ?? 'resolved', chars: 2, text: 'ok' }
       },
     }), testConfig({ session: true }))
     try {

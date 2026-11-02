@@ -1019,6 +1019,15 @@ try {
         'session_tool_result returns the recorded result text',
         `${fetched.chars} chars`,
       )
+      const byName = await must('session_tool_result', {
+        sessionId, toolName: withResult.name, maxChars: 200,
+      })
+      check(
+        typeof byName.callId === 'string' && byName.name === withResult.name &&
+          typeof byName.text === 'string' && byName.text.length <= 200,
+        'session_tool_result also resolves the latest call by tool name',
+        `${byName.callId.slice(0, 12)}…`,
+      )
     } else {
       check(true, 'session_tool_result skipped (no completed call with text)', '')
     }

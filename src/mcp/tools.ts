@@ -828,20 +828,25 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'Return the recorded textual result of one tool call, addressed by the call id from '
           + 'session_messages { includeToolCalls: true }. Use it to read what a tool actually returned (an '
           + 'error message, a failing test) without re-reading the transcript; the call is capped by maxChars '
-          + 'and reports its original length and whether the harness marked it an error.',
+          + 'and reports its original length and whether the harness marked it an error. Address it by callId, '
+          + 'or by toolName to read the most recent completed call of that tool.',
         inputSchema: z.object({
           sessionId: z.string(),
-          callId: z.string().min(1).describe('Tool call id from session_messages { includeToolCalls: true }.'),
+          callId: z.string().min(1).optional()
+            .describe('Tool call id from session_messages { includeToolCalls: true }. Pass this or toolName.'),
+          toolName: z.string().min(1).optional()
+            .describe('Or: the most recent completed call of this tool name (the reply names the resolved call id).'),
           maxChars: z.number().int().positive().max(100_000).optional()
             .describe('Cap on the returned text. Defaults to 4000 characters.'),
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
-      guard('session_tool_result', log, async (args) => ok(await driver.readToolResult(
-        args.sessionId,
-        args.callId,
-        args.maxChars ?? 4_000,
-      ))),
+      guard('session_tool_result', log, async (args) => ok(await driver.readToolResult({
+        sessionId: args.sessionId,
+        ...(args.callId === undefined ? {} : { callId: args.callId }),
+        ...(args.toolName === undefined ? {} : { toolName: args.toolName }),
+        maxChars: args.maxChars ?? 4_000,
+      }))),
     )
 
     server.registerTool(

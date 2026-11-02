@@ -2292,11 +2292,18 @@ export class DshDriver {
    * re-reading the whole transcript to find it is the expensive way. The id comes
    * from that transcript, so this is a targeted follow-up, not a second search.
    */
-  async readToolResult(
-    sessionId: string,
-    callId: string,
-    maxChars: number,
-  ): Promise<{
+  async readToolResult(request: {
+    sessionId: string
+    /** Exact call id from `session_messages { includeToolCalls }`. */
+    callId?: string
+    /**
+     * Or: the most recent completed call of this tool name. A caller watching a
+     * session often knows "the last bash result is what I need" without tracking
+     * ids; the reply names the resolved call id either way.
+     */
+    toolName?: string
+    maxChars: number
+  }): Promise<{
     sessionId: string
     callId: string
     name?: string
@@ -2305,34 +2312,65 @@ export class DshDriver {
     truncated?: true
     error?: true
   }> {
-    await this.assertSessionVisible(sessionId, 'session_tool_result')
-    const events = await this.readEvents(sessionId)
+    if ((request.callId === undefined) === (request.toolName === undefined)) {
+      throw new Error('pass either callId or toolName, not both and not neither')
+    }
+    await this.assertSessionVisible(request.sessionId, 'session_tool_result')
+    const events = await this.readEvents(request.sessionId)
     // The call's name lives on the assistant message that requested it; the result
-    // only carries the id.
-    let name: string | undefined
-    let found: { chars: number; text: string; error: boolean } | undefined
+    // only carries the id. One pass collects both, in log order, so a name lookup
+    // naturally ends on the most recent call.
+    const nameById = new Map<string, string>()
+    const order: string[] = []
+    const results = new Map<string, { chars: number; text: string; error: boolean }>()
     for (const event of events) {
       if (event.type === 'assistant/message') {
         const blocks = (event.data as { message?: { content?: unknown } } | undefined)?.message?.content
-        const calls = toolCallsOfBlocks(blocks)
-        for (const call of calls) if (call.id === callId) name = call.name
+        for (const call of toolCallsOfBlocks(blocks)) {
+          if (call.id === undefined) continue
+          nameById.set(call.id, call.name)
+          order.push(call.id)
+        }
         continue
       }
       if (event.type !== 'tool/result') continue
       const message = (event.data as { message?: Record<string, unknown> } | undefined)?.message
-      if (message?.['toolCallId'] !== callId) continue
-      const text = textOfBlocks(message['content'])
-      found = { chars: text.length, text, error: message['isError'] === true }
+      const callId = message?.['toolCallId']
+      if (typeof callId !== 'string' || callId === '') continue
+      const text = textOfBlocks(message?.['content'])
+      results.set(callId, { chars: text.length, text, error: message?.['isError'] === true })
     }
+
+    let callId = request.callId
+    if (callId === undefined) {
+      // Most recent id in log order whose name matches and which already answered.
+      for (let index = order.length - 1; index >= 0; index -= 1) {
+        const candidate = order[index] as string
+        if (nameById.get(candidate) !== request.toolName) continue
+        if (!results.has(candidate)) continue
+        callId = candidate
+        break
+      }
+      if (callId === undefined) {
+        const known = [...new Set([...nameById.values()])]
+        throw new Error(
+          `no recorded result of a tool named "${request.toolName}" in session ${request.sessionId}. `
+            + `Tools with recorded calls: ${known.length === 0 ? 'none' : known.join(', ')}.`,
+        )
+      }
+    }
+
+    const found = results.get(callId)
     if (found === undefined) {
       throw new Error(
-        `no recorded result for tool call "${callId}" in session ${sessionId}: the call id is unknown, or the `
-          + 'tool has not answered yet. Take the id from session_messages { includeToolCalls: true }.',
+        `no recorded result for tool call "${callId}" in session ${request.sessionId}: the call id is unknown, or `
+          + 'the tool has not answered yet. Take the id from session_messages { includeToolCalls: true }.',
       )
     }
-    const capped = found.text.length > maxChars ? truncateText(found.text, maxChars) : found.text
+    const name = nameById.get(callId)
+    const capped = found.text.length > request.maxChars ? truncateText(found.text, request.maxChars) : found.text
     return {
-      sessionId,
+      sessionId: request.sessionId,
       callId,
       ...(name === undefined ? {} : { name }),
       chars: found.chars,

@@ -771,7 +771,7 @@ describe('bounded replies', () => {
     }, 2))
     const { driver } = driverWith(sessions)
 
-    await expect(driver.readToolResult('session-1', 'call-1', 100)).resolves.toEqual({
+    await expect(driver.readToolResult({ sessionId: 'session-1', callId: 'call-1', maxChars: 100 })).resolves.toEqual({
       sessionId: 'session-1',
       callId: 'call-1',
       name: 'bash',
@@ -780,13 +780,53 @@ describe('bounded replies', () => {
       error: true,
     })
     // The cap reports the original size.
-    const capped = await driver.readToolResult('session-1', 'call-1', 4)
+    const capped = await driver.readToolResult({ sessionId: 'session-1', callId: 'call-1', maxChars: 4 })
     expect(capped.text).toHaveLength(4)
     expect(capped.truncated).toBe(true)
     expect(capped.chars).toBe(12)
     // An unknown or not-yet-answered id is a legible error, not an empty result.
-    await expect(driver.readToolResult('session-1', 'call-404', 100))
+    await expect(driver.readToolResult({ sessionId: 'session-1', callId: 'call-404', maxChars: 100 }))
       .rejects.toThrow(/no recorded result for tool call "call-404"/)
+  })
+
+  it('finds the most recent completed call of a tool by name', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'run it', 0)])
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: {
+        content: [
+          { type: 'tool-call', id: 'bash-1', name: 'bash', arguments: '{}' },
+          { type: 'tool-call', id: 'read-1', name: 'read', arguments: '{}' },
+        ],
+      },
+    }, 1))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { content: [{ type: 'tool-call', id: 'bash-2', name: 'bash', arguments: '{}' }] },
+    }, 2))
+    sessions.log.push(event('tool/result', {
+      turn: 1, step: 0, message: { role: 'tool', toolCallId: 'bash-1', content: [{ type: 'text', text: 'old' }] },
+    }, 3))
+    sessions.log.push(event('tool/result', {
+      turn: 1, step: 1, message: { role: 'tool', toolCallId: 'bash-2', content: [{ type: 'text', text: 'newer' }] },
+    }, 4))
+    const { driver } = driverWith(sessions)
+
+    const byName = await driver.readToolResult({ sessionId: 'session-1', toolName: 'bash', maxChars: 100 })
+    expect(byName.callId).toBe('bash-2')
+    expect(byName.text).toBe('newer')
+    expect(byName.name).toBe('bash')
+
+    await expect(driver.readToolResult({ sessionId: 'session-1', toolName: 'grep', maxChars: 100 }))
+      .rejects.toThrow(/no recorded result of a tool named "grep".*bash, read/s)
+    // Exactly one selector is required.
+    await expect(driver.readToolResult({ sessionId: 'session-1', maxChars: 100 }))
+      .rejects.toThrow(/either callId or toolName/)
+    await expect(driver.readToolResult({
+      sessionId: 'session-1', callId: 'bash-1', toolName: 'bash', maxChars: 100,
+    })).rejects.toThrow(/either callId or toolName/)
   })
 
   it('reports the tool calls a model requested only when asked', async () => {

@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.0
+
+- `session_tool_result` can now address a result by `toolName` as well as `callId`:
+  it returns the most recent completed call of that tool and names the resolved call
+  id. A caller watching a session usually knows "the last bash result is what I
+  need" without tracking ids; an unknown name lists the tools that do have recorded
+  calls, and passing both selectors (or neither) is refused.
+- Covered by driver tests and the acceptance run (by-id and by-name fetch of a real
+  bash result); both READMEs updated.
+
 ## 0.36.1
 
 - `tools/live-checks.mjs --with-subagent` also exercises the debug path end to end:
