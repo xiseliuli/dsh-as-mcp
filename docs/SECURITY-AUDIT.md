@@ -7,7 +7,7 @@ MCP server. Written to find real vulnerabilities, not to confirm the design.
 
 | Fact | Value |
 | --- | --- |
-| Audited revision | `6105534` ("fix: shell_run on 0.1.7-rc.2, and stop handing the token to the logger"), working tree clean |
+| Audited revision | `6105534` (the third review round below covers the later 0.25–0.29 tools) ("fix: shell_run on 0.1.7-rc.2, and stop handing the token to the logger"), working tree clean |
 | Source hashes | `src/index.ts` `7c51aff5…`, `src/mcp/http.ts` `7bed0509…`, `src/mcp/token.ts` `d8461499…`, `src/mcp/tools.ts` `04f879a4…`, `src/dsh/driver.ts` `e725342f…`, `src/settings.ts` `aa15739e…` |
 | Harness under audit | `/Users/xiseliuli/test_code/dsh-harness-015` (0.1.5-rc.1) |
 | Deployed artifact | `~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/lib/index.js` `1cbe2c21…` — **older than HEAD**, does not contain `maskToken` |
@@ -59,6 +59,8 @@ audit stays useful rather than reading as a list of open holes.
 | **F8** dropped handler promise | **Fixed.** The listener catches the guard's rejection, logs it, answers 500 when headers were not sent, and ends the response otherwise — mirroring the harness web server's own "never a process exit" handling. |
 | **F10** bridge exfiltration guard defeated by a prefix host test | **Fixed.** The loopback predicate is now an exact 127.0.0.0/8 dotted quad rather than `startsWith('127.')`, which accepted `127.0.0.1.attacker.example`. Scheme-less loopback values are accepted rather than refused; anything unrecognised still fails closed. A process-level table test fails against the old predicate. |
 | **F9** `dsh_tool_call` selection surface | **Closed by design** with an allow-list enforced on both listing and execution; see F9. Not a defect — recorded because a deny-list was the obvious reading and is unsound. |
+| **F11** session mutation is instance-wide | **Accepted with F4 and documented** (third review round below, both READMEs). No new admission path; an integrity consequence of "the token is the user". |
+| **F12** content search discloses transcript snippets | **Accepted and documented.** Search is opt-in at the deployment level (`session-query` `openAt`), and `dsh_info { probeSearch: true }` reports whether a deployment has it on. |
 
 The hardening notes at the end are likewise unremediated, except the deployed token-log path covered by F3.
 
@@ -107,6 +109,33 @@ beat it pinned by a test:
   also gained the `tools.agentTools` switch and the `agentTools.allow`/`deny` editors — the
   allow-list was configurable only by hand-editing YAML — and `reconcile` no longer records a
   config as bound when the run threw part-way.
+
+### Third review round — the session surface grew after this audit
+
+The findings above were raised while the endpoint exposed read-mostly session access. Later
+releases added **mutation** and **content search**, so F4's scope is wider than when it was
+accepted. Nothing here is a new admission path — the bearer token is still the only boundary, and
+a token holder already had `shell_run` as the user — but two behaviours deserve to be named
+explicitly rather than inferred from a changelog:
+
+| Item | What changed | Impact | Verdict |
+| --- | --- | --- | --- |
+| **F11 — session mutation is instance-wide** | `session_prompt`/`steer`, `session_cancel`, `session_rename`, `session_set_model`, `session_fork` and `session_queue` (edit/remove/steer a pending message) act on any session this DSH process holds, not only sessions the endpoint created. `ownedSessions` is used for usage scoping and approval answering, not as an authorization gate. | A token holder can silently withdraw a message a human queued in the UI, rename a session, switch its model, or cancel its running turn. There is no new *capability* beyond "the token is the user" (the same holder can prompt, or read `$DSH_HOME/sessions`), but the integrity impact is direct and previously required shell access to achieve. | **Accepted with F4 and documented** (both READMEs' security section, and the queue tool description). `session.scope` remains unimplemented; do not hand a token to a party who may not rewrite the user's own sessions. |
+| **F12 — content search discloses transcripts, not just metadata** | `session_search` returns a snippet of matched **message content** from every visible session, and the search index is asked for it by content, so the caller chooses the query. F4's argument ("the same bytes are in `$DSH_HOME/sessions`") still bounds the *authority*, but the result now lands in the caller's transcript, logs and context — a place the user's own session store never reaches. | Privacy: a caller can ask "who mentioned X?" and receive up to 20 snippets per query. Snippets are bounded (240 code points) and capped, but the operator should treat search as **reading arbitrary session content**, not as listing. | **Accepted and documented.** The deployment requirement is explicit: search is opt-in (`session-query` `openAt`), so a profile that leaves search disabled removes this path entirely; `dsh_info { probeSearch: true }` reports which state a deployment is in. |
+
+Also noted while re-reading this surface:
+
+- **Message ids are capability-bearing inside the endpoint.** `session_messages` returns the id
+  queue mutations address; with `session_queue` that id is enough to edit or drop the message. The
+  ids are minted by the harness and carry no authority of their own — the bearer token is still
+  required — but they should not be copied into a lower-trust log, because they make the queued
+  message addressable later in the same process.
+- **`session_fork` materialises another session's prefix** into a child this endpoint owns. That
+  is not a new read (the fork author could read the source), but it converts "read once" into "a
+  durable copy owned by the caller", which matters if the source is later pruned or archived.
+- **Not exercised:** mutating a message that a *different* client (the DSH UI) queued. The ids
+  come from the same `inbox` projection, so the path is the same, but the third-party-queue case
+  was not observed live.
 
 ---
 

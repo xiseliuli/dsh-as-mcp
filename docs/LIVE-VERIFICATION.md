@@ -107,6 +107,7 @@ These are gaps in *evidence*, not known defects:
 | `session_usage` money figures match the cost plugin's own numbers **exactly** | money is a price-ledger estimate; the documented position is that tokens and money do not reconcile to the last cent | compare on a known model/price row and record the delta |
 | Chunked request bodies (no `content-length`) are size-checked | the endpoint refuses a *declared* oversized body; a chunked body is read through the SDK's parser | send a chunked oversized body and observe; document whatever is true |
 | A restrictive sandbox policy actually refuses a plugin file write | the plugin never re-implements the policy; it calls the harness `fs` service, which applies it — a refusal was not separately observed in these checks | run the endpoint under a `workspace-write`/read-only profile and attempt an out-of-policy write |
+| Mutating a message queued by a **different** client (the DSH UI) with `session_queue` | the queue projection and ids are the same code path, but only endpoint-queued messages were withdrawn live | queue a message from the DSH UI while a turn runs, then `remove` it through the endpoint |
 
 ## Reproducing a check
 

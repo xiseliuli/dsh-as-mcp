@@ -519,6 +519,13 @@ draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
   a token holder sees your conversation history, and a calling agent's context accumulates it.
   This is not an escalation (the same bytes are in `$DSH_HOME/sessions`, reachable through
   `shell_run`), but it is a privacy consequence worth knowing before you hand out a token.
+  The reach is not only reading: `session_prompt`/`session_queue`/`session_cancel`/`session_rename`/
+  `session_set_model`/`session_fork` act on any session this process holds, so a token holder can
+  withdraw a message you queued, cancel a turn, rename a session, switch its model, or fork its
+  content into a session it owns. `session_search`, when the deployment enables the index, turns the
+  same history into a queryable message-content search (bounded snippets) — it is opt-in for exactly
+  this reason. None of it exceeds "the token is you", but a token you would not hand out for
+  `shell_run` is also a token you should not hand out for these.
 - **Spend is readable on the same boundary.** A token holder can read token usage — and, where
   `dsh-cost-meter` is installed, an estimated money figure — for any session this endpoint can
   reach: `session_usage`, and the usage block on every `session_prompt` reply. It is not a wider

@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.29.3
+
+- Security audit caught up with the tools added after it was written. A third
+  review round records two accepted consequences rather than findings:
+  **F11** — session mutation (`prompt`/`steer`, `cancel`, `rename`,
+  `set_model`, `fork`, `session_queue`) is instance-wide, so a token holder can
+  alter sessions it did not create; **F12** — `session_search` discloses bounded
+  transcript snippets from every visible session, which is why search is opt-in at
+  the deployment level and why `dsh_info { probeSearch: true }` reports its state.
+  Both READMEs' security sections now say the reach is not just reading. One
+  unexercised case is recorded: withdrawing a message a *different* client queued.
+
 ## 0.29.2
 
 - Added `docs/LIVE-VERIFICATION.md`: a record of which behaviours were checked

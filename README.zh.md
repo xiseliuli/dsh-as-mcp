@@ -459,7 +459,12 @@ token 数字不受影响。钱覆盖会话内每一次 LLM 调用，而 token �
   `session_messages` 能读取其中任何一个的记录——已实测读到了一个并非本插件创建的会话。那些
   正是你和 DSH 对话的会话，所以令牌持有者能看到你的对话历史，而调用方 agent 的上下文也会把
   它攒下来。这不是越权（同样的字节就在 `$DSH_HOME/sessions`，用 `shell_run` 一样能读到），
-  但它是一个在你分发令牌之前值得知道的隐私后果。
+  但它是一个在你分发令牌之前值得知道的隐私后果。而且这种触达不只是"读"：
+  `session_prompt`／`session_queue`／`session_cancel`／`session_rename`／`session_set_model`／
+  `session_fork` 都能作用在本进程持有的任意会话上——令牌持有者可以撤回你排队的消息、取消一轮、
+  改名、换模型，或把会话内容 fork 到自己拥有的会话里。部署开启搜索索引时，`session_search`
+  还会把同一份历史变成可按消息内容查询的搜索（有界 snippet）——它默认关闭正是这个原因。这些
+  都不超出"token 就是你"，但你不愿交给它 `shell_run` 的 token，同样不该交给这些工具。
 - 因此 `tools` 开关**收窄的是客户端能发现和调用的范围，而不是隔离**。`tools.shell: false`
   会移除 shell 工具，但 `file_write` 照样能写你的 shell 启动文件、`file_read` 照样能读你的
   凭证——所以关掉 shell 工具的 profile，**不等于**可以交给一个你不愿给登录权限的调用方。
