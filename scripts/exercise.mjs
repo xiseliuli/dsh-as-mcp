@@ -787,12 +787,14 @@ try {
         toTurn: lastTurn,
       })
       const phaseRow = phases.sessions?.find((row) => row.origin === 'self')
+      const fullRowForTurn = perTurn.find((turn) => turn.turn === lastTurn)
       check(
         phaseRow?.usage?.turnRange?.from === lastTurn && phaseRow.usage.turnRange.to === lastTurn &&
           phaseRow.usage.byTurn.length === 1 && phaseRow.usage.byTurn[0]?.turn === lastTurn &&
-          phaseRow.usage.totals.totalTokens <= receipt.totals.totalTokens,
+          phaseRow.usage.totals.totalTokens === phaseRow.usage.byTurn[0]?.totalTokens &&
+          phaseRow.usage.totals.totalTokens === fullRowForTurn?.totalTokens,
         'a turn-range receipt bills exactly that phase',
-        `turn ${lastTurn}: ${phaseRow?.usage?.totals?.totalTokens ?? '?'} tokens`,
+        `turn ${lastTurn}: ${phaseRow?.usage?.totals?.totalTokens ?? '?'} tokens (full receipt says ${fullRowForTurn?.totalTokens ?? '?'})`,
       )
     }
 

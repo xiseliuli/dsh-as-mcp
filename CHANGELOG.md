@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.6
+
+- The acceptance run's phase-receipt check now cross-checks numbers, not just shape: a
+  `fromTurn`/`toTurn` receipt for one turn must equal the `byTurn` row's own total in
+  the same report *and* the same turn's row in the full receipt. A windowed report that
+  quietly folded the wrong events would pass a shape check; it cannot pass this.
+
 ## 0.51.5
 
 - `tools/live-checks.mjs --with-model` cross-checks the token numbers too: each prompt
