@@ -107,6 +107,8 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 | `dsh_info.catalog` reads providers, models, agent presets, sandbox mode and permission presets from the live services | 0.7.0 | live profile returned the real catalog; a field that could not be read is named in `catalog.unavailable` |
 | `includeModels` asks each provider route what it advertises (opt-in, per-provider time-boxed) | 0.7.0 | live profile |
 
+| A restrictive sandbox policy actually refuses a plugin file write | 0.51.11 | booted a profile with `DSH_PERMISSION_MODE=read-only`: `file_write` answered "file access denied under read-only mode", `shell_run` could read (`cat /etc/hosts`) but its redirect to `/tmp` failed with "Operation not permitted" |
+| Chunked request bodies are size-bounded, not just declared ones | 0.51.11 | a 70 MB body sent with `Transfer-Encoding: chunked` (no `content-length`) answered `413 request body too large` in 71 ms; a valid chunked `initialize` answered 200 |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:
@@ -117,8 +119,6 @@ These are gaps in *evidence*, not known defects:
 | Desktop-composition acceptance run | same restart dependency | run `scripts/exercise.mjs` against the desktop profile's endpoint |
 | Panel/visual rendering (widgets, slots, settings page layout) | the `ifc-view` MCP server used for visual inspection was disconnected in this session | reconnect `ifc-view`, or inspect the panel by hand |
 | `session_usage` money figures match the cost plugin's own numbers **exactly** | money is a price-ledger estimate; the documented position is that tokens and money do not reconcile to the last cent | compare on a known model/price row and record the delta |
-| Chunked request bodies (no `content-length`) are size-checked | the endpoint refuses a *declared* oversized body; a chunked body is read through the SDK's parser | send a chunked oversized body and observe; document whatever is true |
-| A restrictive sandbox policy actually refuses a plugin file write | the plugin never re-implements the policy; it calls the harness `fs` service, which applies it — a refusal was not separately observed in these checks | run the endpoint under a `workspace-write`/read-only profile and attempt an out-of-policy write |
 | Mutating a message queued by a **different** client (the DSH UI) with `session_queue` | the queue projection and ids are the same code path, but only endpoint-queued messages were withdrawn live | queue a message from the DSH UI while a turn runs, then `remove` it through the endpoint |
 
 ## Reproducing a check

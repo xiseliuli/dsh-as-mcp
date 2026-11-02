@@ -3,6 +3,20 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.11
+
+- Verified two items that had been listed as unverified, and corrected one claim:
+  - a `read-only` sandbox really refuses plugin writes (`file_write` → "file access denied
+    under read-only mode"; `shell_run` reads fine but its redirect fails with "Operation
+    not permitted"), so the "the harness policy still applies" claim is evidence, not
+    architecture;
+  - chunked request bodies (no `content-length`) **are** size-bounded: 70 MB chunked
+    answered `413` in 71 ms while a valid chunked `initialize` answered 200. The README
+    said a chunked request was "not covered by this check", which understated the code
+    (`readJsonBody` counts streamed bytes); both READMEs now say what happens, and the zh
+    security section gained the missing bullet.
+- Both rows moved from "Not verified here" to the verified matrix.
+
 ## 0.51.10
 
 - `tools/release.sh` accepts `--with-model` and the `--full-live` shorthand for

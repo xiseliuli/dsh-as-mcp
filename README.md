@@ -494,9 +494,11 @@ agent's transcript never accumulates the credential. A pinned token shorter than
 draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
 
 - A request that declares a body over 64 MiB is refused with `413` before the body
-  is read. This is defence in depth: every tool that could carry a large payload
-  already has its own cap, and a chunked request declares no size and is not
-  covered by this check.
+  is read, and a chunked request — which declares no size — has its bytes counted while
+  streaming and is refused with the same `413` once the cap is passed (verified: 70 MB
+  sent chunked answered `413` in 71 ms, and a valid chunked request still works). This
+  is defence in depth: every tool that could carry a large payload already has its own
+  cap.
 - A rejected request answers `401` with `WWW-Authenticate: Bearer realm="dsh-as-mcp"`, so a standard
   MCP client can tell that presenting its configured token is the fix rather than reporting a dead
   endpoint. The realm is a fixed label; the token is never echoed.
