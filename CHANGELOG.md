@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.7
+
+- Full sweep recorded in `docs/LIVE-VERIFICATION.md`: one profile with the search index
+  enabled ran live-checks in every mode (`--with-model --with-subagent`, 115/115) and the
+  complete acceptance run (163/163) in the same boot, so the two suites agree on the same
+  process rather than each being green alone. Re-run before touching the desktop
+  composition.
+
 ## 0.51.6
 
 - The acceptance run's phase-receipt check now cross-checks numbers, not just shape: a
