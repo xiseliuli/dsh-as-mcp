@@ -1661,7 +1661,7 @@ async function orchestrationCheck() {
   // it does not throw away the work waiting behind it (the description says so).
   await callTool('session_prompt', {
     sessionId: session.sessionId,
-    prompt: 'Reply with exactly: QUEUE-B',
+    prompt: 'Reply with exactly: ORIGINAL-QUEUE',
     wait: false,
   })
 
@@ -1672,10 +1672,20 @@ async function orchestrationCheck() {
   if (has('session_queue')) {
     const afterCancel = await callTool('session_queue', { sessionId: session.sessionId })
     const remaining = (afterCancel.queued ?? []).filter(
-      (entry) => String(entry.text ?? '').includes('QUEUE-B'),
+      (entry) => String(entry.text ?? '').includes('ORIGINAL-QUEUE'),
     )
     preserved = remaining.length === 1
     check(preserved, 'cancelling preserves the work queued behind the turn', `${remaining.length} left`)
+    if (preserved) {
+      // Editing a pending message must change what runs, not just what a listing shows.
+      const edited = await callTool('session_queue', {
+        sessionId: session.sessionId,
+        messageId: remaining[0].id,
+        action: 'edit',
+        content: 'Reply with exactly: EDITED-QUEUE',
+      })
+      check(edited.accepted === true, 'a queued message can be edited in place')
+    }
   }
 
   // The session must still work afterwards: this is the state corruption a
@@ -1696,8 +1706,9 @@ async function orchestrationCheck() {
   )
   if (preserved) {
     check(
-      transcript.some((message) => String(message.text ?? '').includes('QUEUE-B')),
-      'the preserved message did run after the cancellation',
+      transcript.some((message) => String(message.text ?? '').includes('EDITED-QUEUE')) &&
+        !transcript.some((message) => String(message.text ?? '').includes('ORIGINAL-QUEUE')),
+      'the edited message ran after the cancellation, and the original text did not',
     )
   }
 }

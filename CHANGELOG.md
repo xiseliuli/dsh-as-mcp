@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.23
+
+- The orchestration live check now edits a pending message while it waits (`action:
+  "edit"`): the preserved queue entry's text is replaced after the cancel, and the
+  transcript afterwards must contain the edited text and not the original — an edit that
+  only changed what a listing shows would fail this.
+
 ## 0.52.22
 
 - Probed and asserted `session_queue { action: "steer" }`: queued while a sleeping turn
