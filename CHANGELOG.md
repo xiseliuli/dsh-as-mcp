@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.9
+
+- Fixed a drift the new in-test docs check caught (and that a `2>/dev/null | tail -1`
+  check in the same shell hid): the 0.52.8 matrix row cited the price plugin's own version
+  `1.9.41`, which the check rightly reads as a release of *this* plugin with no changelog
+  entry. The row now says "the current `dsh-cost-meter` (1.9.x)". Process note: the 0.52.8
+  install used `--skip-tests` while the suite had that failure, so from 0.52.9 on a round
+  that touches tests/docs runs the release *with* tests instead of skipping them.
+
 ## 0.52.8
 
 - Closed the money row: installed `dsh-cost-meter@1.9.41` from its registry into a
