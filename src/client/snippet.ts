@@ -81,3 +81,41 @@ export function endpointUrl(host: unknown, port: unknown, path: unknown): string
   // A wildcard bind is not dialable; the panel advertises what a client can reach.
   return `http://${hostText === '0.0.0.0' ? '127.0.0.1' : hostText}:${portText}${pathText}`
 }
+
+/**
+ * Which endpoint URL to put in the panel's client configuration.
+ *
+ * Three sources disagree for good reasons and none is always right:
+ *
+ * - the live `status.url` is what the listener actually bound (a `port: 0` config is
+ *   assigned a real port the mirror never sees), but it is stale for a draft edit and
+ *   absent on an old host;
+ * - `<page origin><path>` is the only true URL when the plugin listener is disabled and
+ *   the endpoint is served by DSH's own web server — the browser is the one participant
+ *   that knows that origin;
+ * - the config mirror is the last resort, and the only source while the panel is still
+ *   loading.
+ *
+ * A non-URL `status.url` (the mounted-only explanation string) is never dialable and is
+ * ignored here.
+ */
+export function dialableEndpoint(input: {
+  readonly statusUrl?: string
+  readonly listening?: boolean
+  readonly mounted?: boolean
+  readonly pageOrigin?: string
+  readonly path?: string
+  readonly configUrl?: string
+}): string | undefined {
+  const isUrl = (text: string | undefined): text is string =>
+    typeof text === 'string' && /^https?:\/\/[^/\s]+/.test(text)
+  if (input.listening === true && isUrl(input.statusUrl)) return input.statusUrl
+  if (
+    input.mounted === true && input.listening === false &&
+    typeof input.pageOrigin === 'string' && input.pageOrigin !== '' &&
+    typeof input.path === 'string' && input.path.startsWith('/')
+  ) {
+    return `${input.pageOrigin.replace(/\/+$/, '')}${input.path}`
+  }
+  return input.configUrl
+}

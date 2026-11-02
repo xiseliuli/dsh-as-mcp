@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { GROUPS, formatList, parseList, parseNumberDraft, readPath } from '../src/client/fields.js'
-import { endpointUrl } from '../src/client/snippet.js'
+import { dialableEndpoint, endpointUrl } from '../src/client/snippet.js'
 import { normalizeConfig } from '../src/config.js'
 import { en, zh } from '../src/client/locales.js'
 import { clientSnippet, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from '../src/client/snippet.js'
@@ -342,5 +342,28 @@ describe('the endpoint URL offered to a client', () => {
   it('advertises a dialable host for a wildcard bind', () => {
     expect(endpointUrl('0.0.0.0', 8790, '/mcp')).toBe('http://127.0.0.1:8790/mcp')
     expect(endpointUrl('', 8790, '/mcp')).toBe('http://127.0.0.1:8790/mcp')
+  })
+})
+
+describe('which endpoint URL the panel offers', () => {
+  const base = { configUrl: 'http://127.0.0.1:8790/mcp', path: '/mcp' }
+  it('prefers what the listener actually bound (a port: 0 config lands elsewhere)', () => {
+    expect(dialableEndpoint({ ...base, listening: true, statusUrl: 'http://127.0.0.1:53491/mcp' }))
+      .toBe('http://127.0.0.1:53491/mcp')
+  })
+  it('uses this page\'s origin when the endpoint is mounted-only', () => {
+    expect(dialableEndpoint({
+      ...base,
+      listening: false,
+      mounted: true,
+      statusUrl: '/mcp (served by the DSH web server; the plugin listener is disabled)',
+      pageOrigin: 'http://127.0.0.1:53491/',
+    })).toBe('http://127.0.0.1:53491/mcp')
+  })
+  it('falls back to the configuration mirror, and never renders a non-URL status', () => {
+    expect(dialableEndpoint({ ...base, listening: false, mounted: false, statusUrl: 'not a url' }))
+      .toBe('http://127.0.0.1:8790/mcp')
+    expect(dialableEndpoint({ ...base, listening: true, statusUrl: '42' }))
+      .toBe('http://127.0.0.1:8790/mcp')
   })
 })

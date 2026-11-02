@@ -4,7 +4,7 @@ import type { Config } from '../config.js'
 import type { EndpointStatus } from '../status.js'
 import type { SettingsPathOp, SettingsScopeSnapshot } from './contract.js'
 import { GROUPS, formatList, parseNumberDraft, parseList, pathKey, readPath, type FieldSpec, type GroupSpec } from './fields.js'
-import { clientSnippet, endpointUrl, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from './snippet.js'
+import { clientSnippet, dialableEndpoint, endpointUrl, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from './snippet.js'
 
 /** The bound settings namespace, as the section consumes it. */
 export interface SectionStore {
@@ -466,11 +466,21 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
     : status.tokenSource === 'settings' || status.tokenSource === 'config'
   const tokenIsSet = pinnedFromStatus ?? store.secretIsSet()
 
-  const url = endpointUrl(
-    readPath(value, ['http', 'host']),
-    readPath(value, ['http', 'port']),
-    readPath(value, ['http', 'path']),
-  )
+  const pathText = readPath(value, ['http', 'path'])
+  // Prefer what the host says it actually bound, then the web-server origin this page
+  // knows when the endpoint is mounted-only, then the configuration mirror.
+  const url = dialableEndpoint({
+    statusUrl: status?.url,
+    listening: status?.listening,
+    mounted: readPath(value, ['http', 'mountOnWebServer']) === true,
+    pageOrigin: typeof window === 'undefined' ? undefined : window.location.origin,
+    path: typeof pathText === 'string' ? pathText : undefined,
+    configUrl: endpointUrl(
+      readPath(value, ['http', 'host']),
+      readPath(value, ['http', 'port']),
+      pathText,
+    ),
+  })
 
   return (
     <div className="dshmcp">

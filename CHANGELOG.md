@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.66
+
+- The panel's client snippet now uses the endpoint a client can actually dial:
+  - the live `status.url` when the listener is up (so a `port: 0` configuration shows the
+    port the OS assigned, not `0`);
+  - `<this page's origin><path>` when the plugin listener is disabled and the endpoint is
+    served by DSH's own web server — the mounted-only configuration used to print the
+    plugin's unbound port;
+  - the configuration mirror last, which is the only source while the panel loads.
+  A non-URL status string (the mounted-only explanation) is never used as an endpoint. The
+  choice lives in `dialableEndpoint` with unit tests for each branch.
+
 ## 0.52.65
 
 - A panel on a host that mounts no status route (or whose fetch fails) used to show no health
