@@ -475,6 +475,10 @@ export interface TranscriptToolCall {
   readonly name: string
   /** Raw JSON length; the arguments themselves are not repeated here. */
   readonly argumentsChars: number
+  /** Length of the tool's textual result, once one is recorded. */
+  readonly resultChars?: number
+  /** True when the harness marked the recorded result as an error. */
+  readonly error?: true
 }
 
 /** One directory entry. */
@@ -527,8 +531,24 @@ function textOfBlocks(blocks: unknown): string {
   return text
 }
 
-/** Tool invocations a model requested, from one message's content blocks. */
-function toolCallsOfBlocks(blocks: unknown): TranscriptToolCall[] {
+/** A recorded tool result, keyed by the call it answers. */
+interface ToolResultSummary {
+  readonly chars: number
+  readonly error: boolean
+}
+
+/**
+ * Tool invocations a model requested, from one message's content blocks.
+ *
+ * @param blocks - The message's content blocks.
+ * @param results - Recorded results keyed by call id, so a completed call carries
+ *   how large its result was and whether the harness marked it an error.
+ * @returns The calls in block order.
+ */
+function toolCallsOfBlocks(
+  blocks: unknown,
+  results: ReadonlyMap<string, ToolResultSummary> = new Map(),
+): TranscriptToolCall[] {
   if (!Array.isArray(blocks)) return []
   const calls: TranscriptToolCall[] = []
   for (const block of blocks) {
@@ -536,15 +556,38 @@ function toolCallsOfBlocks(blocks: unknown): TranscriptToolCall[] {
     const candidate = block as { type?: unknown; id?: unknown; name?: unknown; arguments?: unknown }
     if (candidate.type !== 'tool-call') continue
     if (typeof candidate.name !== 'string' || candidate.name === '') continue
+    const id = typeof candidate.id === 'string' && candidate.id !== '' ? candidate.id : undefined
+    const result = id === undefined ? undefined : results.get(id)
     calls.push({
-      ...(typeof candidate.id === 'string' && candidate.id !== '' ? { id: candidate.id } : {}),
+      ...(id === undefined ? {} : { id }),
       name: candidate.name,
       // Arguments are raw provider JSON and can be large; the size is what a
       // poller needs, and it keeps a transcript read bounded.
       argumentsChars: typeof candidate.arguments === 'string' ? candidate.arguments.length : 0,
+      ...(result === undefined ? {} : { resultChars: result.chars }),
+      ...(result?.error === true ? { error: true as const } : {}),
     })
   }
   return calls
+}
+
+/** Summarize recorded tool results by the call id they answer. */
+function toolResultsOfEvents(
+  events: readonly DshSessionEvent[],
+): Map<string, ToolResultSummary> {
+  const results = new Map<string, ToolResultSummary>()
+  for (const event of events) {
+    if (event.type !== 'tool/result') continue
+    const message = (event.data as { message?: Record<string, unknown> } | undefined)?.message
+    if (message === undefined) continue
+    const callId = message['toolCallId']
+    if (typeof callId !== 'string' || callId === '') continue
+    results.set(callId, {
+      chars: textOfBlocks(message['content']).length,
+      error: message['isError'] === true,
+    })
+  }
+  return results
 }
 
 /** Whether a durable `turn/end` reason records a cancellation. */
@@ -2169,6 +2212,9 @@ export class DshDriver {
   ): Promise<{ messages: TranscriptMessage[]; total: number }> {
     await this.assertSessionVisible(sessionId, 'session_messages')
     const events = await this.readEvents(sessionId)
+    // One pass for results, so each requested tool call can say how large its
+    // outcome was without a per-call lookup in the message loop.
+    const toolResults = options.includeToolCalls === true ? toolResultsOfEvents(events) : new Map()
     const messages: TranscriptMessage[] = []
     for (const event of events) {
       const role = event.type === 'user/message'
@@ -2188,7 +2234,7 @@ export class DshDriver {
         : (event.data as { message?: { content?: unknown } } | undefined)?.message?.content
       const text = textOfBlocks(rawBlocks)
       const toolCalls = options.includeToolCalls === true && role === 'assistant'
-        ? toolCallsOfBlocks(rawBlocks)
+        ? toolCallsOfBlocks(rawBlocks, toolResults)
         : []
       // A model message that only requests tools has no text. It is skipped by
       // default (a prose transcript), but when the caller asked for tool calls it

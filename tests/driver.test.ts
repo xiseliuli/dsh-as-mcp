@@ -686,6 +686,42 @@ describe('bounded replies', () => {
     expect(withCalls.messages.find((message) => message.role === 'user')?.toolCalls).toBeUndefined()
   })
 
+  it('attaches the recorded result size and error flag to each tool call', async () => {
+    const sessions = fakeSessions()
+    sessions.log.push(userMessage('req-1', 'run it', 0))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: {
+        content: [
+          { type: 'tool-call', id: 'call-ok', name: 'bash', arguments: '{}' },
+          { type: 'tool-call', id: 'call-err', name: 'read', arguments: '{}' },
+          { type: 'tool-call', id: 'call-pending', name: 'grep', arguments: '{}' },
+        ],
+      },
+    }, 1))
+    sessions.log.push(event('tool/result', {
+      turn: 1,
+      step: 0,
+      message: { role: 'tool', toolCallId: 'call-ok', content: [{ type: 'text', text: 'hello' }] },
+    }, 2))
+    sessions.log.push(event('tool/result', {
+      turn: 1,
+      step: 1,
+      message: { role: 'tool', toolCallId: 'call-err', content: [{ type: 'text', text: 'nope' }], isError: true },
+    }, 3))
+    const { driver } = driverWith(sessions)
+
+    const read = await driver.readTranscript('session-1', 10, { includeToolCalls: true })
+    const calls = read.messages.find((message) => message.role === 'assistant')?.toolCalls ?? []
+    expect(calls).toEqual([
+      { id: 'call-ok', name: 'bash', argumentsChars: 2, resultChars: 5 },
+      { id: 'call-err', name: 'read', argumentsChars: 2, resultChars: 4, error: true },
+      // Still running when read: no result fields at all.
+      { id: 'call-pending', name: 'grep', argumentsChars: 2 },
+    ])
+  })
+
   it('keeps a tool-call-only assistant message when calls were asked for', async () => {
     const sessions = fakeSessions()
     sessions.log.push(userMessage('req-1', 'run it', 0))

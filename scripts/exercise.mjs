@@ -998,12 +998,14 @@ try {
     // transcript text says "I'll run it", the call list says what ran.
     const withCalls = await must('session_messages', { sessionId, limit: 100, includeToolCalls: true })
     const calls = (withCalls.messages ?? []).flatMap((entry) => entry.toolCalls ?? [])
+    const completed = calls.filter((entry) => typeof entry.resultChars === 'number')
     check(
       calls.length > 0 &&
         calls.every((entry) => typeof entry.name === 'string' && typeof entry.argumentsChars === 'number') &&
-        (withCalls.messages ?? []).every((entry) => entry.role !== 'user' || entry.toolCalls === undefined),
-      'session_messages reports the model tool calls when asked',
-      `${calls.length} call(s)`,
+        (withCalls.messages ?? []).every((entry) => entry.role !== 'user' || entry.toolCalls === undefined) &&
+        completed.length > 0,
+      'session_messages reports the model tool calls (and completed result sizes) when asked',
+      `${calls.length} call(s), ${completed.length} with results`,
     )
 
     // Backwards paging: without it a transcript longer than the 500-message

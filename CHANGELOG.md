@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.32.1
+
+- `session_messages { includeToolCalls: true }` now also reports each call's
+  outcome once it exists: `resultChars` (textual result length) and `error` when the
+  harness marked the result as an error. A call whose tool has not answered yet
+  carries neither, which is how a poller can tell "still running" from "done". The
+  results are correlated by call id in one pass over the log, so a read stays O(events)
+  and the arguments/results themselves are measured, not repeated.
+
 ## 0.32.0
 
 - `session_messages` gained `includeToolCalls`: each assistant message then carries
