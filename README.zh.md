@@ -834,7 +834,7 @@ profile 与进程。改表时用它，而不是手工测。
 面板里有、配置不接受的项写了也没用）；`package.json` 版本与 CHANGELOG 最新标题一致；发布 `files` 列表
 与实际文件一致（且不含维护者专用目录）；README 引用的 `docs/*.md` 与脚本路径都存在；`docs/LIVE-VERIFICATION.md` 里引用的每个版本号都在 CHANGELOG
 中有对应条目（引用一个从未发布的版本同样是漂移）；设置面板用到的本地化键在**中英两份字典里都存在且键集相同**，
-并列出未被引用的死键；README 中散文写出的上限（图片大小、请求体、prompt 图片数、后台任务数、记住的 owned id 数）与代码里强制它们的常量一致；yaml 配置示例里的每个标量都与 `src/defaults.ts` 一致（复制示例不应悄悄改变行为）；`docs/CAPABILITY-GAPS.md` 开头声明的工具数量与代码一致、其能力探针数量与 `describeCapabilities()` 一致；以及**每个 inputSchema 选项都真的传到了 driver**（只加进 schema、handler 却没转发的参数会被接受却静默失效——这个错误在检查存在前被发布过三次）。它既是 `tools/release.sh` 的一步，也会随测试套件一起跑（`vitest run` 会直接失败，而不
+并列出未被引用的死键；README 中散文写出的上限（图片大小、请求体、prompt 图片数、后台任务数、记住的 owned id 数）与代码里强制它们的常量一致；**两份 README** 的 yaml 配置示例里的每个标量都与 `src/defaults.ts` 一致（复制示例不应悄悄改变行为）；`docs/CAPABILITY-GAPS.md` 开头声明的工具数量与代码一致、其能力探针数量与 `describeCapabilities()` 一致；以及**每个 inputSchema 选项都真的传到了 driver**（只加进 schema、handler 却没转发的参数会被接受却静默失效——这个错误在检查存在前被发布过三次）。它既是 `tools/release.sh` 的一步，也会随测试套件一起跑（`vitest run` 会直接失败，而不
 把漂移留到发布时才发现）；也可以单独运行。`tools/live-checks.mjs` 会先读取实际公布的工具面，因此也能用于**收窄的部署**（关闭了部分工具组的 profile）：对应段落会明确跳过而不是失败。
 
 `tools/release.sh` 把发布检查清单变成可执行脚本：两端 typecheck、测试、两个 bundle、打包、断言包里没有

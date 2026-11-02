@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.60
+
+- The configuration-sample check now covers **both** READMEs: the Chinese sample was compared
+  by nothing, so a value could drift there while the English one stayed honest. Proven by
+  changing the zh sample's `maxReadBytes` to 1048577 —
+  `DRIFT: README.zh.md sample says limits.maxReadBytes: 1048577, the default is "1048576"` —
+  then restoring.
+
 ## 0.52.59
 
 - The README yaml configuration sample is now checked against `src/defaults.ts`: every scalar
