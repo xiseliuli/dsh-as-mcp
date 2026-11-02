@@ -559,6 +559,8 @@ progress notifications (§6.3) — all cheap and none of them contentious.
   prompting it;
 - **`session_queue`** (0.29.0): edit/remove/steer one pending queued message by message id, so a
   caller that queued work with `wait: false` can retract it before it spends a turn;
+- **`session_messages { includeToolCalls }`** (0.32.0): the transcript text alone does not say what the agent
+  did; the call list (name, call id, argument length) makes polling a session actionable;
 - **`dsh_info.toolAvailability`** (0.31.0): the per-tool dependency map is code, so a caller can see
   which tools this profile cannot serve — and why — without discovering it one failed call at a time;
 - `workspace_delete` (unregister only — files and session history untouched);

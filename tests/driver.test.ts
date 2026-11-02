@@ -657,6 +657,56 @@ describe('bounded replies', () => {
     expect(none.total).toBe(0)
   })
 
+  it('reports the tool calls a model requested only when asked', async () => {
+    const sessions = fakeSessions()
+    sessions.log.push(userMessage('req-1', 'run it', 0))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: {
+        content: [
+          { type: 'text', text: 'running' },
+          { type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{"command":"echo hi"}' },
+          { type: 'tool-call', id: 'call-2', name: 'read', arguments: '{}' },
+        ],
+      },
+    }, 1))
+    const { driver } = driverWith(sessions)
+
+    const plain = await driver.readTranscript('session-1', 10)
+    expect(plain.messages.find((message) => message.role === 'assistant')?.toolCalls).toBeUndefined()
+
+    const withCalls = await driver.readTranscript('session-1', 10, { includeToolCalls: true })
+    const assistant = withCalls.messages.find((message) => message.role === 'assistant')
+    expect(assistant?.toolCalls).toEqual([
+      { id: 'call-1', name: 'bash', argumentsChars: 21 },
+      { id: 'call-2', name: 'read', argumentsChars: 2 },
+    ])
+    // A user message never carries model tool calls.
+    expect(withCalls.messages.find((message) => message.role === 'user')?.toolCalls).toBeUndefined()
+  })
+
+  it('keeps a tool-call-only assistant message when calls were asked for', async () => {
+    const sessions = fakeSessions()
+    sessions.log.push(userMessage('req-1', 'run it', 0))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{"command":"ls"}' }] },
+    }, 1))
+    const { driver } = driverWith(sessions)
+
+    // Without the option this message has no text, so the historical transcript
+    // omits it entirely.
+    const plain = await driver.readTranscript('session-1', 10)
+    expect(plain.messages.map((message) => message.role)).toEqual(['user'])
+
+    const withCalls = await driver.readTranscript('session-1', 10, { includeToolCalls: true })
+    const assistant = withCalls.messages.find((message) => message.role === 'assistant')
+    expect(assistant?.text).toBe('')
+    expect(assistant?.toolCalls).toEqual([{ id: 'call-1', name: 'bash', argumentsChars: 16 }])
+  })
+
   it('pages backwards with beforeSeq so a long transcript is reachable', async () => {
     const sessions = fakeSessions()
     for (let index = 0; index < 5; index += 1) {

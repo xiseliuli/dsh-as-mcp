@@ -994,6 +994,18 @@ try {
       'a cut message reports truncated and its original length',
     )
 
+    // Tool calls are the other half of what a polling caller wants to see: the
+    // transcript text says "I'll run it", the call list says what ran.
+    const withCalls = await must('session_messages', { sessionId, limit: 100, includeToolCalls: true })
+    const calls = (withCalls.messages ?? []).flatMap((entry) => entry.toolCalls ?? [])
+    check(
+      calls.length > 0 &&
+        calls.every((entry) => typeof entry.name === 'string' && typeof entry.argumentsChars === 'number') &&
+        (withCalls.messages ?? []).every((entry) => entry.role !== 'user' || entry.toolCalls === undefined),
+      'session_messages reports the model tool calls when asked',
+      `${calls.length} call(s)`,
+    )
+
     // Backwards paging: without it a transcript longer than the 500-message
     // window would be unreachable past the tail.
     const tail = await must('session_messages', { sessionId, limit: 2 })

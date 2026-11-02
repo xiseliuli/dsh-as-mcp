@@ -454,6 +454,8 @@ interface ShellJobState {
 /** One message projected onto the caller-facing transcript. */
 export interface TranscriptMessage {
   readonly role: 'user' | 'assistant'
+  /** Tool calls the model requested in this message, when `includeToolCalls` was asked. */
+  readonly toolCalls?: readonly TranscriptToolCall[]
   /** The harness message id; queue mutations address a pending message by it. */
   readonly id?: string
   /** The message text, cut to the caller's per-message cap when one was given. */
@@ -464,6 +466,15 @@ export interface TranscriptMessage {
   readonly chars: number
   /** True when `text` was cut to the requested per-message cap. */
   readonly truncated?: boolean
+}
+
+/** One tool invocation a model requested, as the durable log records it. */
+export interface TranscriptToolCall {
+  /** Provider-issued call id; correlates with the tool result event. */
+  readonly id?: string
+  readonly name: string
+  /** Raw JSON length; the arguments themselves are not repeated here. */
+  readonly argumentsChars: number
 }
 
 /** One directory entry. */
@@ -514,6 +525,26 @@ function textOfBlocks(blocks: unknown): string {
     if (candidate.type === 'text' && typeof candidate.text === 'string') text += candidate.text
   }
   return text
+}
+
+/** Tool invocations a model requested, from one message's content blocks. */
+function toolCallsOfBlocks(blocks: unknown): TranscriptToolCall[] {
+  if (!Array.isArray(blocks)) return []
+  const calls: TranscriptToolCall[] = []
+  for (const block of blocks) {
+    if (block === null || typeof block !== 'object') continue
+    const candidate = block as { type?: unknown; id?: unknown; name?: unknown; arguments?: unknown }
+    if (candidate.type !== 'tool-call') continue
+    if (typeof candidate.name !== 'string' || candidate.name === '') continue
+    calls.push({
+      ...(typeof candidate.id === 'string' && candidate.id !== '' ? { id: candidate.id } : {}),
+      name: candidate.name,
+      // Arguments are raw provider JSON and can be large; the size is what a
+      // poller needs, and it keeps a transcript read bounded.
+      argumentsChars: typeof candidate.arguments === 'string' ? candidate.arguments.length : 0,
+    })
+  }
+  return calls
 }
 
 /** Whether a durable `turn/end` reason records a cancellation. */
@@ -2126,6 +2157,12 @@ export class DshDriver {
        */
       beforeSeq?: number
       role?: 'user' | 'assistant'
+      /**
+       * Fold each assistant message's `tool-call` blocks into `toolCalls`
+       * (`name`, call id, argument JSON length). Off by default: a transcript read
+       * that only needs prose should not grow by every invocation in the session.
+       */
+      includeToolCalls?: boolean
       /** Per-message character cap; absent means full text (the historical default). */
       maxCharsPerMessage?: number
     } = {},
@@ -2146,15 +2183,23 @@ export class DshDriver {
       if (options.role !== undefined && options.role !== role) continue
       if (options.sinceSeq !== undefined && event.seq <= options.sinceSeq) continue
       if (options.beforeSeq !== undefined && event.seq >= options.beforeSeq) continue
-      const text = role === 'user'
-        ? textOfBlocks((event.data as { content?: unknown } | undefined)?.content)
-        : textOfBlocks((event.data as { message?: { content?: unknown } } | undefined)?.message?.content)
-      if (text.trim() === '') continue
+      const rawBlocks = role === 'user'
+        ? (event.data as { content?: unknown } | undefined)?.content
+        : (event.data as { message?: { content?: unknown } } | undefined)?.message?.content
+      const text = textOfBlocks(rawBlocks)
+      const toolCalls = options.includeToolCalls === true && role === 'assistant'
+        ? toolCallsOfBlocks(rawBlocks)
+        : []
+      // A model message that only requests tools has no text. It is skipped by
+      // default (a prose transcript), but when the caller asked for tool calls it
+      // *is* the message — dropping it was why a polling caller saw none.
+      if (text.trim() === '' && toolCalls.length === 0) continue
       const cap = options.maxCharsPerMessage
       const truncated = cap !== undefined && text.length > cap
       messages.push({
         role,
         ...(typeof messageId === 'string' && messageId !== '' ? { id: messageId } : {}),
+        ...(toolCalls.length === 0 ? {} : { toolCalls }),
         text: truncated ? truncateText(text, cap) : text,
         time: event.time,
         seq: event.seq,

@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.32.0
+
+- `session_messages` gained `includeToolCalls`: each assistant message then carries
+  the tool calls the model requested (name, call id, argument JSON length). Text
+  alone says "I'll run it"; the call list is what makes a poll of a running session
+  actionable, and it stays bounded because arguments are measured, not repeated.
+- The first acceptance run failed this check with 0 calls, which exposed a real bug:
+  a model message that only requests tools has no text, and the transcript loop had
+  been dropping text-less messages — so tool-call-only steps never appeared. With
+  `includeToolCalls` such a message is now kept (empty text, calls attached); without
+  it, the historical prose transcript is unchanged. Covered by a driver regression
+  test, and the acceptance run now sees 4 calls.
+
 ## 0.31.2
 
 - `tools/live-checks.mjs` is now usable against older deployments: every check is

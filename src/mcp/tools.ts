@@ -730,6 +730,13 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'Page backwards: only messages with a smaller seq, newest of those first-of-the-window '
               + 'last. To walk a long transcript, pass the seq of the oldest message you already have.',
             ),
+          includeToolCalls: z
+            .boolean()
+            .optional()
+            .describe(
+              'Also return each assistant message\'s tool calls (name, call id, argument JSON length). Off by '
+              + 'default so a prose-only read does not grow by every invocation in the session.',
+            ),
           role: z
             .enum(['user', 'assistant'])
             .optional()
@@ -754,6 +761,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         const transcript = await driver.readTranscript(args.sessionId, args.limit ?? 50, {
           ...(args.sinceSeq === undefined ? {} : { sinceSeq: args.sinceSeq }),
           ...(args.beforeSeq === undefined ? {} : { beforeSeq: args.beforeSeq }),
+          ...(args.includeToolCalls === undefined ? {} : { includeToolCalls: args.includeToolCalls }),
           ...(args.role === undefined ? {} : { role: args.role }),
           ...(args.maxCharsPerMessage === undefined ? {} : { maxCharsPerMessage: args.maxCharsPerMessage }),
         })
