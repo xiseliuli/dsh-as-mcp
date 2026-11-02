@@ -1810,7 +1810,7 @@ export class DshDriver {
       /** Per-message character cap; absent means full text (the historical default). */
       maxCharsPerMessage?: number
     } = {},
-  ): Promise<TranscriptMessage[]> {
+  ): Promise<{ messages: TranscriptMessage[]; total: number }> {
     const events = await this.readEvents(sessionId)
     const messages: TranscriptMessage[] = []
     for (const event of events) {
@@ -1835,7 +1835,10 @@ export class DshDriver {
         ...(truncated ? { truncated: true } : {}),
       })
     }
-    return messages.slice(-limit)
+    // `total` counts what the filters matched, not what the tail returned: the
+    // tail semantic is deliberate (a poll wants the newest), but a caller must be
+    // able to tell that older messages exist beyond the window.
+    return { messages: messages.slice(-limit), total: messages.length }
   }
 
   /**

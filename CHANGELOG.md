@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.21.1
+
+- `session_messages` reports `total` (messages matched by `sinceSeq`/`role`) and
+  `truncated` when the newest-`limit` window hid older ones. Like `session_list`,
+  the reply could previously not tell a caller whether it had seen the
+  conversation from the start or only its tail.
+
 ## 0.21.0
 
 - `session_list` reports `total` (matches before the limit) and `truncated` when

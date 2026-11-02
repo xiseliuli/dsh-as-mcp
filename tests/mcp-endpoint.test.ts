@@ -347,6 +347,25 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('reports transcript truncation when the tail window hid messages', async () => {
+    const own = await boot(stubDriver({
+      readTranscript: async () => ({
+        messages: [{ role: 'assistant', text: 'newest', time: 1, seq: 9, chars: 6 }],
+        total: 4,
+      }),
+    }), testConfig({ session: true }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_messages', { sessionId: 'session-1', limit: 1 })
+      expect(isError).toBe(false)
+      const payload = JSON.parse(text) as { messages: unknown[]; total: number; truncated?: boolean }
+      expect(payload.messages).toHaveLength(1)
+      expect(payload.total).toBe(4)
+      expect(payload.truncated).toBe(true)
+    } finally {
+      await own.stop()
+    }
+  })
+
   it('reports session_list truncation when the limit hid matches', async () => {
     const own = await boot(stubDriver({
       listSessions: async () => ({
@@ -435,7 +454,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       stubDriver({
         readTranscript: async (sessionId, limit, options) => {
           transcripts.push({ sessionId, limit, options })
-          return []
+          return { messages: [], total: 0 }
         },
         promptSession: async (request) => {
           prompts.push(request as unknown as Record<string, unknown>)
@@ -589,7 +608,7 @@ describe('MCP Streamable HTTP endpoint', () => {
     const own = await boot(stubDriver({
       readTranscript: async (sessionId, limit, options) => {
         seen.push({ sessionId, limit, options })
-        return [{ role: 'assistant', text: 'new', time: 1, seq: 9, chars: 3 }]
+        return { messages: [{ role: 'assistant', text: 'new', time: 1, seq: 9, chars: 3 }], total: 4 }
       },
     }))
     try {

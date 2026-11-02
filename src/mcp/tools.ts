@@ -691,13 +691,21 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
-      guard('session_messages', log, async (args) => ok({
-        messages: await driver.readTranscript(args.sessionId, args.limit ?? 50, {
+      guard('session_messages', log, async (args) => {
+        const transcript = await driver.readTranscript(args.sessionId, args.limit ?? 50, {
           ...(args.sinceSeq === undefined ? {} : { sinceSeq: args.sinceSeq }),
           ...(args.role === undefined ? {} : { role: args.role }),
           ...(args.maxCharsPerMessage === undefined ? {} : { maxCharsPerMessage: args.maxCharsPerMessage }),
-        }),
-      })),
+        })
+        // The newest `limit` messages are returned even when more exist, so say
+        // when the window hid some: a poll that missed messages must not read as
+        // an empty conversation.
+        return ok({
+          messages: transcript.messages,
+          total: transcript.total,
+          ...(transcript.total > transcript.messages.length ? { truncated: true } : {}),
+        })
+      }),
     )
 
     server.registerTool(

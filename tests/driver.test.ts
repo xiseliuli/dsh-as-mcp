@@ -224,16 +224,33 @@ describe('bounded replies', () => {
     sessions.log.push(event('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'short' }] } }, 1))
     const { driver } = driverWith(sessions)
 
-    const messages = await driver.readTranscript('session-1', 10, { maxCharsPerMessage: 100 })
-    const long = messages[0] as { text: string; chars: number; truncated?: boolean }
+    const read = await driver.readTranscript('session-1', 10, { maxCharsPerMessage: 100 })
+    const long = read.messages[0] as { text: string; chars: number; truncated?: boolean }
     expect(long.text).toHaveLength(100)
     expect(long.chars).toBe(500)
     expect(long.truncated).toBe(true)
     // An uncapped read keeps the historical full-fidelity shape.
     const full = await driver.readTranscript('session-1', 10)
-    expect(full[0]?.text).toHaveLength(500)
-    expect(full[0]?.truncated).toBeUndefined()
-    expect(full[0]?.chars).toBe(500)
+    expect(full.messages[0]?.text).toHaveLength(500)
+    expect(full.messages[0]?.truncated).toBeUndefined()
+    expect(full.messages[0]?.chars).toBe(500)
+  })
+
+  it('reports how many messages the tail window left out', async () => {
+    const sessions = fakeSessions()
+    for (let index = 0; index < 5; index += 1) {
+      sessions.log.push(userMessage(`req-${index}`, `message ${index}`, index))
+    }
+    const { driver } = driverWith(sessions)
+
+    // The window keeps the newest two; `total` must still count all five.
+    const window = await driver.readTranscript('session-1', 2)
+    expect(window.messages.map((message) => message.text)).toEqual(['message 3', 'message 4'])
+    expect(window.total).toBe(5)
+
+    // Filters count too: only user messages exist here, so role=assistant is 0.
+    const none = await driver.readTranscript('session-1', 10, { role: 'assistant' })
+    expect(none.total).toBe(0)
   })
 
   it('cuts the agent reply to maxReplyChars and says it did', async () => {

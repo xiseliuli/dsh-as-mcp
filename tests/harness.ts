@@ -45,7 +45,7 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
     }),
     promptSession: async () => ({ accepted: true }),
     cancelSession: () => ({ accepted: true }),
-    readTranscript: async () => [],
+    readTranscript: async () => ({ messages: [], total: 0 }),
     readImage: async ({ path }) => ({
       path,
       mimeType: 'image/png',

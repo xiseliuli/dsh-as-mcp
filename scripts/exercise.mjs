@@ -919,6 +919,15 @@ try {
       'the transcript contains the reply',
     )
 
+    // The tail window keeps the newest messages; `total` says how many matched, so
+    // a poll that missed older ones can tell.
+    const head = await must('session_messages', { sessionId, limit: 1 })
+    check(
+      head.messages?.length === 1 && head.total >= 1 && head.truncated === (head.total > 1),
+      'session_messages reports total and truncation',
+      `${head.messages?.length ?? 0} of ${head.total ?? '?'}`,
+    )
+
     // Per-message caps are opt-in; when asked for, the cut is reported rather than
     // looking like a complete message.
     const capped = await must('session_messages', { sessionId, limit: 50, maxCharsPerMessage: 20 })
