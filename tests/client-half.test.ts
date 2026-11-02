@@ -269,3 +269,14 @@ describe('the list editor round-trips a host string[]', () => {
     expect(parseList(formatList(names))).toEqual(names)
   })
 })
+
+describe('the settings panel status badge', () => {
+  it('only claims a listening state it actually read', async () => {
+    // `readStatus` answers undefined when the host mounts no status route; marking
+    // that as "read" made the panel render "not listening" for a state nobody
+    // observed. The source assertion keeps the honesty rule from regressing.
+    const source = await readFile(new URL('../src/client/section.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('setStatusRead(next !== undefined)')
+    expect(source).toContain('{statusRead && (')
+  })
+})

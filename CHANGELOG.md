@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.38
+
+- Fixed a false claim in the settings panel: when the host mounts no status route (or the
+  status fetch fails), `readStatus` answers `undefined`, but the component still marked the
+  read as successful and rendered the "not listening" badge. Unknown is not a state anyone
+  observed — the badge now appears only when a status was actually read (and disappears
+  again if a later poll cannot read one). A source-level test keeps the rule from
+  regressing (`setStatusRead(next !== undefined)` plus the `statusRead &&` gate).
+
 ## 0.52.37
 
 - `tools/release.sh --shapes` runs the shape driver as a release step (add `--with-model` to

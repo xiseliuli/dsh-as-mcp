@@ -409,7 +409,10 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
     () =>
       store.readStatus().then((next) => {
         if (!live.current) return
-        setStatusRead(true)
+        // `readStatus` answers `undefined` when the host mounts no status route
+        // (or the fetch failed). That is "unknown", not "not listening": the badge
+        // must stay hidden rather than assert a state nobody observed.
+        setStatusRead(next !== undefined)
         setStatus(next)
       }),
     [store],
