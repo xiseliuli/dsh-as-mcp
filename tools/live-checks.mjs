@@ -2201,6 +2201,27 @@ async function secondEntryChecks() {
         `${otherWorkspaces.length} vs ${mainWorkspaces.length}`,
       )
     }
+    // Same host, two doors: a session must be the same object through either one, or a
+    // client handed the wrong URL sees a different instance's state.
+    if (has('session_create') && has('session_list')) {
+      const created = await callTool('session_create', { cwd: process.cwd() })
+      const seenFromOther = (await other.callTool('session_list', { limit: 50 })).sessions ?? []
+      check(
+        seenFromOther.some((row) => row.sessionId === created.sessionId),
+        'a session created through one entry is listed through the other',
+        created.sessionId,
+      )
+      if (has('session_rename')) {
+        const title = `live-cross-entry-${process.pid}`
+        await other.callTool('session_rename', { sessionId: created.sessionId, title })
+        const fromMain = (await callTool('session_list', { limit: 50, includeTitle: true })).sessions ?? []
+        check(
+          fromMain.find((row) => row.sessionId === created.sessionId)?.title === title,
+          'a rename made through the other entry is what this one reports',
+          title,
+        )
+      }
+    }
   } catch (error) {
     check(false, 'the second entry answers', error instanceof Error ? error.message : String(error))
   }

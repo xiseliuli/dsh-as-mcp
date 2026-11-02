@@ -951,7 +951,8 @@ describes where it lives rather than echoing a URL.
 A sixth shape, `hybrid`, enables **both** entries (plugin listener and web-server mount). It runs
 the same suite through the listener and then three cross-entry checks through the second URL: both
 entries advertise the same tools, report the same build and listener state, and see the same
-registered workspaces: 112/112.
+registered workspaces — plus state: a session created through the listener is listed through the
+web-server entry, and a rename made there is what the listener reports. 114/114.
 
 The two turn-running rows are measured with `--with-model`; `tools/release.sh --shapes` without it
 exercises the cheap subset and reports 109/46/63/68 for the same four group shapes.

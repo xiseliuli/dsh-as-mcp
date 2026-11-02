@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.71
+
+- The hybrid cross-entry section now also checks state: a session created through the plugin
+  listener is listed through the web-server entry, and a rename made through that entry is what
+  the listener reports. Same host, two doors — a client handed the wrong URL must not see a
+  different view of the same session. Hybrid shape measured at 114/114 (109 + 5 cross-entry
+  checks); both READMEs say so.
+
 ## 0.52.70
 
 - Added a `hybrid` shape (listener **and** `mountOnWebServer`) and a live cross-entry check: a
