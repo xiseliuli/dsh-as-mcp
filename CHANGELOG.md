@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.51
+
+- Live-verified the new host validation: a profile with `http.host: ''` starts **no
+  listener** and its output names the rule, while `0.0.0.0` binds as intended. The
+  non-loopback *warning* is in the code but plugin `log.warn` output is not captured in this
+  harness's stdout, so the matrix records the binding behaviour and says the warning itself
+  was not observed rather than implying it was.
+
 ## 0.52.50
 
 - `http.host` is now validated: an empty value is refused (it would have bound on every
