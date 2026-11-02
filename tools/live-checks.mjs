@@ -1742,6 +1742,59 @@ async function orchestrationCheck() {
   }
 }
 
+// --- idempotent retry across clients ---------------------------------------
+
+/**
+ * `idempotencyKey` is what makes a retry safe. The acceptance run covers one client
+ * retrying; this covers a *second* MCP client re-sending the same key — the case of two
+ * harness instances driving one session — and checks that only one turn ran.
+ */
+async function idempotencyCheck() {
+  section('idempotent retry across clients (real turn)')
+  if (!has('session_prompt') || !has('session_usage')) {
+    skip('idempotent retry check', 'needs session_prompt and session_usage')
+    return
+  }
+  const session = await callTool('session_create', { cwd: process.cwd() })
+  const key = `live-idem-${process.pid}`
+  const prompt = 'Reply with exactly: IDEM-ONE'
+  const first = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt,
+    idempotencyKey: key,
+    timeoutMs: 300_000,
+  })
+  check(/IDEM-ONE/.test(first.turn?.reply ?? ''), 'the first send with a key runs a turn', first.turn?.reply?.slice(0, 40))
+
+  const secondary = secondaryClient()
+  const replay = await secondary.callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt,
+    idempotencyKey: key,
+    timeoutMs: 300_000,
+  })
+  check(
+    replay.replayed === true && replay.turn?.reply === first.turn?.reply,
+    'a second client retrying the same key gets the recorded turn instead of a new one',
+    `replayed ${String(replay.replayed)}`,
+  )
+  const mismatch = await attemptTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: DIFFERENT-CONTENT',
+    idempotencyKey: key,
+    timeoutMs: 60_000,
+  })
+  check(
+    mismatch.ok === false && /reused for different content/.test(mismatch.error ?? ''),
+    'the key cannot be reused for different content, from this client either',
+    mismatch.error?.slice(0, 70),
+  )
+
+  const usage = await callTool('session_usage', { sessionId: session.sessionId, includeTurns: true })
+  const turns = usage.sessions?.[0]?.usage?.byTurn ?? []
+  check(turns.length === 1, 'only one turn ran despite three send attempts', `${turns.length} turn(s)`)
+}
+
 // --- steering into a running turn ------------------------------------------
 
 /**
@@ -2149,6 +2202,7 @@ try {
       await modelSelectionCheck()
       await midTurnSwitchCheck()
       await steerCheck()
+      await idempotencyCheck()
       await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()
     }

@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.25
+
+- `idempotencyKey` now has cross-client evidence: the acceptance run covers one client's
+  retry, but two harness instances can drive one session. The live check sends with a key,
+  re-sends the same key through a *second* MCP client (expects the recorded turn, same
+  reply), tries the key with different content (refused), and asserts only one turn ran.
+
 ## 0.52.24
 
 - Two boundary contracts now have live checks: a `file_read` offset at EOF is an empty
