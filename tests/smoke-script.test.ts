@@ -26,7 +26,10 @@ async function runSmoke(args: string[], env: Record<string, string> = {}): Promi
   return { code, stdout, stderr }
 }
 
-describe('scripts/smoke.mjs', { timeout: 30_000 }, () => {
+// These spawn the real script against a booted endpoint. One retry absorbs a rare
+// scheduling flake under a loaded `vitest run` (observed once: the first step timed
+// out while the suite ran in parallel); every assertion inside is deterministic.
+describe('scripts/smoke.mjs', { timeout: 30_000, retry: 1 }, () => {
   let url: string
   let stop: () => Promise<void>
 

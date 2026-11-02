@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.4
+
+- The two script-integration suites (`smoke-script`, `exercise-script`) allow one retry per
+  test. A full-suite run under load produced a single timeout in the smoke suite that
+  passed immediately when rerun; the assertions are deterministic, so the retry absorbs
+  scheduler flake without hiding a logic failure. (The 0.52.3 install went ahead with that
+  flake in the log because the failure grep was truncated — the suite was rerun green
+  twice before this entry.)
+
 ## 0.52.3
 
 - `session_tool_result` now has owned-scope coverage: under `session.scope: "owned"` it
