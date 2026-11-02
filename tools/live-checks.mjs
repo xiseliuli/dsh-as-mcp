@@ -1676,6 +1676,19 @@ async function cancellationCheck() {
   const reply = final?.result?.content?.[0]?.text ? JSON.parse(final.result.content[0].text) : undefined
   check(reply?.turn?.aborted === true, 'the cancelled wait reports turn.aborted', String(reply?.turn?.aborted))
   check(elapsed < 5_000, 'the wait ends promptly after the notification, not at the turn boundary', `${elapsed}ms`)
+  // The wait ending is one thing; the turn actually stopping is another. The listing's
+  // running filter is the second view, and it must converge rather than keep the session
+  // "running" forever.
+  let leftRunning = false
+  for (let attempt = 0; attempt < 40 && has('session_list'); attempt += 1) {
+    const listed = await callTool('session_list', { running: true, limit: 50 })
+    if (!(listed.sessions ?? []).some((row) => row.sessionId === session.sessionId)) {
+      leftRunning = true
+      break
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  check(leftRunning || !has('session_list'), 'the cancelled turn leaves the running filter', String(leftRunning))
   const after = await callTool('session_prompt', {
     sessionId: session.sessionId,
     prompt: 'Reply with exactly: after cancellation',

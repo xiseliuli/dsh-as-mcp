@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.75
+
+- After a cancelled wait returns, the check now also requires the turn to actually stop: the
+  session must leave `session_list { running: true }` (polled up to 20 seconds). The wait ending
+  and the turn stopping are two different facts, and only the first was asserted before.
+  Measured: full 159/159, session-only 91/91; READMEs and the matrix carry the numbers.
+
 ## 0.52.74
 
 - The checks that must act while a turn is open (cancellation, steering into the running turn,

@@ -129,6 +129,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
   cancellation, steering and the mid-turn switch poll `session_list { running: true }` instead of
   sleeping 1.5-3 seconds (0.52.74).
 
+| A cancelled turn actually stops, not just the wait | 0.52.75 | after the aborted `session_prompt` wait returned, `session_list { running: true }` no longer listed the session (polled up to 20 s). The wait ending and the turn stopping are different facts; live-checks asserts both |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:
