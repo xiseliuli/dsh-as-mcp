@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.13
+
+- `tools/live-checks.mjs` checks the workspace promises: the same path registers once
+  (returns the existing id), `workspace_list` reports path/session count/existence,
+  `workspace_delete` removes only the registration and leaves the directory and files
+  untouched, an unknown id answers `deleted: false` instead of failing, and
+  `createDirectory: false` refuses a missing directory without creating it.
+
 ## 0.37.12
 
 - `tools/live-checks.mjs` checks the file-tool promises that are easiest to get wrong:

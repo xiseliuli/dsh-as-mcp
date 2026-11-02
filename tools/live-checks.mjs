@@ -274,6 +274,73 @@ async function shellChecks() {
   }
 }
 
+// --- workspace contracts ---------------------------------------------------
+
+/**
+ * The workspace promises: the same path is one registration, a missing directory is
+ * created only when asked, and deleting a workspace leaves the directory and its
+ * files alone (idempotently, so a retried cleanup is not an error).
+ */
+async function workspaceChecks() {
+  section('workspace contracts')
+  if (!has('workspace_create') || !has('workspace_list') || !has('workspace_delete')) {
+    skip('workspace contracts', 'needs workspace_create/list/delete')
+    return
+  }
+  const dir = join('/tmp', `dsh-as-mcp-live-ws-${process.pid}`)
+  const kept = join(dir, 'keep.txt')
+  rmSync(dir, { recursive: true, force: true })
+  try {
+    const created = await callTool('workspace_create', { path: dir })
+    const workspace = created.workspace
+    check(
+      typeof workspace?.id === 'string' && created.created === true && existsSync(dir),
+      'workspace_create registers and makes the directory',
+    )
+    const again = await callTool('workspace_create', { path: dir, title: 'renamed title' })
+    check(
+      again.workspace?.id === workspace?.id && again.created === false,
+      'registering the same path returns the existing workspace',
+      again.workspace?.id,
+    )
+
+    rmSync(kept, { force: true })
+    await callTool('file_write', { path: kept, content: 'keep me' })
+    const listed = await callTool('workspace_list')
+    const row = (listed.workspaces ?? []).find((entry) => entry.id === workspace?.id)
+    check(
+      row !== undefined && row.path !== undefined && typeof row.sessionCount === 'number' && row.status === 'ok',
+      'workspace_list reports the registration, its path, session count and status',
+      `${row?.sessionCount ?? '?'} session(s), ${row?.status ?? '?'}`,
+    )
+
+    const deleted = await callTool('workspace_delete', { workspaceId: workspace.id })
+    check(deleted.deleted === true, 'workspace_delete removes the registration')
+    const after = await callTool('workspace_list')
+    check(
+      !(after.workspaces ?? []).some((entry) => entry.id === workspace.id),
+      'the deleted workspace leaves the list',
+    )
+    check(
+      existsSync(kept) && (await callTool('file_read', { path: kept })).text === 'keep me',
+      'deleting a workspace leaves its directory and files untouched',
+    )
+    const idempotent = await callTool('workspace_delete', { workspaceId: workspace.id })
+    check(idempotent.deleted === false, 'deleting an unknown workspace answers deleted:false, not an error')
+
+    const missing = join('/tmp', `dsh-as-mcp-live-ws-missing-${process.pid}`)
+    rmSync(missing, { recursive: true, force: true })
+    const refused = await attemptTool('workspace_create', { path: missing, createDirectory: false })
+    check(
+      refused.ok === false && existsSync(missing) === false,
+      'createDirectory:false refuses a missing directory without creating it',
+      refused.error?.slice(0, 60),
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // --- file editing contracts ------------------------------------------------
 
 /**
@@ -893,6 +960,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await workspaceChecks()
   await fileEditChecks()
   await concurrencyChecks()
   await availabilityCheck()
