@@ -1,7 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { TOKEN, boot, callTool, readJsonRpc, rpc, silentLog, stubDriver, testConfig } from './harness.js'
-import { createRequestHandler, startListener } from '../src/mcp/http.js'
+import { MAX_REQUEST_BYTES, createRequestHandler, declaresOversizedBody, startListener } from '../src/mcp/http.js'
+
+describe('request body bound', () => {
+  it('accepts an undeclared, small, or exactly-at-cap body', () => {
+    expect(declaresOversizedBody({})).toBe(false)
+    expect(declaresOversizedBody({ 'content-length': '1024' })).toBe(false)
+    expect(declaresOversizedBody({ 'content-length': MAX_REQUEST_BYTES })).toBe(false)
+    expect(declaresOversizedBody({ 'content-length': MAX_REQUEST_BYTES + 1 })).toBe(true)
+    // A header the server cannot parse is not treated as a declared size: the
+    // HTTP layer rejects malformed requests before they reach here.
+    expect(declaresOversizedBody({ 'content-length': 'not-a-number' })).toBe(false)
+  })
+})
 
 describe('MCP Streamable HTTP endpoint', () => {
   let url: string

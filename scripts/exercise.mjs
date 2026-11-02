@@ -519,6 +519,11 @@ try {
       'tool calls are summarised by default',
       `${(turn.toolCalls ?? []).filter((call) => call.arguments !== undefined).length} with raw arguments`,
     )
+    check(
+      Array.isArray(turn.models) && turn.models.length > 0 && turn.models.every((route) => route.includes('/')),
+      'the reply names the model route that answered',
+      (turn.models ?? []).join(', '),
+    )
     // `full` returns them on request, still bounded.
     const full = await must('session_prompt', {
       sessionId,

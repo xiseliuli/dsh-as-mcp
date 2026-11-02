@@ -351,6 +351,41 @@ describe('DshDriver.promptSession', () => {
     expect(seen.reply).toBe('ok')
   })
 
+  it('reports which model routes answered the turn', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const pending = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    sessions.log.push(event('turn/start', { turn: 1 }, 100))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'first' }], source: { kind: 'model', provider: 'deepseek', model: 'deepseek-flash' } },
+    }, 101))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { content: [{ type: 'text', text: 'second' }], source: { kind: 'model', provider: 'deepseek', model: 'deepseek-flash' } },
+    }, 102))
+    sessions.log.push(event('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'read', arguments: '{}' }, 103))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 2,
+      message: { content: [{ type: 'text', text: 'third' }], source: { kind: 'model', provider: 'other', model: 'pro' } },
+    }, 104))
+    sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 105))
+
+    const result = await pending
+    // Unique routes in first-seen order: the same route twice is one entry.
+    expect(result.turn?.models).toEqual(['deepseek/deepseek-flash', 'other/pro'])
+  })
+
   it('returns the admitted turn for a retried idempotency key instead of sending twice', async () => {
     const sessions = fakeSessions()
     const { driver } = driverWith(sessions)

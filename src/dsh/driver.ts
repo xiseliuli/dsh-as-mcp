@@ -254,6 +254,14 @@ export type ToolCallDetail = 'summary' | 'full' | 'none'
 export interface TurnResult {
   /** The agent's final reply, cut to `maxReplyChars` when the caller set one. */
   readonly reply: string
+  /**
+   * Model routes (`provider/model`) that produced this turn's assistant messages.
+   *
+   * Usage says how many tokens; this says on which route. A caller that switched
+   * models mid-session, or that wants to prove which model answered, does not have
+   * to infer it from the token buckets.
+   */
+  readonly models: readonly string[]
   /** Length of the reply before any cap. */
   readonly replyChars: number
   /** True when `reply` was cut to the requested cap. */
@@ -3456,6 +3464,13 @@ function reportProgress(
 }
 
 /** Project one located turn onto the caller-facing result. */
+/** `provider/model` from one assistant message's source, when it names a route. */
+function routeOf(source: { provider?: unknown; model?: unknown } | undefined): string | undefined {
+  if (typeof source?.provider !== 'string' || source.provider === '') return undefined
+  if (typeof source.model !== 'string' || source.model === '') return undefined
+  return `${source.provider}/${source.model}`
+}
+
 /**
  * Whether the log ends inside a turn.
  *
@@ -3555,18 +3570,23 @@ function summarizeTurn(
   location: TurnLocation,
 ): Omit<TurnResult, 'timedOut'> {
   if (location.promptIndex < 0) {
-    return { reply: '', replyChars: 0, toolCalls: [], turn: null, turnEndReason: null, aborted: false }
+    return { reply: '', replyChars: 0, models: [], toolCalls: [], turn: null, turnEndReason: null, aborted: false }
   }
 
   const replies: string[] = []
   const toolCalls: ToolCallInfo[] = []
+  const models: string[] = []
   let turn = location.owningTurn
   let turnEndReason: unknown = null
 
   for (const event of events.slice(location.from, location.to)) {
     if (event.type === 'assistant/message') {
       if (turn === null) turn = turnOf(event)
-      const data = event.data as { message?: { content?: unknown } } | undefined
+      const data = event.data as {
+        message?: { content?: unknown; source?: { provider?: unknown; model?: unknown } }
+      } | undefined
+      const route = routeOf(data?.message?.source)
+      if (route !== undefined && !models.includes(route)) models.push(route)
       const text = textOfBlocks(data?.message?.content)
       if (text.trim() !== '') replies.push(text)
     } else if (event.type === 'tool/call') {
@@ -3588,6 +3608,7 @@ function summarizeTurn(
   return {
     reply,
     replyChars: reply.length,
+    models,
     toolCalls,
     turn,
     turnEndReason,

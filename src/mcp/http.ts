@@ -63,6 +63,25 @@ export interface RequestHandler {
   close(): Promise<void>
 }
 
+/** Largest request body the endpoint will accept when the client declares one. */
+export const MAX_REQUEST_BYTES = 64 * 1024 * 1024
+
+/**
+ * Whether a request declares a body larger than {@link MAX_REQUEST_BYTES}.
+ *
+ * Checked from `Content-Length` before the body is read, so an oversized upload is
+ * refused instead of buffered. A chunked request declares no length and is not
+ * covered by this check; the endpoint is loopback-first and every tool that could
+ * carry a large payload has its own cap, so this is defence in depth rather than
+ * the primary bound.
+ */
+export function declaresOversizedBody(headers: { 'content-length'?: string | number | undefined }): boolean {
+  const declared = headers['content-length']
+  if (declared === undefined) return false
+  const bytes = typeof declared === 'number' ? declared : Number(declared)
+  return Number.isFinite(bytes) && bytes > MAX_REQUEST_BYTES
+}
+
 /** Reply with a minimal, non-reflective error body. */
 function deny(res: Parameters<NodeMcpRequestHandler>[1], status: number, body: string): void {
   const payload = Buffer.from(body, 'utf8')
@@ -166,6 +185,13 @@ export async function startListener(input: {
     const pathname = (req.url ?? '/').split('?')[0]
     if (pathname !== path) {
       deny(res, 404, 'not found')
+      return
+    }
+    if (declaresOversizedBody(req.headers)) {
+      deny(res, 413, 'request body too large')
+      // Drain rather than destroy: the client gets the 413 it was owed instead of
+      // a reset that looks like a network failure.
+      req.resume()
       return
     }
     // The guard is async, so a rejection has to be caught here rather than

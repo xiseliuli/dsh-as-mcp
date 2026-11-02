@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.20.0
+
+- `session_prompt` replies carry `turn.models`: the `provider/model` routes that
+  answered the turn (unique, first-seen order), so a caller can confirm which
+  model ran without reading token buckets.
+- Requests that declare a body over 64 MiB are refused with `413` before the body
+  is read (defence in depth; tools that carry large payloads have their own caps).
+
 ## 0.19.1
 
 - Documentation and metadata only. Added this changelog; no runtime change.

@@ -144,6 +144,7 @@ describe('session_prompt progress notifications', () => {
           turn: {
             reply: 'ok',
             replyChars: 2,
+            models: [],
             toolCalls: [],
             turn: 1,
             turnEndReason: { kind: 'completed' },

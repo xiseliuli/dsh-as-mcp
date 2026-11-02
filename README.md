@@ -218,7 +218,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | `session_set_model` | Change the provider route and model later turns use: start cheap, escalate for a hard turn, or fall back when a route is unavailable. The reply's per-model usage shows which route spent what. |
 | `session_rename` | Set an explicit user title on a session, so what an external harness names a task stays the name a human sees in the DSH UI (and automatic title generation stops). A session currently held open by another DSH process is refused by the harness. |
 | `session_list` | Live session summaries, most recently updated first; `includeTitle` also folds each session's latest title (one log read per session), and `cwd`/`running` filter before the limit applies. |
-| `session_prompt` | Send one task to a DSH session; by default waits for the turn and returns the reply, the tool calls the agent made, and that turn's token usage plus the session's running total. `toolCalls` controls how much of each call is echoed: `summary` (default) gives name/id/argument size, `full` also the arguments (bounded by `maxArgumentChars`), `none` just counts. Attach screenshots with `images` (png/jpeg/webp/gif, at most 4). Pass an `idempotencyKey` and a retried call returns the existing turn instead of sending the task twice. If the client sends a `progressToken`, the wait reports `notifications/progress` at most once a second; if the client cancels the request, the wait ends and the reply says `aborted`/partial. `maxReplyChars` optionally caps the agent's final reply (a cut reply reports `replyTruncated` and its original `replyChars`). |
+| `session_prompt` | Send one task to a DSH session; by default waits for the turn and returns the reply, the tool calls the agent made, and that turn's token usage plus the session's running total. `toolCalls` controls how much of each call is echoed: `summary` (default) gives name/id/argument size, `full` also the arguments (bounded by `maxArgumentChars`), `none` just counts. Attach screenshots with `images` (png/jpeg/webp/gif, at most 4). Pass an `idempotencyKey` and a retried call returns the existing turn instead of sending the task twice. If the client sends a `progressToken`, the wait reports `notifications/progress` at most once a second; if the client cancels the request, the wait ends and the reply says `aborted`/partial. `maxReplyChars` optionally caps the agent's final reply (a cut reply reports `replyTruncated` and its original `replyChars`), and `turn.models` lists the `provider/model` routes that answered. |
 | `session_messages` | Read a session's user/assistant transcript; `sinceSeq`/`role` make it an incremental poll, and `maxCharsPerMessage` caps each message (a cut message reports `truncated` and its original `chars`). |
 | `session_cancel` | Ask the agent to stop its current turn. |
 | `session_usage` | Token usage per session (its subagents included by default): exact bucket counts, a per-model breakdown, optional per-turn detail, and money when a price plugin is installed. Pass `sessionIds` to tally several known sessions in one receipt. |
@@ -478,6 +478,10 @@ where the token comes from (a file path or the composition), never the literal, 
 agent's transcript never accumulates the credential. A pinned token shorter than 16 characters
 draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
 
+- A request that declares a body over 64 MiB is refused with `413` before the body
+  is read. This is defence in depth: every tool that could carry a large payload
+  already has its own cap, and a chunked request declares no size and is not
+  covered by this check.
 - The listener binds to `127.0.0.1` and every request is bearer-checked, including requests on
   a route mounted on DSH's own web server. That check is the *only* gate there: an exact route
   registered on the web server is matched **before** DSH's authorization fence — anything
