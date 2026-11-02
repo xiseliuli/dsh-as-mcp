@@ -755,6 +755,17 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
                              # 用量与 `session_usage` 回执是否一致，并确认失败路径可读
 ```
 
+还有一个**不随包发布**的维护者脚本：`tools/live-checks.mjs`。它覆盖前两个脚本覆盖不了的部分——
+通用 MCP 客户端依赖的协议契约（解析错误、method-not-found、401 Bearer 挑战、超大 body 拒绝）、
+需要真实服务才能成立的列表/分页契约，以及加 `--with-model` 后才跑的、真正花 token 的两项：轮次运行
+期间的进度通知是否实时流出、MCP `notifications/cancelled` 是否让等待迅速以 `turn.aborted` 收尾。
+端点与 token 的解析方式与随包脚本一致，失败时以非零码退出。
+
+```bash
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp                     # 不调用模型
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model        # 会消耗真实 token
+```
+
 `smoke.mjs` 回答"这玩意儿会说 MCP 吗"，`exercise.mjs` 回答"外部 agent 真的能通过它驱动一个
 DSH 实例吗"——而为了回答这个问题，它会给一个真实的 DSH agent 下发一个真实的 prompt，对它解析到
 的那个端点发起真实的 LLM 调用，产生真实花费，所以运行前请先看清它打印的那行端点信息。它是唯一

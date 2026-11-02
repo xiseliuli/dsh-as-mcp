@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.24.3
+
+- Added `tools/live-checks.mjs` (maintainer-only, not in the published package): a
+  reusable live verification run covering the protocol contract, list/paging
+  contracts, and — with `--with-model` — progress streaming and MCP cancellation.
+  Verified against a real 0.24.2 instance: 10/10 cheap checks and 16/16 with the
+  model checks (progress notifications arriving about a second apart; a
+  cancellation settling the wait in 12 ms with `turn.aborted: true`).
+
 ## 0.24.2
 
 - Documentation consistency audit against everything verified in the 0.11.0–0.24.1

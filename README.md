@@ -874,6 +874,19 @@ service it stands in for. That class produced four real failures here, three in 
 case, so run it after any change to the driver. `docs/STUB-FIDELITY-AUDIT.md` is the audit that
 enumerated the class; it is worth reading before writing a double for a harness service.
 
+A third script is maintainer-only and **not in the published package**: `tools/live-checks.mjs`. It
+covers what the shipped two cannot — the protocol contract a generic MCP client relies on (parse
+error, method-not-found, the 401 Bearer challenge, the declared-oversize refusal), list/paging
+contracts that need real services on the other end, and, with `--with-model`, the two features that
+need a real turn: progress notifications streaming while the turn runs, and MCP
+`notifications/cancelled` ending the wait promptly with `turn.aborted`. It resolves the endpoint and
+token exactly like the shipped scripts and exits non-zero on a failure.
+
+```bash
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp                     # no LLM calls
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model        # spends real tokens
+```
+
 Two rules this codebase learned the hard way:
 
 - **A double must enforce the service's real preconditions.** A stub that returns `undefined`
