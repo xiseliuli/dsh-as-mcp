@@ -1530,6 +1530,22 @@ async function modelSelectionCheck() {
     'session_set_model changes the route of the next turn',
     `${(switched.turn?.models ?? []).join(', ')} (wanted ${secondRoute})`,
   )
+
+  // The receipt is a second view of the same turns: its per-turn model list must
+  // agree with what each prompt reply reported, or billing and routing disagree.
+  if (has('session_usage')) {
+    const receipt = await callTool('session_usage', { sessionId: session.sessionId, includeTurns: true })
+    const turns = receipt.sessions?.[0]?.usage?.byTurn ?? []
+    const firstTurn = reply.turn?.turn
+    const secondTurn = switched.turn?.turn
+    const rowFor = (number) => turns.find((entry) => entry.turn === number)
+    check(
+      (rowFor(firstTurn)?.models ?? []).includes(route) &&
+        (rowFor(secondTurn)?.models ?? []).includes(secondRoute),
+      'the usage receipt agrees with each turn on its route',
+      `turn ${firstTurn}: ${(rowFor(firstTurn)?.models ?? []).join(',')}; turn ${secondTurn}: ${(rowFor(secondTurn)?.models ?? []).join(',')}`,
+    )
+  }
 }
 
 // --- concurrent turns ------------------------------------------------------

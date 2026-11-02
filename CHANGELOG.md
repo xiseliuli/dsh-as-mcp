@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.4
+
+- `tools/live-checks.mjs --with-model` cross-checks two views of the same turns: the
+  `session_usage { includeTurns }` rows must name the same route each prompt reply's
+  `turn.models` reported, on both the initial and the switched turn. Billing and routing
+  disagreeing about which model ran is exactly the kind of drift a single-view test
+  cannot see.
+
 ## 0.51.3
 
 - `tools/live-checks.mjs --with-model` closes the loop on the catalog: it creates a
