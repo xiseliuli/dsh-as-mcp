@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.4
+
+- Added `tools/release.sh`: the release checklist as an executable (both
+  typechecks, tests, both bundles, pack, an assertion that the tarball contains no
+  maintainer-only directory, optional live checks with `--live`, optional desktop
+  install with a rollback directory). It refuses to reinstall the version already
+  in the desktop profile, because pnpm treats the same tarball path as
+  already-installed — the trap that made a rebuilt plugin look installed while the
+  profile still ran the previous build.
+
 ## 0.30.3
 
 - Verified the last outstanding accounting question against a real harness: the

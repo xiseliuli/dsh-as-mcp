@@ -927,6 +927,12 @@ enumerated the class; it is worth reading before writing a double for a harness 
 with the version that shipped each one and how to reproduce the check — including the list of
 things that are *not* verified here and why.
 
+`tools/release.sh` is the release checklist as an executable: both typechecks, the test suite, the two
+bundles, the pack, an assertion that the package contains no maintainer-only directory, optional live
+checks (`--live URL [--with-subagent]`), and optional install into the desktop profile with a rollback
+directory (`--install`). It refuses to reinstall the version already in that profile, because pnpm
+treats the same tarball path as already-installed.
+
 A third script is maintainer-only and **not in the published package**: `tools/live-checks.mjs`. It
 covers what the shipped two cannot — the protocol contract a generic MCP client relies on (parse
 error, method-not-found, the 401 Bearer challenge, the declared-oversize refusal), list/paging

@@ -801,6 +801,11 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 `docs/LIVE-VERIFICATION.md` 记录哪些行为真正在真实 harness 上验证过、各自从哪个版本开始提供、如何复现，
 以及一份"**未在此验证**"的清单与原因。
 
+`tools/release.sh` 把发布检查清单变成可执行脚本：两端 typecheck、测试、两个 bundle、打包、断言包里没有
+维护者专用目录、可选 live 检查（`--live URL [--with-subagent]`）、以及可选安装进桌面 profile 并生成回滚
+目录（`--install`）。如果桌面 profile 已是同版本，它会拒绝重装——因为 pnpm 会把同一 tarball 路径当作
+"已安装"。
+
 还有一个**不随包发布**的维护者脚本：`tools/live-checks.mjs`。它覆盖前两个脚本覆盖不了的部分——
 通用 MCP 客户端依赖的协议契约（解析错误、method-not-found、401 Bearer 挑战、超大 body 拒绝）、
 需要真实服务才能成立的列表/分页契约，以及加 `--with-model` 后才跑的、真正花 token 的两项：轮次运行
