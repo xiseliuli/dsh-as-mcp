@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.2
+
+- `tools/live-checks.mjs` gained a concurrency section: 20 parallel `dsh_info`
+  calls must all answer with one version, 8 parallel file writes then reads must
+  stay consistent, and 12 parallel `session_list` calls must agree on the total.
+  It is not a benchmark — it asserts that the shared-session and shared-file paths
+  do not degrade into failures under parallel callers, which is how an external
+  harness or an agent team actually drives the endpoint.
+
 ## 0.37.1
 
 - `session_tool_result` gained `from: "end"`: when a result exceeds `maxChars` the

@@ -32,7 +32,7 @@
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -329,6 +329,53 @@ async function listChecks() {
   return sessionId
 }
 
+// --- concurrency -----------------------------------------------------------
+
+/**
+ * Several callers at once, the way an external harness or an agent team actually
+ * uses the endpoint. This is not a benchmark: it asserts that parallel requests all
+ * answer and that sharing a session or a file does not serialize into a failure.
+ */
+async function concurrencyChecks() {
+  section('concurrency')
+  const startedAt = Date.now()
+  const infos = await Promise.all(Array.from({ length: 20 }, () => callTool('dsh_info')))
+  const versions = new Set(infos.map((info) => info.version))
+  check(
+    infos.every((info) => typeof info.version === 'string') && versions.size === 1,
+    '20 parallel dsh_info calls all answer with one version',
+    `${infos.length} answers, ${versions.size} version(s)`,
+  )
+
+  if (has('file_write') && has('file_read')) {
+    const path = join('/tmp', `dsh-as-mcp-live-load-${process.pid}.txt`)
+    const payload = 'load line\n'.repeat(50)
+    await Promise.all(Array.from({ length: 8 }, (_, index) => callTool('file_write', {
+      path: `${path}.${index}`,
+      content: `${payload}${index}`,
+    })))
+    const reads = await Promise.all(Array.from({ length: 8 }, (_, index) => callTool('file_read', {
+      path: `${path}.${index}`,
+    })))
+    check(
+      reads.every((read, index) => typeof read.text === 'string' && read.text.endsWith(String(index))),
+      '8 parallel file writes then reads stay consistent',
+      `${reads.length} reads in ${Date.now() - startedAt} ms`,
+    )
+    for (let index = 0; index < 8; index += 1) rmSync(`${path}.${index}`, { force: true })
+  }
+
+  if (has('session_list')) {
+    const pages = await Promise.all(Array.from({ length: 12 }, () => callTool('session_list', { limit: 3 })))
+    const totals = new Set(pages.map((page) => page.total))
+    check(
+      pages.every((page) => Array.isArray(page.sessions)) && totals.size === 1,
+      '12 parallel session_list calls agree on the total',
+      `${pages.length} answers, ${[...totals].join('/')} total`,
+    )
+  }
+}
+
 // --- availability contract -------------------------------------------------
 
 async function availabilityCheck() {
@@ -610,6 +657,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await concurrencyChecks()
   await availabilityCheck()
   const sessionId = await listChecks()
   const withSubagent = flag('--with-subagent')
