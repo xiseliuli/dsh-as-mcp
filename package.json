@@ -1,6 +1,6 @@
 {
   "name": "dsh-as-mcp",
-  "version": "0.51.2",
+  "version": "0.51.3",
   "description": "Expose this DeepSeek Harness as an MCP server: create workspaces and sessions, drive DSH agents, edit files, run commands (foreground and background), fork/rename/rename-model sessions, and read exact token usage and cost receipts for every call.",
   "type": "module",
   "license": "MIT",

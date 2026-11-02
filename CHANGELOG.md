@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.3
+
+- `tools/live-checks.mjs --with-model` closes the loop on the catalog: it creates a
+  session on a route dsh_info actually advertises, runs a real turn, checks the turn
+  reports that route, then switches to a second route when one exists and checks the
+  next turn follows. The catalog check alone proved the list was well formed; this
+  proves `session_create` and `session_set_model` consume it.
+
 ## 0.51.2
 
 - `tools/live-checks.mjs` checks the catalog honesty in `dsh_info`: every route is a

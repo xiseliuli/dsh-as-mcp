@@ -1469,6 +1469,69 @@ async function orchestrationCheck() {
   }
 }
 
+// --- model selection (real turn) -------------------------------------------
+
+/**
+ * The catalog dsh_info advertises is what session_create selects from, so create a
+ * session on a real advertised route, run one turn, and check the turn reports that
+ * route. When a second route exists, switch to it and confirm the next turn follows.
+ */
+async function modelSelectionCheck() {
+  section('model selection (real turn)')
+  const info = await callTool('dsh_info', { includeModels: true })
+  const routes = (info.catalog?.providerModels ?? []).filter(
+    (entry) => typeof entry.provider === 'string' && Array.isArray(entry.models) && entry.models.length > 0,
+  )
+  if (routes.length === 0) {
+    skip('model selection', 'this profile advertises no model routes with includeModels')
+    return
+  }
+  const first = routes[0]
+  const firstModel = first.models[0]
+  const route = `${first.provider}/${firstModel.id}`
+  const session = await callTool('session_create', {
+    cwd: process.cwd(),
+    provider: first.provider,
+    model: firstModel.id,
+  })
+  check(session.model === route, 'session_create selects the advertised route', session.model)
+
+  const reply = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: ROUTE OK',
+    timeoutMs: 300_000,
+  })
+  check(
+    /ROUTE OK/.test(reply.turn?.reply ?? '') && Array.isArray(reply.turn?.models) &&
+      reply.turn.models.includes(route),
+    'the turn reports the route it ran on',
+    (reply.turn?.models ?? []).join(', '),
+  )
+
+  const second = routes.find((entry) => entry.provider !== first.provider || entry.models[0].id !== firstModel.id)
+  if (second === undefined) {
+    skip('routing a switch to a second model', 'this profile advertises one usable route')
+    return
+  }
+  const secondModel = second.models[0]
+  const secondRoute = `${second.provider}/${secondModel.id}`
+  await callTool('session_set_model', {
+    sessionId: session.sessionId,
+    provider: second.provider,
+    model: secondModel.id,
+  })
+  const switched = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: SWITCH OK',
+    timeoutMs: 300_000,
+  })
+  check(
+    /SWITCH OK/.test(switched.turn?.reply ?? '') && (switched.turn?.models ?? []).includes(secondRoute),
+    'session_set_model changes the route of the next turn',
+    `${(switched.turn?.models ?? []).join(', ')} (wanted ${secondRoute})`,
+  )
+}
+
 // --- concurrent turns ------------------------------------------------------
 
 /**
@@ -1572,6 +1635,7 @@ try {
       await progressCheck(sessionId)
       await cancellationCheck()
       await orchestrationCheck()
+      await modelSelectionCheck()
       await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()
     }
