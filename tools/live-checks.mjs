@@ -1501,6 +1501,12 @@ async function orchestrationCheck() {
     const queue = await callTool('session_queue', { sessionId: session.sessionId })
     const rows = queue.queued ?? []
     check(rows.length >= 1, 'the queued message is visible while the turn runs', `${rows.length} queued`)
+    check(
+      rows.every((row) => typeof row.id === 'string' && typeof row.text === 'string' &&
+        typeof row.images === 'number' && (row.source === undefined || typeof row.source === 'string')),
+      'queue rows name their id, text, image count and source kind',
+      `${rows[0]?.source ?? 'no source field'} source`,
+    )
     queueListed = rows.length >= 1
     if (queueListed) {
       const removed = await callTool('session_queue', {

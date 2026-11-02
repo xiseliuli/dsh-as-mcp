@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.6
+
+- Documented what a `session_queue` row carries: id, text, image count, and the harness's
+  inbox `source` kind. A message queued through the endpoint reports `source: "user"` —
+  probed live — so the field is the harness's classification, **not** a client identity;
+  both READMEs say that, and the live orchestration check asserts the row shape.
+
 ## 0.52.5
 
 - The orchestration live check now covers a **second MCP client**: it queues a message
