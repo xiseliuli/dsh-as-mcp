@@ -864,6 +864,13 @@ async function forkRenameChecks() {
     return
   }
   const source = await callTool('session_create', { cwd: process.cwd() })
+  // A whitespace-only title must be refused before it reaches the harness.
+  const blankTitle = await attemptTool('session_rename', { sessionId: source.sessionId, title: '   ' })
+  check(
+    blankTitle.ok === false && /title/i.test(blankTitle.error ?? ''),
+    'a whitespace-only title is refused',
+    blankTitle.error?.slice(0, 70),
+  )
   const renamed = await callTool('session_rename', { sessionId: source.sessionId, title: '  padded title  ' })
   check(renamed.title === 'padded title', 'session_rename trims the title', JSON.stringify(renamed.title))
 
@@ -918,6 +925,14 @@ async function toolBridgeChecks() {
     `${tools.length} tool(s)`,
   )
   const names = new Set(tools.map((tool) => tool.name))
+
+  const unknownSession = await callTool('dsh_tool_list', { sessionId: 'no-such-session' })
+  check(
+    (unknownSession.tools ?? []).length === 0 && typeof unknownSession.scopeError === 'string' &&
+      unknownSession.scopeError.includes('no-such-session'),
+    'dsh_tool_list on an unknown session says it could not scope it instead of failing',
+    String(unknownSession.scopeError ?? '').slice(0, 60),
+  )
 
   const unknown = await attemptTool('dsh_tool_call', {
     name: 'definitely_not_a_tool',
@@ -1060,6 +1075,9 @@ async function workspaceChecks() {
       `${row?.sessionCount ?? '?'} session(s), ${row?.status ?? '?'}`,
     )
 
+    // Deleting an id this instance does not know is a no-op with a boolean, not an error.
+    const unknownDelete = await callTool('workspace_delete', { workspaceId: 'no-such-workspace' })
+    check(unknownDelete.deleted === false, 'workspace_delete of an unknown id answers deleted: false')
     const deleted = await callTool('workspace_delete', { workspaceId: workspace.id })
     check(deleted.deleted === true, 'workspace_delete removes the registration')
     const after = await callTool('workspace_list')
@@ -1216,6 +1234,11 @@ async function listChecks() {
     // The harness requires a directory: there is no "some default workspace" form.
     const created = await callTool('session_create', { cwd: process.cwd() })
     sessionId = created.sessionId
+    const unknownCwd = await callTool('session_list', { cwd: '/tmp/dsh-as-mcp-not-a-workspace', limit: 5 })
+    check(
+      (unknownCwd.sessions ?? []).length === 0 && unknownCwd.total === 0,
+      'session_list for a cwd with no sessions is empty, not an error',
+    )
     const page = await callTool('session_list', { limit: 1 })
     check(
       page.sessions?.length <= 1 && typeof page.total === 'number' && (page.truncated === true) === (page.total > 1),

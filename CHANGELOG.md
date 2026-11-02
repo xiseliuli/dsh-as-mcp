@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.30
+
+- Four edge contracts now have live checks, all probed first: `workspace_delete` of an
+  unknown id answers `deleted: false` rather than failing; `session_list` for a cwd with no
+  sessions returns an empty list with `total: 0`; a whitespace-only `session_rename` title
+  is refused before touching the harness; and `dsh_tool_list` on an unknown session returns
+  no tools plus a `scopeError` naming the session instead of a transport failure.
+
 ## 0.52.29
 
 - The settings panel's token mask shows a four-character prefix only for tokens at least
