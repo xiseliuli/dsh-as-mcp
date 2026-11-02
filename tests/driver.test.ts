@@ -10,8 +10,8 @@ import type { DshSessionEvent } from '../src/dsh/types.js'
 import { testConfig } from './harness.js'
 
 /** A minimal durable-log entry. */
-function event(type: string, data: unknown, seq: number): DshSessionEvent {
-  return { type, data, seq, time: 1_700_000_000_000 + seq }
+function event(type: string, data: unknown, seq: number, time = 1_700_000_000_000 + seq): DshSessionEvent {
+  return { type, data, seq, time }
 }
 
 /** Append our prompt the way `sessionController` commits it: `source.rpcId` = requestId. */
@@ -718,6 +718,54 @@ describe('per-session serialization', () => {
     const secondResult = await second
     expect(secondResult.turn?.reply).toBe('second reply')
     expect(secondResult.turn?.turn).toBe(2)
+  })
+})
+
+describe('turn duration', () => {
+  it('reports wall-clock duration from turn start to turn end', async () => {
+    const sessions = fakeSessions()
+    const original = sessions.controller.prompt as (request: unknown) => Promise<{ accepted: true }>
+    // The turn runs after the user message is committed, so its events are appended
+    // once the fake prompt has pushed that message — a hand-built log cannot do this
+    // because promptSession admits the prompt itself.
+    // Mirrors the idle-session shape: DSH opens the turn BEFORE committing the user
+    // message, so the start event lands before the transcript window's anchor.
+    sessions.controller.prompt = async (request: unknown) => {
+      const base = sessions.log.length + 10
+      sessions.log.push(event('turn/start', { turn: 1 }, base, 1_000))
+      const accepted = await original(request)
+      sessions.log.push(event('assistant/message', {
+        turn: 1,
+        step: 0,
+        message: { content: [{ type: 'text', text: 'done' }] },
+      }, base + 1, 1_600))
+      sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, base + 2, 2_500))
+      return accepted
+    }
+    const { driver } = driverWith(sessions)
+    const reply = await driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+    })
+    expect(reply.turn?.durationMs).toBe(1_500)
+  })
+
+  it('omits duration for a turn still running at the wait boundary', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'go', 0)])
+    sessions.log.push(event('turn/start', { turn: 1 }, 1, 1_000))
+    const { driver } = driverWith(sessions)
+    const reply = await driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 120,
+    })
+    expect(reply.turn?.timedOut).toBe(true)
+    expect(reply.turn?.durationMs).toBeUndefined()
   })
 })
 

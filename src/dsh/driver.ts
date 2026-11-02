@@ -279,6 +279,14 @@ export interface TurnResult {
   /** True when the turn ended because it was cancelled. */
   readonly aborted: boolean
   /**
+   * Wall-clock milliseconds from the turn's start event to its end event.
+   *
+   * Absent for a turn that is still running (or a wait that timed out before it
+   * settled). Tokens say what a turn cost; this says how long the caller waited for
+   * it, which is what a timeout or an SLO is tuned against.
+   */
+  readonly durationMs?: number
+  /**
    * Provider-reported tokens this turn consumed, when the harness recorded any.
    *
    * This is the per-prompt receipt: a turn is the unit one `session_prompt`
@@ -4341,6 +4349,8 @@ function summarizeTurn(
   const models: string[] = []
   let turn = location.owningTurn
   let turnEndReason: unknown = null
+  let turnStartedAt: number | undefined
+  let turnEndedAt: number | undefined
 
   for (const event of events.slice(location.from, location.to)) {
     if (event.type === 'assistant/message') {
@@ -4362,8 +4372,27 @@ function summarizeTurn(
         arguments: raw,
         ...(typeof data?.callId === 'string' ? { callId: data.callId } : {}),
       })
+    } else if (event.type === 'turn/start') {
+      if (turnStartedAt === undefined && (turn === null || turnOf(event) === turn)) {
+        turnStartedAt = event.time
+      }
     } else if (event.type === 'turn/end') {
       turnEndReason = (event.data as { reason?: unknown } | undefined)?.reason ?? null
+      turnEndedAt = event.time
+    }
+  }
+
+  // The idle-session shape commits `turn/start` BEFORE the user message (and the
+  // slice starts at the message), so the start event is outside it. Walk back to it,
+  // stopping at a turn boundary: the turn that owns our message began there.
+  if (turnStartedAt === undefined && turn !== null) {
+    for (let index = location.from - 1; index >= 0; index -= 1) {
+      const event = events[index]
+      if (event?.type === 'turn/end') break
+      if (event?.type === 'turn/start') {
+        if (turnOf(event) === turn) turnStartedAt = event.time
+        break
+      }
     }
   }
 
@@ -4376,5 +4405,10 @@ function summarizeTurn(
     turn,
     turnEndReason,
     aborted: isAbortedReason(turnEndReason),
+    // Only when both ends were seen inside this window: a turn cut by the window
+    // boundary has no honest duration, and a missing field says that.
+    ...(turnStartedAt === undefined || turnEndedAt === undefined
+      ? {}
+      : { durationMs: Math.max(0, turnEndedAt - turnStartedAt) }),
   }
 }

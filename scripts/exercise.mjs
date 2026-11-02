@@ -623,6 +623,13 @@ try {
       'the reply names the model route that answered',
       (turn.models ?? []).join(', '),
     )
+    // Tokens say what the turn cost; durationMs says how long the caller waited for
+    // it, which is what a timeout is tuned against.
+    check(
+      typeof turn.durationMs === 'number' && turn.durationMs >= 0 && turn.durationMs < 300_000,
+      'the turn receipt includes its wall-clock duration',
+      `${turn.durationMs ?? '?'} ms`,
+    )
     // `full` returns them on request, still bounded.
     const full = await must('session_prompt', {
       sessionId,

@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.39.0
+
+- `session_prompt`'s turn receipt now carries `turn.durationMs`: wall-clock time from
+  the turn's start event to its end event. Tokens say what a turn cost; this says how
+  long the caller waited, which is what a timeout or an SLO is tuned against. It is
+  absent when the turn is still running at the wait boundary (no honest duration), and
+  the driver test pins both cases. The first acceptance run reported no duration and
+  exposed an ordering detail worth knowing: DSH commits `turn/start` *before* the user
+  message, so the start event sits outside the transcript window — the summary now
+  walks back to the owning turn's start, and the live run reports the real turn
+  (3 489 ms for the FizzBuzz turn).
+- Both READMEs mention the field in the `session_prompt` row.
+
 ## 0.38.6
 
 - `tools/live-checks.mjs` checks that `dsh_info` agrees with the surface it describes:
