@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.40.0
+
+- `session_messages` gained `includeToolResults`: each recorded `tool/result` becomes a
+  `role: "tool"` row with `callId`, `text` and `error`, capped by `maxCharsPerMessage`
+  like any other message. `includeToolCalls` says what was invoked and how large the
+  outcome was; this says what the outcome *said*, so one read can reconstruct the whole
+  timeline instead of pairing `session_tool_result` lookups with the transcript. Off by
+  default, because a result can be as large as a file.
+- Covered by driver and endpoint tests and the acceptance run (real bash results appear
+  as capped tool rows); both READMEs describe the option.
+
 ## 0.39.0
 
 - `session_prompt`'s turn receipt now carries `turn.durationMs`: wall-clock time from

@@ -1043,6 +1043,23 @@ try {
       `${calls.length} call(s), ${completed.length} with results`,
     )
 
+    // One read can carry the whole timeline when asked: tool results appear as their
+    // own rows (callId + text + error), capped per message like any other row.
+    const withResults = await must('session_messages', {
+      sessionId,
+      limit: 200,
+      includeToolResults: true,
+      maxCharsPerMessage: 120,
+    })
+    const toolRows = (withResults.messages ?? []).filter((entry) => entry.role === 'tool')
+    check(
+      toolRows.length > 0 &&
+        toolRows.every((entry) => typeof entry.callId === 'string' && typeof entry.text === 'string' &&
+          entry.text.length <= 120 && typeof entry.seq === 'number'),
+      'session_messages can include tool results as their own rows',
+      `${toolRows.length} result row(s)`,
+    )
+
     // The call list reports sizes; one lookup fetches the text of a single result,
     // which is what debugging a failure actually needs.
     const withResult = calls.find((entry) => typeof entry.resultChars === 'number' && entry.resultChars > 0)

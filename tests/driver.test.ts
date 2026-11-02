@@ -898,6 +898,42 @@ describe('bounded replies', () => {
     expect(none.total).toBe(0)
   })
 
+  it('includes tool results as their own rows only when asked', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'run it', 0)])
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{}' }] },
+    }, 1))
+    sessions.log.push(event('tool/result', {
+      turn: 1,
+      step: 0,
+      message: { role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: 'boom: failed' }], isError: true },
+    }, 2))
+    const { driver } = driverWith(sessions)
+
+    // The assistant step here only requests a tool, so without includeToolCalls it has
+    // no text and the prose transcript omits it.
+    const plain = await driver.readTranscript('session-1', 10)
+    expect(plain.messages.map((message) => message.role)).toEqual(['user'])
+
+    const withResults = await driver.readTranscript('session-1', 10, {
+      includeToolResults: true,
+      maxCharsPerMessage: 6,
+    })
+    const tool = withResults.messages.find((message) => message.role === 'tool')
+    expect(tool).toEqual({
+      role: 'tool',
+      callId: 'call-1',
+      error: true,
+      text: 'boom: ',
+      time: expect.any(Number),
+      seq: 2,
+      chars: 12,
+      truncated: true,
+    })
+  })
+
   it('reads one recorded tool result by call id, with its name and error flag', async () => {
     const sessions = fakeSessions([userMessage('req-1', 'run it', 0)])
     sessions.log.push(event('assistant/message', {

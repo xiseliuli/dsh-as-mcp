@@ -465,7 +465,8 @@ interface ShellJobState {
 
 /** One message projected onto the caller-facing transcript. */
 export interface TranscriptMessage {
-  readonly role: 'user' | 'assistant'
+  /** `tool` rows appear only when the caller asked for tool results. */
+  readonly role: 'user' | 'assistant' | 'tool'
   /** Tool calls the model requested in this message, when `includeToolCalls` was asked. */
   readonly toolCalls?: readonly TranscriptToolCall[]
   /** The harness message id; queue mutations address a pending message by it. */
@@ -477,6 +478,10 @@ export interface TranscriptMessage {
    * so a caller can correlate its own prompts (and retries) with transcript entries.
    */
   readonly requestId?: string
+  /** The call a `tool` row answers; correlates with `toolCalls[].id`. */
+  readonly callId?: string
+  /** True when the harness marked this tool result an error. */
+  readonly error?: true
   /** The message text, cut to the caller's per-message cap when one was given. */
   readonly text: string
   readonly time: number
@@ -2305,6 +2310,8 @@ export class DshDriver {
        * that only needs prose should not grow by every invocation in the session.
        */
       includeToolCalls?: boolean
+      /** Also include `tool/result` events as `role: "tool"` rows, capped like messages. */
+      includeToolResults?: boolean
       /** Per-message character cap; absent means full text (the historical default). */
       maxCharsPerMessage?: number
     } = {},
@@ -2316,10 +2323,16 @@ export class DshDriver {
     const toolResults = options.includeToolCalls === true ? toolResultsOfEvents(events) : new Map()
     const messages: TranscriptMessage[] = []
     for (const event of events) {
-      const role = event.type === 'user/message'
-        ? 'user' as const
-        : event.type === 'assistant/message' ? 'assistant' as const : undefined
-      if (role === undefined) continue
+      let role: 'user' | 'assistant' | 'tool' | undefined = event.type === 'user/message'
+        ? 'user'
+        : event.type === 'assistant/message' ? 'assistant' : undefined
+      if (role === undefined) {
+        // A tool result is part of the timeline a poller wants to reconstruct, but
+        // its text can be as large as a file; it is opt-in and capped like any other
+        // message instead of being folded into the assistant row.
+        if (event.type === 'tool/result' && options.includeToolResults === true) role = 'tool' as const
+        else continue
+      }
       // The message id is what queue mutations address (`SessionUpdateQueue`), so
       // a caller that queued work can withdraw or redirect it later.
       const messageId = role === 'user'
@@ -2334,6 +2347,12 @@ export class DshDriver {
       const rawBlocks = role === 'user'
         ? (event.data as { content?: unknown } | undefined)?.content
         : (event.data as { message?: { content?: unknown } } | undefined)?.message?.content
+      const callId = role === 'tool'
+        ? (event.data as { message?: { toolCallId?: unknown } } | undefined)?.message?.toolCallId
+        : undefined
+      const toolError = role === 'tool'
+        ? (event.data as { message?: { isError?: unknown } } | undefined)?.message?.isError === true
+        : false
       const text = textOfBlocks(rawBlocks)
       const toolCalls = options.includeToolCalls === true && role === 'assistant'
         ? toolCallsOfBlocks(rawBlocks, toolResults)
@@ -2341,13 +2360,15 @@ export class DshDriver {
       // A model message that only requests tools has no text. It is skipped by
       // default (a prose transcript), but when the caller asked for tool calls it
       // *is* the message — dropping it was why a polling caller saw none.
-      if (text.trim() === '' && toolCalls.length === 0) continue
+      if (text.trim() === '' && toolCalls.length === 0 && role !== 'tool') continue
       const cap = options.maxCharsPerMessage
       const truncated = cap !== undefined && text.length > cap
       messages.push({
         role,
         ...(typeof messageId === 'string' && messageId !== '' ? { id: messageId } : {}),
         ...(typeof requestId === 'string' && requestId !== '' ? { requestId } : {}),
+        ...(typeof callId === 'string' && callId !== '' ? { callId } : {}),
+        ...(toolError ? { error: true as const } : {}),
         ...(toolCalls.length === 0 ? {} : { toolCalls }),
         text: truncated ? truncateText(text, cap) : text,
         time: event.time,

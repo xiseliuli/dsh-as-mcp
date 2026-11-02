@@ -745,6 +745,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'Page backwards: only messages with a smaller seq, newest of those first-of-the-window '
               + 'last. To walk a long transcript, pass the seq of the oldest message you already have.',
             ),
+          includeToolResults: z
+            .boolean()
+            .optional()
+            .describe(
+              'Also include tool results as role "tool" rows (callId, text, error), so one read covers the whole '
+              + 'timeline. Off by default because a result can be as large as a file; each row obeys '
+              + 'maxCharsPerMessage.',
+            ),
           includeToolCalls: z
             .boolean()
             .optional()
@@ -777,6 +785,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           ...(args.sinceSeq === undefined ? {} : { sinceSeq: args.sinceSeq }),
           ...(args.beforeSeq === undefined ? {} : { beforeSeq: args.beforeSeq }),
           ...(args.includeToolCalls === undefined ? {} : { includeToolCalls: args.includeToolCalls }),
+          ...(args.includeToolResults === undefined ? {} : { includeToolResults: args.includeToolResults }),
           ...(args.role === undefined ? {} : { role: args.role }),
           ...(args.maxCharsPerMessage === undefined ? {} : { maxCharsPerMessage: args.maxCharsPerMessage }),
         })
