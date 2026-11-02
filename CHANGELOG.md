@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.13
+
+- Verified the other half of the ownership contract: a **corrupt** `owned.json` fails
+  closed. A session created under `session.scope: "owned"` became unreadable once the
+  record was replaced with `{not json at all` and the process restarted — the damaged
+  record hides sessions, it cannot expose them. The original record was copied before the
+  probe and restored byte-for-byte; the throwaway profile was deleted.
+
 ## 0.52.12
 
 - Verified the restart behavior README already promised for `session.scope: "owned"`:

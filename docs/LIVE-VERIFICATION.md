@@ -113,6 +113,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 
 | A message queued by **another MCP client** can be seen and withdrawn here | 0.52.5 | live-checks orchestration: a second client (its own initialize and ids) queues a message, the first client lists and removes it, and the withdrawn text never runs. The queue lives on the session, so a connection-scoped id would show up here |
 | Owned-session ownership survives a plugin/host restart | 0.52.12 | created a session under `session.scope: "owned"` (it appeared in `$DSH_HOME/dsh-as-mcp/owned.json`), killed the process, restarted the same profile: `session_messages` on that id was served, while a session id read from another profile's log was refused with the scope message. The probe id was then removed from the record |
+| A corrupt `owned.json` fails closed | 0.52.13 | created a session under `session.scope: "owned"` (recorded), stopped the process, replaced the record with `{not json at all`, restarted: `session_messages` for that previously-owned id was **refused**, so a damaged record can only hide sessions, never expose them. The original record was restored byte-for-byte from a pre-probe copy |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:
