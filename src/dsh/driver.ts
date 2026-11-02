@@ -1061,9 +1061,21 @@ export class DshDriver {
           + 'workspace_create again, or change the policy.',
         )
       }
-      // `workspaceRegistry.create()` canonicalizes through realpath and rejects a
-      // missing directory; it deliberately does not mkdir.
-      await mkdir(absolute, { recursive: true })
+      // A path that exists as a file is a different problem from a missing
+      // directory, and mkdir's own `EEXIST: ... mkdir '/etc/hosts'` reads like a
+      // failed directory creation rather than "you pointed the tool at a file".
+      const existingEntry = await stat(absolute).catch(() => undefined)
+      if (existingEntry !== undefined && !existingEntry.isDirectory()) {
+        throw new Error(
+          `cannot register ${absolute} as a workspace: it exists but is not a directory. `
+          + 'Pass the directory that should hold the project, or remove that path.',
+        )
+      }
+      if (existingEntry === undefined) {
+        // `workspaceRegistry.create()` canonicalizes through realpath and rejects a
+        // missing directory; it deliberately does not mkdir.
+        await mkdir(absolute, { recursive: true })
+      }
     }
 
     let existing: Awaited<ReturnType<DshWorkspaceRegistry['resolveByPath']>>
@@ -1088,7 +1100,6 @@ export class DshDriver {
     return { workspace: await this.toWorkspaceInfo(workspace), created: true }
   }
 
-  /** Every registered workspace, in registry order. */
   /**
    * Unregister one workspace.
    *
@@ -1110,6 +1121,7 @@ export class DshDriver {
     return { workspaceId: request.workspaceId, deleted }
   }
 
+  /** Every registered workspace, in registry order. */
   async listWorkspaces(): Promise<WorkspaceInfo[]> {
     const registry = this.requireWorkspaceRegistry()
     const workspaces = registry.list()

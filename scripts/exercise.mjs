@@ -929,6 +929,46 @@ try {
       'and carries a scopeError naming the cause',
       (ghost.payload?.scopeError ?? 'none').slice(0, 60),
     )
+
+    // --- error paths ---------------------------------------------------------
+    // Bad input must come back as an actionable error, not a crash or a happy
+    // zero: a caller that mistypes an id would otherwise under-bill its run.
+    const ghostSession = 'session-does-not-exist'
+    const ghostPrompt = await tool('session_prompt', { sessionId: ghostSession, prompt: 'hi' })
+    check(!ghostPrompt.ok && /not found/.test(ghostPrompt.error ?? ''), 'an unknown session is reported, not run', (ghostPrompt.error ?? '').slice(0, 60))
+
+    const ghostMessages = await tool('session_messages', { sessionId: ghostSession })
+    check(!ghostMessages.ok && /not found/.test(ghostMessages.error ?? ''), 'transcript reads name the unknown session', (ghostMessages.error ?? '').slice(0, 60))
+
+    const ghostUsage = await must('session_usage', { sessionIds: [ghostSession] })
+    check(
+      ghostUsage.sessions?.[0]?.error !== undefined && ghostUsage.totals?.totalTokens === 0 &&
+        (ghostUsage.notes ?? []).some((note) => /could not be read/.test(note)),
+      'an unknown id yields a row error and says the totals exclude it',
+      (ghostUsage.sessions?.[0]?.error ?? '').slice(0, 60),
+    )
+
+    const missingRead = await tool('file_read', { sessionId, path: join(projectPath, 'definitely-absent.txt') })
+    check(!missingRead.ok && /not found/.test(missingRead.error ?? ''), 'a missing file is reported with its path', (missingRead.error ?? '').slice(0, 60))
+
+    const fileAsWorkspace = await tool('workspace_create', { path: join(projectPath, 'fizzbuzz.mjs') })
+    check(
+      !fileAsWorkspace.ok && /not a directory/.test(fileAsWorkspace.error ?? ''),
+      'registering a file as a workspace explains why instead of echoing mkdir',
+      (fileAsWorkspace.error ?? '').slice(0, 60),
+    )
+
+    const ghostJob = await tool('shell_kill', { jobId: 'no-such-job' })
+    check(!ghostJob.ok && /unknown background job/.test(ghostJob.error ?? ''), 'an unknown job id is named', (ghostJob.error ?? '').slice(0, 60))
+
+    const emptySession = await must('session_create', { cwd: projectPath, title: 'empty-fork-source' })
+    const emptyId = emptySession.sessionId ?? emptySession.id
+    const emptyFork = await tool('session_fork', { sessionId: emptyId })
+    check(!emptyFork.ok && /no completed turn/.test(emptyFork.error ?? ''), 'forking an empty session says why', (emptyFork.error ?? '').slice(0, 60))
+
+    // After every failure above, the endpoint must still serve.
+    const stillHealthy = await must('dsh_info')
+    check(stillHealthy.version !== undefined, 'the endpoint survives a barrage of bad calls', stillHealthy.version)
   }
 } catch (error) {
   check(false, 'run aborted', error instanceof Error ? error.message : String(error))

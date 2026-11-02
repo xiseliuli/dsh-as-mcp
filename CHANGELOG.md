@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.20.2
+
+- `workspace_create` on a path that exists as a file now says "exists but is not
+  a directory" instead of echoing mkdir's `EEXIST` syscall message.
+- The acceptance script gained an error-path section: unknown session ids and job
+  ids, a missing file, a file registered as a workspace, forking an empty
+  session, and an unknown-id usage receipt (row error + totals exclusion), then a
+  health read to prove the endpoint survived the barrage.
+
 ## 0.20.1
 
 - Settings panel: the timeout fields offered a minimum of `0`, which the host

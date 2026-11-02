@@ -1,5 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
 import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative as relativeTo } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -694,6 +695,52 @@ describe('DshDriver.createSession', () => {
     await driver.createSession({ cwd: link })
 
     expect(sessions.creates[0]?.cwd).toBe(realpathSync(real))
+  })
+})
+
+describe('DshDriver.createWorkspace error messages', () => {
+  /** A driver over a registry that models realpath/ENOENT like the harness does. */
+  function withRegistry(): DshDriver {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('workspaceRegistry', {
+      create: async (path: string, title?: string) => ({
+        id: 'ws-1',
+        path,
+        title: title ?? path,
+        createdAt: 0,
+        updatedAt: 0,
+        sessionIds: [],
+        status: async () => 'ok',
+      }),
+      get: () => undefined,
+      list: () => [],
+      delete: async () => true,
+      resolveByPath: async (path: string) => {
+        const entry = await stat(path).catch(() => undefined)
+        if (entry === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+        if (!entry.isDirectory()) throw Object.assign(new Error('ENOTDIR'), { code: 'ENOTDIR' })
+        return { id: 'ws-1', path, title: path, createdAt: 0, updatedAt: 0, sessionIds: [], status: async () => 'ok' }
+      },
+    } as never)
+    return new DshDriver(ctx, () => testConfig())
+  }
+
+  it('names a file path as "not a directory" instead of echoing mkdir EEXIST', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-as-mcp-ws-file-'))
+    scratch.push(dir)
+    const file = join(dir, 'a-file')
+    writeFileSync(file, 'x')
+
+    await expect(withRegistry().createWorkspace({ path: file }))
+      .rejects.toThrow(/exists but is not a directory/)
+  })
+
+  it('tells the caller how to create a missing directory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-as-mcp-ws-missing-'))
+    scratch.push(dir)
+    await expect(withRegistry().createWorkspace({ path: join(dir, 'not-yet'), createDirectory: false }))
+      .rejects.toThrow(/Pass createDirectory: true/)
   })
 })
 
