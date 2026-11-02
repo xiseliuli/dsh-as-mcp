@@ -64,7 +64,7 @@ describe('listSessions titles', () => {
   it('does not read titles unless asked', async () => {
     const { driver, titleCalls } = driverWith({ sessions, titles: { 'session-a': 'A' } })
     const listed = await driver.listSessions(10)
-    expect(listed.every((entry) => entry.title === undefined)).toBe(true)
+    expect(listed.sessions.every((entry) => entry.title === undefined)).toBe(true)
     // The default page must not pay one log read per session.
     expect(titleCalls).toEqual([])
   })
@@ -75,19 +75,19 @@ describe('listSessions titles', () => {
       titles: { 'session-a': 'Fix the parser', 'session-b': 'Write the docs' },
     })
     const listed = await driver.listSessions(10, { includeTitle: true })
-    expect(listed.map((entry) => [entry.sessionId, entry.title])).toEqual([
+    expect(listed.sessions.map((entry) => [entry.sessionId, entry.title])).toEqual([
       ['session-b', 'Write the docs'],
       ['session-a', 'Fix the parser'],
     ])
     // Summaries keep their other fields.
-    expect(listed[0]?.cwd).toBe('/tmp/project')
+    expect(listed.sessions[0]?.cwd).toBe('/tmp/project')
   })
 
   it('omits a title the log does not carry instead of inventing one', async () => {
     const { driver } = driverWith({ sessions, titles: { 'session-b': 'Only this one' } })
     const listed = await driver.listSessions(10, { includeTitle: true })
-    expect(listed.find((entry) => entry.sessionId === 'session-a')?.title).toBeUndefined()
-    expect(listed.find((entry) => entry.sessionId === 'session-b')?.title).toBe('Only this one')
+    expect(listed.sessions.find((entry) => entry.sessionId === 'session-a')?.title).toBeUndefined()
+    expect(listed.sessions.find((entry) => entry.sessionId === 'session-b')?.title).toBe('Only this one')
   })
 
   it('keeps listing when one title read fails', async () => {
@@ -97,9 +97,9 @@ describe('listSessions titles', () => {
       titleError: (sessionId) => (sessionId === 'session-a' ? new Error('title read failed') : undefined),
     })
     const listed = await driver.listSessions(10, { includeTitle: true })
-    expect(listed).toHaveLength(2)
-    expect(listed.find((entry) => entry.sessionId === 'session-b')?.title).toBe('survives')
-    expect(listed.find((entry) => entry.sessionId === 'session-a')?.title).toBeUndefined()
+    expect(listed.sessions).toHaveLength(2)
+    expect(listed.sessions.find((entry) => entry.sessionId === 'session-b')?.title).toBe('survives')
+    expect(listed.sessions.find((entry) => entry.sessionId === 'session-a')?.title).toBeUndefined()
   })
 
   it('filters by workspace directory before applying the limit', async () => {
@@ -112,8 +112,9 @@ describe('listSessions titles', () => {
     })
     const filtered = await driver.listSessions(1, { cwd: '/tmp/dsh-filter-project' })
     // The limit applies to the filtered set: 'a' is the newest match, not the
-    // newest session overall.
-    expect(filtered.map((entry) => entry.sessionId)).toEqual(['a'])
+    // newest session overall. `total` still reports both matches.
+    expect(filtered.sessions.map((entry) => entry.sessionId)).toEqual(['a'])
+    expect(filtered.total).toBe(2)
   })
 
   it('filters by running state', async () => {
@@ -124,16 +125,16 @@ describe('listSessions titles', () => {
       ],
     })
     const busy = await driver.listSessions(10, { running: true })
-    expect(busy.map((entry) => entry.sessionId)).toEqual(['running'])
+    expect(busy.sessions.map((entry) => entry.sessionId)).toEqual(['running'])
     const idle = await driver.listSessions(10, { running: false })
-    expect(idle.map((entry) => entry.sessionId)).toEqual(['idle'])
+    expect(idle.sessions.map((entry) => entry.sessionId)).toEqual(['idle'])
   })
 
   it('lists sessions when the harness has no title reader at all', async () => {
     const { driver } = driverWith({ sessions, hasTitleReader: false })
     const listed = await driver.listSessions(10, { includeTitle: true })
-    expect(listed).toHaveLength(2)
-    expect(listed.every((entry) => entry.title === undefined)).toBe(true)
+    expect(listed.sessions).toHaveLength(2)
+    expect(listed.sessions.every((entry) => entry.title === undefined)).toBe(true)
   })
 })
 

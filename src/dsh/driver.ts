@@ -1343,7 +1343,7 @@ export class DshDriver {
       /** Only sessions that are currently running (`true`) or idle (`false`). */
       running?: boolean
     } = {},
-  ): Promise<SessionInfo[]> {
+  ): Promise<{ sessions: SessionInfo[]; total: number }> {
     const controller = this.requireSessionController()
     const listed = await controller.list({}, new AbortController().signal)
     // The filter runs before the limit so "the first 20 of my sessions" means what
@@ -1356,14 +1356,19 @@ export class DshDriver {
     })
     const items = filtered.slice(0, limit)
     const titles = options.includeTitle === true ? await this.readTitles(items.map((item) => item.sessionId)) : new Map()
-    return items.map((item) => ({
-      sessionId: item.sessionId,
-      ...(item.cwd === undefined ? {} : { cwd: item.cwd }),
-      running: item.running,
-      blank: item.blank,
-      updatedAt: item.updatedAt,
-      ...(titles.get(item.sessionId) === undefined ? {} : { title: titles.get(item.sessionId) as string }),
-    }))
+    // `total` counts what the filter matched, not what was returned: without it a
+    // caller cannot tell "these are all my sessions" from "the first page of them".
+    return {
+      total: filtered.length,
+      sessions: items.map((item) => ({
+        sessionId: item.sessionId,
+        ...(item.cwd === undefined ? {} : { cwd: item.cwd }),
+        running: item.running,
+        blank: item.blank,
+        updatedAt: item.updatedAt,
+        ...(titles.get(item.sessionId) === undefined ? {} : { title: titles.get(item.sessionId) as string }),
+      })),
+    }
   }
 
   /** Latest title per session id, skipping the ones that cannot be read. */

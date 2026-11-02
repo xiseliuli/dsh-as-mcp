@@ -434,13 +434,20 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
-      guard('session_list', log, async (args) => ok({
-        sessions: await driver.listSessions(args.limit ?? 20, {
+      guard('session_list', log, async (args) => {
+        const listed = await driver.listSessions(args.limit ?? 20, {
           ...(args.includeTitle === undefined ? {} : { includeTitle: args.includeTitle }),
           ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
           ...(args.running === undefined ? {} : { running: args.running }),
-        }),
-      })),
+        })
+        // `truncated` is the question a caller actually has: did the limit hide
+        // sessions that match? `total` is how many matched before the cut.
+        return ok({
+          sessions: listed.sessions,
+          total: listed.total,
+          ...(listed.total > listed.sessions.length ? { truncated: true } : {}),
+        })
+      }),
     )
 
     server.registerTool(

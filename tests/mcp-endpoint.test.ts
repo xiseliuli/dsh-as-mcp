@@ -347,6 +347,25 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('reports session_list truncation when the limit hid matches', async () => {
+    const own = await boot(stubDriver({
+      listSessions: async () => ({
+        sessions: [{ sessionId: 'a', running: false, blank: false, updatedAt: 1 }],
+        total: 7,
+      }),
+    }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_list', { limit: 1 })
+      expect(isError).toBe(false)
+      const payload = JSON.parse(text) as { sessions: unknown[]; total: number; truncated?: boolean }
+      expect(payload.sessions).toHaveLength(1)
+      expect(payload.total).toBe(7)
+      expect(payload.truncated).toBe(true)
+    } finally {
+      await own.stop()
+    }
+  })
+
   it('forwards workspace_delete arguments', async () => {
     const seen: unknown[] = []
     const own = await boot(stubDriver({
@@ -372,7 +391,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       stubDriver({
         listSessions: async (limit, options) => {
           lists.push({ limit, options })
-          return []
+          return { sessions: [], total: 0 }
         },
         sessionUsage: async (request) => {
           usages.push(request)

@@ -490,6 +490,14 @@ try {
       'session_list filters by workspace directory',
       `${(filtered.sessions ?? []).length} sessions`,
     )
+    // A bare list cannot distinguish "all of them" from "the first page": `total`
+    // counts the matches and `truncated` says the limit hid some.
+    const page = await must('session_list', { limit: 1, cwd: projectPath })
+    check(
+      page.sessions?.length === 1 && page.total >= 1 && page.truncated === (page.total > 1),
+      'session_list reports total and truncation',
+      `${page.sessions?.length ?? 0} of ${page.total ?? '?'}`,
+    )
 
     // Unregistering is idempotent and leaves the directory alone, so a harness can
     // clean up the workspaces it created for a task.

@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.21.0
+
+- `session_list` reports `total` (matches before the limit) and `truncated` when
+  the limit hid some. A bare list could not distinguish "these are all my
+  sessions" from "the first page of them", which matters to a caller scanning for
+  its sessions before acting.
+
 ## 0.20.7
 
 - Acceptance covers more filesystem and shell edges, all verified live first:
