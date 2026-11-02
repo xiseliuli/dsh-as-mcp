@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.20.1
+
+- Settings panel: the timeout fields offered a minimum of `0`, which the host
+  validator rejects; they now start at `1`. Added tests that every panel field
+  path points at a real config leaf and that numeric bounds never offer a value
+  the host refuses.
+
 ## 0.20.0
 
 - `session_prompt` replies carry `turn.models`: the `provider/model` routes that

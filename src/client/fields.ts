@@ -125,7 +125,9 @@ export const GROUPS: readonly GroupSpec[] = [
         path: ['session', 'promptTimeoutMs'],
         label: 'field.session.promptTimeoutMs',
         hint: 'field.session.promptTimeoutMs.hint',
-        min: 0,
+        // Positive-integer fields: 0 is rejected by normalizeConfig, so the panel
+        // must not offer it.
+        min: 1,
       },
     ],
   },
@@ -135,13 +137,13 @@ export const GROUPS: readonly GroupSpec[] = [
     description: 'group.limits.description',
     fields: [
       { kind: 'number', path: ['limits', 'maxReadBytes'], label: 'field.limits.maxReadBytes', hint: 'field.limits.maxReadBytes.hint', min: 1 },
-      { kind: 'number', path: ['limits', 'shellTimeoutMs'], label: 'field.limits.shellTimeoutMs', hint: 'field.limits.shellTimeoutMs.hint', min: 0 },
+      { kind: 'number', path: ['limits', 'shellTimeoutMs'], label: 'field.limits.shellTimeoutMs', hint: 'field.limits.shellTimeoutMs.hint', min: 1 },
       {
         kind: 'number',
         path: ['limits', 'agentToolTimeoutMs'],
         label: 'field.limits.agentToolTimeoutMs',
         hint: 'field.limits.agentToolTimeoutMs.hint',
-        min: 0,
+        min: 1,
       },
     ],
   },

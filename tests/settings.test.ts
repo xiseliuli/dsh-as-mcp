@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { APPROVAL_POLICIES, Config, normalizeConfig, plainConfig, type Config as ConfigShape } from '../src/config.js'
 import { defaultConfig } from '../src/defaults.js'
 import { SETTINGS_NAMESPACE, installSettingsPagePolicy } from '../src/settings.js'
+import { GROUPS } from '../src/client/fields.js'
 import { silentLog } from './harness.js'
 
 /**
@@ -258,5 +259,50 @@ describe('installSettingsPagePolicy', () => {
 
     await ctx.fiber.dispose()
     expect(availability.available()).toBe(false)
+  })
+})
+
+describe('settings panel fields', () => {
+  /** Every field path the panel renders, as dotted strings. */
+  const paths = GROUPS.flatMap((group) => group.fields.map((field) => field.path.join('.')))
+
+  it('points every field at a real config leaf', () => {
+    // A typo in a path would render a control that writes nowhere and reads
+    // undefined — invisible in the UI, and the panel is the only editor most
+    // users have.
+    const config = defaultConfig() as unknown as Record<string, unknown>
+    const missing = paths.filter((path) => {
+      let node: unknown = config
+      for (const part of path.split('.')) {
+        if (typeof node !== 'object' || node === null) return true
+        node = (node as Record<string, unknown>)[part]
+      }
+      return node === undefined
+    })
+    expect(missing).toEqual([])
+  })
+
+  it('does not offer a numeric value the host validator refuses', () => {
+    // `positiveInt` rejects 0 for these four, so a panel minimum of 0 would let
+    // the user save a value the host then refuses.
+    const positive = new Set([
+      'session.promptTimeoutMs',
+      'limits.maxReadBytes',
+      'limits.shellTimeoutMs',
+      'limits.agentToolTimeoutMs',
+    ])
+    for (const group of GROUPS) {
+      for (const field of group.fields) {
+        const path = field.path.join('.')
+        if (field.kind !== 'number') continue
+        if (positive.has(path)) {
+          expect(field.min, `${path} min`).toBeGreaterThanOrEqual(1)
+        }
+      }
+    }
+    // Port 0 is legitimate: it asks the OS for a free port.
+    const port = GROUPS.flatMap((group) => group.fields).find((field) => field.path.join('.') === 'http.port')
+    expect(port?.min).toBe(0)
+    expect(port?.max).toBe(65535)
   })
 })
