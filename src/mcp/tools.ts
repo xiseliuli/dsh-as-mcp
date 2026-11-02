@@ -579,7 +579,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       {
         title: 'Switch a DSH session\'s model',
         description:
-          'Change the provider route and model that a session\'s subsequent turns use. Useful to start on a '
+          'Change the provider route and model for the model calls that follow — including later steps of a '
+          + 'turn that is already running. Useful to start on a '
           + 'cheap model and escalate for a hard turn, or to fall back when a route is unavailable. The harness '
           + 'stores the selection on the session, so later session_prompt calls use it, and the reply\'s per-'
           + 'model usage shows which route spent what. Use dsh_info with includeModels: true to see valid ids; '

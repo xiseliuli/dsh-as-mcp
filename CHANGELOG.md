@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.1
+
+- Documented and asserted where a model switch takes effect: a `session_set_model` during
+  a running turn applies to that turn's later model calls. The probe started a turn on
+  `deepseek-official/deepseek-flash`, switched to `deepseek-account/deepseek-flash`
+  mid-flight, and got one turn reporting both routes, whose per-turn `byModel` split
+  (18 062 + 18 586) summed to the row total (36 648) — the case 0.52.0's field exists for.
+  `session_set_model`'s description, both READMEs and the matrix now say so, and
+  live-checks `--with-model` reproduces it.
+
 ## 0.52.0
 
 - Per-turn usage rows now carry a `byModel` split when the turn used more than one

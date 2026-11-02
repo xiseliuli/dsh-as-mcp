@@ -109,6 +109,8 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 
 | A restrictive sandbox policy actually refuses a plugin file write | 0.51.11 | booted a profile with `DSH_PERMISSION_MODE=read-only`: `file_write` answered "file access denied under read-only mode", `shell_run` could read (`cat /etc/hosts`) but its redirect to `/tmp` failed with "Operation not permitted" |
 | Chunked request bodies are size-bounded, not just declared ones | 0.51.11 | a 70 MB body sent with `Transfer-Encoding: chunked` (no `content-length`) answered `413 request body too large` in 71 ms; a valid chunked `initialize` answered 200 |
+| A mid-turn `session_set_model` applies to the running turn's later steps | 0.52.1 | probed: a turn started on deepseek-official, was switched to deepseek-account mid-flight, and reported both routes; per-turn `byModel` split it 18 062 + 18 586 = 36 648 = the row total. live-checks asserts this |
+
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:

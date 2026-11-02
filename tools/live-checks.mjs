@@ -1517,6 +1517,75 @@ async function orchestrationCheck() {
   }
 }
 
+// --- mid-turn route switch -------------------------------------------------
+
+/**
+ * A model switch applies to the model calls that follow, including later steps of a
+ * *running* turn (probed before it was documented). That produces one turn with two
+ * routes, which is exactly the case per-turn `byModel` exists for: the row total says
+ * what the turn cost, the split says which model charged it.
+ */
+async function midTurnSwitchCheck() {
+  section('mid-turn route switch (real turn)')
+  if (!has('session_set_model') || !has('session_usage')) {
+    skip('mid-turn route switch', 'needs session_set_model and session_usage')
+    return
+  }
+  const info = await callTool('dsh_info', { includeModels: true })
+  const routes = (info.catalog?.providerModels ?? []).filter(
+    (entry) => typeof entry.provider === 'string' && Array.isArray(entry.models) && entry.models.length > 0,
+  )
+  if (routes.length < 2) {
+    skip('mid-turn route switch', 'this profile advertises fewer than two usable routes')
+    return
+  }
+  const first = routes[0]
+  const second = routes[routes.length - 1]
+  const firstRoute = `${first.provider}/${first.models[0].id}`
+  const secondRoute = `${second.provider}/${second.models[0].id}`
+  const session = await callTool('session_create', {
+    cwd: process.cwd(),
+    provider: first.provider,
+    model: first.models[0].id,
+  })
+  const prompt = 'Run these with your shell tool one at a time: echo ONE, then echo TWO, then echo THREE. '
+    + 'After the third, reply with exactly: MID DONE.'
+  const key = `mid-turn-${Date.now()}`
+  await callTool('session_prompt', { sessionId: session.sessionId, prompt, idempotencyKey: key, wait: false })
+  // Give the turn a moment to start on the first route, then switch mid-flight.
+  await new Promise((resolve) => setTimeout(resolve, 1_500))
+  await callTool('session_set_model', {
+    sessionId: session.sessionId,
+    provider: second.provider,
+    model: second.models[0].id,
+  })
+  const reply = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt,
+    idempotencyKey: key,
+    timeoutMs: 600_000,
+  })
+  const models = reply.turn?.models ?? []
+  check(
+    models.includes(firstRoute) && models.includes(secondRoute),
+    'a mid-turn switch is visible in the turn models (both routes answered)',
+    models.join(', '),
+  )
+
+  const usage = await callTool('session_usage', { sessionId: session.sessionId, includeTurns: true })
+  const turn = (usage.sessions?.[0]?.usage?.byTurn ?? []).find((entry) => entry.turn === reply.turn?.turn)
+  const split = turn?.byModel ?? []
+  const splitTotal = split.reduce((sum, entry) => sum + (entry.totalTokens ?? 0), 0)
+  check(
+    split.length === 2 &&
+      split.some((entry) => `${entry.provider}/${entry.model}` === firstRoute) &&
+      split.some((entry) => `${entry.provider}/${entry.model}` === secondRoute) &&
+      splitTotal === turn?.totalTokens,
+    'the per-turn byModel split names both routes and sums to the turn total',
+    `${split.map((entry) => `${entry.model}:${entry.totalTokens}`).join(' + ')} = ${turn?.totalTokens ?? '?'}`,
+  )
+}
+
 // --- model selection (real turn) -------------------------------------------
 
 /**
@@ -1713,6 +1782,7 @@ try {
       await cancellationCheck()
       await orchestrationCheck()
       await modelSelectionCheck()
+      await midTurnSwitchCheck()
       await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()
     }
