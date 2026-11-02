@@ -346,7 +346,7 @@ export interface SessionUsageReport {
   /** ISO timestamp of the read, so a caller can tell a stale receipt from a fresh one. */
   readonly generatedAt: string
   /** What set of sessions the report covers. */
-  readonly scope: 'session' | 'sessionIds' | 'pluginSessions' | 'allSessions'
+  readonly scope: 'session' | 'sessionIds' | 'workspace' | 'pluginSessions' | 'allSessions'
   readonly sessions: readonly SessionUsageRow[]
   /** Sum over every row that could be read. */
   readonly totals: UsageTotals & { readonly turns: number; readonly steps: number; readonly samples: number }
@@ -1988,6 +1988,13 @@ export class DshDriver {
     sessionId?: string
     /** Several ids in one receipt; mutually exclusive with `sessionId` and `all`. */
     sessionIds?: readonly string[]
+    /**
+     * Total every session that ran in this workspace directory.
+     *
+     * Mutually exclusive with the id selectors: it is a scan, so it needs the
+     * session listing and says so when that service is absent.
+     */
+    cwd?: string
     all?: boolean
     includeSubagents?: boolean
     includeTurns?: boolean
@@ -2062,6 +2069,42 @@ export class DshDriver {
         for (const child of children.items) {
           await addRow(child.sessionId, 'subagent', child.parentSessionId)
         }
+      }
+    } else if (request.cwd !== undefined) {
+      if (request.sessionId !== undefined || request.sessionIds !== undefined || request.all === true) {
+        throw new Error('pass cwd, sessionId, sessionIds, or all — not more than one of them')
+      }
+      if (summaries === undefined) {
+        throw new DshCapabilityError(
+          'sessionController',
+          'totalling a workspace needs the session listing, which this DSH profile cannot provide: '
+            + (summariesError ?? 'no sessionController service')
+            + '. Pass sessionId or sessionIds to read known sessions instead.',
+        )
+      }
+      scope = 'workspace'
+      const canonical = await this.canonicalFilterPath(request.cwd)
+      // Subagent rows are included as their own rows (they ran in the same
+      // directory), and `includeSubagents: false` removes them like every other
+      // scope does.
+      const matched = summaries
+        .filter((entry) => entry.cwd === canonical && (includeSubagents || entry.origin !== 'subagent'))
+        .slice()
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+      for (const entry of matched.slice(0, request.limit)) {
+        await addRow(
+          entry.sessionId,
+          entry.origin === 'subagent' ? 'subagent' : 'self',
+          entry.parentSessionId,
+        )
+      }
+      if (matched.length > request.limit) {
+        notes.push(
+          `Only the ${request.limit} most recently updated session(s) in ${canonical} were scanned; raise limit to cover more.`,
+        )
+      }
+      if (matched.length === 0) {
+        notes.push(`No session this DSH knows ran in ${canonical}.`)
       }
     } else if (request.sessionId !== undefined) {
       scope = 'session'

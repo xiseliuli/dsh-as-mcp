@@ -645,6 +645,17 @@ try {
     // The explicit receipt. Equality with the reply's cumulative block is the
     // check that matters: a calling harness reads one or the other, never both,
     // and the two must not disagree about what the session spent.
+    // Per-project spend in one call: every session whose workspace is this
+    // directory, with the limit/empty cases explained in notes.
+    const workspaceUsage = await must('session_usage', { cwd: projectPath })
+    check(
+      workspaceUsage.scope === 'workspace' &&
+        (workspaceUsage.sessions ?? []).some((row) => row.sessionId === sessionId) &&
+        workspaceUsage.totals.totalTokens > 0,
+      'session_usage totals a workspace directory',
+      `${(workspaceUsage.sessions ?? []).length} session(s), ${workspaceUsage.totals.totalTokens} tokens`,
+    )
+
     const batch = await must('session_usage', { sessionIds: [sessionId, sessionId] })
     check(
       batch.scope === 'sessionIds' && (batch.sessions ?? []).length === 1 && batch.totals.totalTokens > 0,

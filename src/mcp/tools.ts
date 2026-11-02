@@ -752,6 +752,13 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'Report several known sessions in one receipt (duplicates collapsed). Mutually exclusive with '
               + 'sessionId and all; useful when a caller tracks a batch of task ids.',
             ),
+          cwd: z
+            .string()
+            .optional()
+            .describe(
+              'Total every session that ran in this workspace directory (canonicalised). Mutually '
+              + 'exclusive with sessionId/sessionIds/all; needs the session listing.',
+            ),
           all: z
             .boolean()
             .optional()
@@ -807,6 +814,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       guard('session_usage', log, async (args) => ok(await driver.sessionUsage({
         ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
         ...(args.sessionIds === undefined ? {} : { sessionIds: args.sessionIds }),
+        ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
         ...(args.all === undefined ? {} : { all: args.all }),
         ...(args.includeSubagents === undefined ? {} : { includeSubagents: args.includeSubagents }),
         ...(args.includeTurns === undefined ? {} : { includeTurns: args.includeTurns }),

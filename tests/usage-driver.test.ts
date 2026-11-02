@@ -767,6 +767,39 @@ describe('DshDriver.sessionUsage', () => {
     expect(report.totals.totalTokens).toBe(expected)
   })
 
+  it('totals every session that ran in one workspace directory', async () => {
+    const harness = fakeHarness({
+      logs: { 'session-1': FIRST_TURN, 'session-2': FIRST_TURN, 'session-3': FIRST_TURN },
+      summaries: [
+        summary('session-1', { cwd: '/tmp/project', updatedAt: 3 }),
+        summary('session-2', { cwd: '/tmp/project', updatedAt: 2 }),
+        summary('session-3', { cwd: '/tmp/elsewhere', updatedAt: 1 }),
+      ],
+    })
+    const { driver } = makeDriver(harness)
+
+    const report = await driver.sessionUsage({ cwd: '/tmp/project', limit: 10 })
+    expect(report.scope).toBe('workspace')
+    expect(report.sessions.map((row) => row.sessionId)).toEqual(['session-1', 'session-2'])
+    const expected = report.sessions.reduce((sum, row) => sum + (row.usage?.totals.totalTokens ?? 0), 0)
+    expect(report.totals.totalTokens).toBe(expected)
+    // The limit applies to the matching set, and says when it cut.
+    const capped = await driver.sessionUsage({ cwd: '/tmp/project', limit: 1 })
+    expect(capped.sessions).toHaveLength(1)
+    expect((capped.notes ?? []).some((note) => /raise limit/.test(note))).toBe(true)
+    // An empty workspace is explained, not silently zero.
+    const none = await driver.sessionUsage({ cwd: '/tmp/nowhere', limit: 5 })
+    expect(none.sessions).toHaveLength(0)
+    expect((none.notes ?? []).some((note) => /No session this DSH knows ran in/.test(note))).toBe(true)
+  })
+
+  it('refuses mixing cwd with the id selectors', async () => {
+    const harness = treeHarness()
+    const { driver } = makeDriver(harness)
+    await expect(driver.sessionUsage({ cwd: '/tmp', sessionId: 'session-1', limit: 5 }))
+      .rejects.toThrow(/not more than one of them/)
+  })
+
   it('refuses mixing sessionIds with sessionId or all', async () => {
     const harness = treeHarness()
     const { driver } = makeDriver(harness)

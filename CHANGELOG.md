@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.23.0
+
+- `session_usage { cwd }` totals every session that ran in one workspace
+  directory (canonicalised), newest first and bounded by `limit`. Subagent rows
+  fold in like every other scope, an empty directory is explained in `notes`, and
+  mixing it with the id selectors is refused. This is "what did this project
+  cost?" in one call instead of listing then batching.
+
 ## 0.22.0
 
 - `shell_list` gained a `running` filter (`true` only live jobs, `false` only
