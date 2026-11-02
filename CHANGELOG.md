@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.33.0
+
+- `session_list` exposes parentage: a subagent session carries `parentSessionId` and
+  `origin: "subagent"`, so a caller can reconstruct the agent tree from the flat list
+  without reading each transcript. The fields come from the same session listing the
+  call already performs, so there is no extra read.
+- Verified live with a real spawned subagent: the child row named the parent and
+  origin, the root row carried neither (live-checks --with-subagent).
+
 ## 0.32.1
 
 - `session_messages { includeToolCalls: true }` now also reports each call's

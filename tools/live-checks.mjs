@@ -496,10 +496,23 @@ async function subagentCheck() {
       `${(transcript.messages ?? []).length} message(s)`,
     )
     const listed = await callTool('session_list', { limit: 10 })
+    const rows = listed.sessions ?? []
+    const childRow = rows.find((entry) => entry.sessionId === child.sessionId)
     check(
-      (listed.sessions ?? []).some((entry) => entry.sessionId === child.sessionId),
+      childRow !== undefined,
       'the subagent session is listed with its parent',
       `${listed.total ?? '?'} session(s)`,
+    )
+    check(
+      childRow?.parentSessionId === session.sessionId && childRow?.origin === 'subagent',
+      'session_list names the subagent parent and origin',
+      `parent ${String(childRow?.parentSessionId ?? 'absent').slice(0, 16)}`,
+    )
+    const parentRow = rows.find((entry) => entry.sessionId === session.sessionId)
+    check(
+      parentRow?.parentSessionId === undefined,
+      'a root session has no parent recorded',
+      parentRow === undefined ? 'not listed' : 'root',
     )
   }
 }

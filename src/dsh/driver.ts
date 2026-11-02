@@ -221,6 +221,10 @@ export interface SessionInfo {
   readonly updatedAt: number
   /** Latest session title, when the caller asked for titles and the log has one. */
   readonly title?: string
+  /** The session this one was spawned from, for subagent sessions. */
+  readonly parentSessionId?: string
+  /** `subagent` when the harness created this session as an agent's child. */
+  readonly origin?: 'subagent'
 }
 
 /** One tool invocation the agent made while answering. */
@@ -1539,6 +1543,11 @@ export class DshDriver {
         blank: item.blank,
         updatedAt: item.updatedAt,
         ...(titles.get(item.sessionId) === undefined ? {} : { title: titles.get(item.sessionId) as string }),
+        // Parentage is what turns a flat list into an agent tree: a caller can
+        // see which sessions are subagents of the one it started, without reading
+        // each transcript.
+        ...(item.parentSessionId === undefined ? {} : { parentSessionId: item.parentSessionId }),
+        ...(item.origin === 'subagent' ? { origin: 'subagent' as const } : {}),
       })),
     }
   }

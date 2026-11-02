@@ -445,7 +445,35 @@ describe('DshDriver.readQueue', () => {
   })
 })
 
-describe('DshDriver.searchSessions', () => {
+describe('session_list parentage', () => {
+  it('reports a subagent session parent and origin without extra reads', async () => {
+    const sessions = fakeSessions()
+    sessions.controller.list = async () => ({
+      items: [
+        { sessionId: 'session-1', cwd: '/tmp', running: false, blank: false, updatedAt: 2 },
+        {
+          sessionId: 'session-child',
+          cwd: '/tmp',
+          running: false,
+          blank: false,
+          updatedAt: 1,
+          parentSessionId: 'session-1',
+          origin: 'subagent',
+        },
+      ],
+    })
+    const { driver } = driverWith(sessions)
+    const listed = await driver.listSessions(10)
+    const parent = listed.sessions.find((entry) => entry.sessionId === 'session-1')
+    const child = listed.sessions.find((entry) => entry.sessionId === 'session-child')
+    expect(parent?.parentSessionId).toBeUndefined()
+    expect(parent?.origin).toBeUndefined()
+    expect(child?.parentSessionId).toBe('session-1')
+    expect(child?.origin).toBe('subagent')
+  })
+})
+
+describe('DshDriver updateQueue', () => {
   function searchable(
     result: { items: { sessionId: string; snippet: string }[]; hasMore: boolean },
     summaries: { sessionId: string; cwd?: string; updatedAt?: number; running?: boolean }[] = [],
