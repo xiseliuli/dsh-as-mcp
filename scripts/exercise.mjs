@@ -972,9 +972,11 @@ try {
     const loopDir = join(projectPath, 'loop-dir')
     await mkdir(loopDir, { recursive: true })
     await symlink(projectPath, join(loopDir, 'back'))
+    // The walk of a small project finishes in milliseconds; the wide window only turns
+    // an endless following-walk into a failure, it does not measure speed.
     const loopWalk = await Promise.race([
       must('file_list', { path: projectPath, recursive: true }),
-      new Promise((resolve) => setTimeout(() => resolve(undefined), 5_000)),
+      new Promise((resolve) => setTimeout(() => resolve(undefined), 15_000)),
     ])
     check(
       loopWalk !== undefined && (loopWalk.entries ?? []).some((entry) => entry.path === 'loop-dir/back'),
@@ -1006,7 +1008,8 @@ try {
     check(typeof job.jobId === 'string', 'shell_start returns a job id', job.jobId)
     let collected = ''
     let page
-    for (let attempt = 0; attempt < 40; attempt += 1) {
+    // ~0.3 s job polled every 100 ms; a loaded machine should still be far inside this.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       page = await must('shell_output', { jobId: job.jobId })
       collected += page.output ?? ''
       if (page.done) break

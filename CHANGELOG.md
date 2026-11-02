@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.43
+
+- The same self-inflicted-flake audit applied to the acceptance script: the symlink-loop
+  walk's 5 s race is now 15 s (the project is tiny, so the window only catches an endless
+  following-walk rather than measuring speed), and the background-job output poll allows
+  10 s for a 0.3 s job instead of 4 s.
+
 ## 0.52.42
 
 - Two more guards against self-inflicted flakiness. The steering checks start their long
