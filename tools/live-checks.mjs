@@ -273,8 +273,12 @@ async function shellChecks() {
     'shell_list { running: true } includes the live job',
     `${(listed.jobs ?? []).length} running`,
   )
-  const killed = await callTool('shell_kill', { jobId: running.jobId })
-  check(killed.killed === true && killed.status === 'killed', 'shell_kill stops it', killed.status)
+  const killed = await callTool('shell_kill', { jobId: running.jobId, waitMs: 2_000 })
+  check(
+    killed.killed === true && killed.status === 'killed',
+    'shell_kill { waitMs } stops it and waits for the job to settle',
+    killed.status,
+  )
   const afterKill = await callTool('shell_list', { running: true })
   check(
     !(afterKill.jobs ?? []).some((job) => job.jobId === running.jobId),
@@ -831,6 +835,38 @@ async function toolBridgeChecks() {
 
   // A listed tool given no arguments must fail with its own validation message, not
   // a transport error: that message is what tells a caller how to fix the call.
+  // `maxResultChars` is the flood guard: a tool can return a whole file, and the
+  // reply must say how big the untruncated text was instead of echoing it.
+  const readTool = tools.find((tool) => tool.name === 'read')
+  if (readTool !== undefined && has('file_write')) {
+    const bigPath = join('/tmp', `dsh-as-mcp-live-bridge-${process.pid}.txt`)
+    try {
+      await callTool('file_write', { path: bigPath, content: 'x'.repeat(5_000) })
+      // The agent's `read` tool names its argument `file_path`; older shapes use
+      // `path`. Try both rather than pinning the script to one harness version.
+      const readVia = async (argumentName) => attemptTool('dsh_tool_call', {
+        name: 'read',
+        args: { [argumentName]: bigPath },
+        sessionId: session.sessionId,
+        maxResultChars: 100,
+      })
+      const attempt = await readVia('file_path')
+      const clamped = attempt.ok ? attempt.payload : (await readVia('path')).payload
+      check(
+        // The agent's own `read` formats text (line numbers, its own line cap), so the
+        // untruncated size is not the file size — only that it exceeded our cap.
+        clamped !== undefined && clamped.truncated === true && clamped.resultBytes > 100 &&
+          String(clamped.text ?? '').length <= 100,
+        'dsh_tool_call { maxResultChars } bounds the result and reports its size',
+        `${clamped?.resultBytes ?? '?'} bytes, ${String(clamped?.text ?? '').length} chars returned`,
+      )
+    } finally {
+      rmSync(bigPath, { force: true })
+    }
+  } else {
+    skip('dsh_tool_call result cap', 'the agent exposes no read tool')
+  }
+
   const first = tools.find((tool) => typeof tool.name === 'string')
   if (first !== undefined) {
     const invalid = await attemptTool('dsh_tool_call', {

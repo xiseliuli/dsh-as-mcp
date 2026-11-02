@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.18
+
+- Two more documented options now have live evidence: `dsh_tool_call { maxResultChars }`
+  reads a file through the agent's `read` tool with a 100-char cap and asserts `truncated`
+  plus the untruncated `resultBytes` (the agent's own formatting makes that size smaller
+  than the file — the check asserts "bigger than the cap", not the file size), and
+  `shell_kill { waitMs }` kills a running job with an explicit wait and still reports
+  `status: "killed"`. The read call accepts both `file_path` and `path` argument shapes so
+  the check is not pinned to one harness version.
+
 ## 0.52.17
 
 - Live-checked the options documented in 0.52.16, and corrected the docs where the
