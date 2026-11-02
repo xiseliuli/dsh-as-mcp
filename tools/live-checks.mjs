@@ -1652,7 +1652,9 @@ async function cancellationCheck() {
         name: 'session_prompt',
         arguments: {
           sessionId: session.sessionId,
-          prompt: 'Write a 600-word essay about cartography. Do not use tools.',
+          // A tool call makes the turn reliably long enough to queue behind and then
+          // cancel; a pure generation turn can finish between the two requests.
+          prompt: 'Run the bash command: sleep 10; echo CANCELLED-WINDOW. Then reply exactly: CANCEL DONE.',
           timeoutMs: 300_000,
         },
       },

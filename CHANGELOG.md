@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.76
+
+- Documented a distinction found while probing what happens to a message queued behind a
+  cancelled turn: this endpoint runs **one turn at a time per session** (`enqueueTurn`), so a
+  second prompt from the same connection waits behind the running turn instead of entering the
+  harness inbox — measured at 21.9 s for a 20 s turn. Queuing *behind* a running turn needs a
+  second MCP client (and even then the queue view did not confirm the message while a waiting
+  request was in flight), which is now stated in the `session_prompt` row of both READMEs; the
+  probe's cancellation assertion was removed rather than kept as a check that depends on that
+  in-flight timing.
+
 ## 0.52.75
 
 - After a cancelled wait returns, the check now also requires the turn to actually stop: the
