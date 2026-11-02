@@ -73,6 +73,14 @@ export interface TurnUsage extends UsageTotals {
    * prefix, or a turn still running), rather than guessed.
    */
   readonly durationMs?: number
+  /**
+   * The `provider/model` routes that reported usage inside this turn, sorted.
+   *
+   * A turn can change route mid-way (an escalation or a fallback), and a per-turn
+   * bill that says only "1682 tokens" hides which model charged them. Absent when
+   * no sample named a route (a retried attempt has no assistant message to attribute).
+   */
+  readonly models?: readonly string[]
 }
 
 /**
@@ -144,6 +152,7 @@ interface Slot {
 interface TurnCell {
   buckets: UsageBuckets
   readonly steps: Set<number>
+  readonly routes: Set<string>
 }
 
 /** A running per-route cell. */
@@ -342,7 +351,7 @@ function modelCell(cells: Map<string, ModelCell>, route: Route | null): ModelCel
 function turnCell(cells: Map<number, TurnCell>, turn: number): TurnCell {
   const existing = cells.get(turn)
   if (existing !== undefined) return existing
-  const created: TurnCell = { buckets: emptyBuckets(), steps: new Set<number>() }
+  const created: TurnCell = { buckets: emptyBuckets(), steps: new Set<number>(), routes: new Set() }
   cells.set(turn, created)
   return created
 }
@@ -404,6 +413,9 @@ export function foldSessionUsage(
       ignoredSamples += 1
       continue
     }
+    if (sample.route !== null) {
+      turnCell(turns, position.turn).routes.add(`${sample.route.provider}/${sample.route.model}`)
+    }
 
     const previous = slot !== undefined && slot.turn === position.turn && slot.step === position.step
       ? slot
@@ -443,6 +455,7 @@ export function foldSessionUsage(
         turn,
         steps: cell.steps.size,
         ...toTotals(cell.buckets),
+        ...(cell.routes.size === 0 ? {} : { models: [...cell.routes].sort() }),
         ...(startedAt === undefined || endedAt === undefined
           ? {}
           : { durationMs: Math.max(0, endedAt - startedAt) }),

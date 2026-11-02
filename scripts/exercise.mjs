@@ -732,6 +732,14 @@ try {
       'a settled turn in the breakdown carries its wall-clock duration',
       `${perTurn.filter((turn) => typeof turn.durationMs === 'number').length} of ${perTurn.length} turn(s)`,
     )
+    // Per-turn bills can also say which route charged the tokens.
+    const modelledTurns = perTurn.filter((turn) => Array.isArray(turn.models))
+    check(
+      modelledTurns.length > 0 &&
+        modelledTurns.every((turn) => turn.models.every((route) => typeof route === 'string' && route.includes('/'))),
+      'a turn that billed tokens names the route that charged them',
+      `${modelledTurns.length} of ${perTurn.length} turn(s) with models`,
+    )
     check(
       typeof receipt.cost?.available === 'boolean',
       'the receipt states whether money is available',

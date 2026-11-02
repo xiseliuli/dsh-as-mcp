@@ -433,7 +433,13 @@ describe('DshDriver.promptSession usage receipts', () => {
     expect(reply.turn?.reply).toContain('Done.')
     // The turn total covers both steps, including the one after a tool round trip.
     // The log's turn/start and turn/end events also give the turn its duration.
-    expect(reply.turn?.usage).toEqual({ turn: 2, steps: 2, durationMs: 4, ...PROMPT_TURN_TOTALS })
+    expect(reply.turn?.usage).toEqual({
+      turn: 2,
+      steps: 2,
+      durationMs: 4,
+      models: ['deepseek/deepseek-v4.1-flash'],
+      ...PROMPT_TURN_TOTALS,
+    })
 
     expect(reply.session?.sessionId).toBe('session-1')
     // Cumulative over the whole log, not just the turn this prompt ran.
@@ -487,7 +493,12 @@ describe('DshDriver.promptSession usage receipts', () => {
     expect(reply.turn?.turn).toBe(2)
     expect(reply.turn?.turnEndReason).toBeNull()
     // The open turn has already billed one settlement, and it is folded in.
-    expect(reply.turn?.usage).toEqual({ turn: 2, steps: 1, ...OPEN_TURN_TOTALS })
+    expect(reply.turn?.usage).toEqual({
+      turn: 2,
+      steps: 1,
+      models: ['deepseek/deepseek-v4.1-flash'],
+      ...OPEN_TURN_TOTALS,
+    })
     expect(reply.session?.usage.partial).toBe(true)
     expect(reply.session?.usage.totals).toEqual({
       uncachedInputTokens: 17,
@@ -521,7 +532,13 @@ describe('DshDriver.promptSession usage receipts', () => {
     expect(reply.session?.usage.verifiedAgainstProjection).toBe(false)
     expect(reply.session?.usage.projectionTotals).toEqual({ ...disagreeing, totalTokens: 1698 })
     // The log's turn/start and turn/end events also give the turn its duration.
-    expect(reply.turn?.usage).toEqual({ turn: 2, steps: 2, durationMs: 4, ...PROMPT_TURN_TOTALS })
+    expect(reply.turn?.usage).toEqual({
+      turn: 2,
+      steps: 2,
+      durationMs: 4,
+      models: ['deepseek/deepseek-v4.1-flash'],
+      ...PROMPT_TURN_TOTALS,
+    })
   })
 
   it('says why a reply carries no usage instead of looking like a zero-token turn', async () => {
@@ -891,7 +908,7 @@ describe('DshDriver.sessionUsage', () => {
 
     // includeTurns: true is what carries the per-turn breakdown.
     expect(report.sessions[0]?.usage?.byTurn).toEqual([
-      { turn: 1, steps: 1, durationMs: 2, ...SELF_TOTALS },
+      { turn: 1, steps: 1, durationMs: 2, models: ['deepseek/deepseek-v4.1-flash'], ...SELF_TOTALS },
     ])
     expect(report.sessions[1]?.usage?.byTurn).toHaveLength(1)
     expect(report.sessions[1]?.usage?.steps).toBe(2)

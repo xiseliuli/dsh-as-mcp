@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.44.0
+
+- Per-turn usage rows now also carry `models`: the `provider/model` routes that charged
+  that turn, sorted, so a per-round bill can show which model spent the tokens (a route
+  that changed mid-turn is exactly what a bare total hides). A turn whose only samples
+  were unattributed retries carries none rather than an empty list.
+- Usage-fold test covers per-turn routes including the unattributed case; the
+  acceptance run asserts real turns name their routes. Both READMEs updated.
+
 ## 0.43.0
 
 - `session_usage { includeTurns: true }` per-turn rows now carry `durationMs` (from the

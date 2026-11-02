@@ -72,6 +72,27 @@ describe('foldSessionUsage', () => {
     expect(folded.ignoredSamples).toBe(0)
   })
 
+  it('names the routes that charged each turn', () => {
+    const folded = foldSessionUsage([
+      settlement(1, 1, 1, usage(10, 0, 1), { provider: 'deepseek', model: 'cheap' }),
+      settlement(2, 2, 1, usage(10, 0, 1), { provider: 'deepseek', model: 'expensive' }),
+      settlement(3, 2, 2, usage(10, 0, 1), { provider: 'deepseek', model: 'expensive' }),
+      // A sample with no source (a corrected/retried report) still counts toward the
+      // turn's tokens, but it names no route, so the models list stays absent.
+      event('assistant/message', {
+        turn: 3,
+        step: 1,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+        usage: usage(5, 0, 0),
+      }, 4),
+    ])
+    expect(folded.byTurn.map((turn) => [turn.turn, turn.models])).toEqual([
+      [1, ['deepseek/cheap']],
+      [2, ['deepseek/expensive']],
+      [3, undefined],
+    ])
+  })
+
   it('reports each turn\'s wall-clock duration when the log has both boundaries', () => {
     const folded = foldSessionUsage([
       event('turn/start', { turn: 1 }, 1, 1_000),
@@ -94,8 +115,26 @@ describe('foldSessionUsage', () => {
       settlement(3, 2, 1, usage(100, 0, 10)),
     ])
     expect(folded.byTurn).toEqual([
-      { turn: 1, steps: 2, uncachedInputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 20, totalTokens: 220 },
-      { turn: 2, steps: 1, uncachedInputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 10, totalTokens: 110 },
+      {
+        turn: 1,
+        steps: 2,
+        uncachedInputTokens: 200,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens: 20,
+        totalTokens: 220,
+        models: ['deepseek/deepseek-v4.1-flash'],
+      },
+      {
+        turn: 2,
+        steps: 1,
+        uncachedInputTokens: 100,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens: 10,
+        totalTokens: 110,
+        models: ['deepseek/deepseek-v4.1-flash'],
+      },
     ])
     expect(folded.byTurn.reduce((sum, turn) => sum + turn.totalTokens, 0)).toBe(folded.totals.totalTokens)
     expect(usageOfTurn(folded, 2)?.totalTokens).toBe(110)
