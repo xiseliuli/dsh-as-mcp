@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.35
+
+- Re-measured every row of the deployment-shape matrix on the current build instead of
+  trusting earlier runs: all six groups is **143/143** with `--with-model` (the table said
+  130 from a build before later checks were added); the narrowed shapes re-confirmed at
+  84/84, 59/59 and 65/65. Both READMEs carry the corrected number.
+
 ## 0.52.34
 
 - Both READMEs now carry the deployment-shape matrix the last four rounds produced: all six
