@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.3
+
+- `session_tool_result` now has owned-scope coverage: under `session.scope: "owned"` it
+  refuses a foreign session's tool result (the read that could otherwise expose output by
+  guessing call ids) and still answers for a session the endpoint created. The behavior
+  was already correct — `assertSessionVisible` — but every other session tool had a test
+  for the refusal path and this one did not.
+
 ## 0.52.2
 
 - The documentation drift check now runs in the test suite too (`tests/docs-consistency.test.ts`

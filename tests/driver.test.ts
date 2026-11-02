@@ -295,6 +295,33 @@ describe('session.scope: owned', () => {
       .rejects.toThrow(/session\.scope is "owned"/)
   })
 
+  it('refuses to read a tool result of a session it did not create', async () => {
+    // session_tool_result is a read like any other: the scope check is what keeps a
+    // token holder from reading a foreign session's tool output by guessing ids.
+    const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
+    sessions.log.push(event('tool/result', {
+      turn: 1,
+      step: 0,
+      message: { role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: 'secret output' }] },
+    }, 1))
+    const driver = scoped(sessions, 'owned')
+    await expect(driver.readToolResult({ sessionId: 'session-1', callId: 'call-1', maxChars: 100 }))
+      .rejects.toThrow(/session\.scope is "owned"/)
+  })
+
+  it('allows a tool result read on a session it created', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
+    sessions.log.push(event('tool/result', {
+      turn: 1,
+      step: 0,
+      message: { role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: 'mine' }] },
+    }, 1))
+    const driver = scoped(sessions, 'owned')
+    await driver.createSession({ cwd: '/tmp' })
+    await expect(driver.readToolResult({ sessionId: 'session-1', callId: 'call-1', maxChars: 100 }))
+      .resolves.toMatchObject({ callId: 'call-1', text: 'mine' })
+  })
+
   it('allows a session it created and forked', async () => {
     const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
     const driver = scoped(sessions, 'owned')
