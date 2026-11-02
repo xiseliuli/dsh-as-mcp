@@ -1040,6 +1040,43 @@ async function concurrencyChecks() {
     for (let index = 0; index < 8; index += 1) rmSync(`${path}.${index}`, { force: true })
   }
 
+  // Compare-and-swap across interleaved clients: A reads the hash, B changes the
+  // file, A's guarded write must be refused (and name the new hash), then A re-reads
+  // and succeeds. This is the lost-update window a CAS is for.
+  if (has('file_write') && has('file_read')) {
+    const path = join('/tmp', `dsh-as-mcp-live-cas-${process.pid}.txt`)
+    try {
+      await callTool('file_write', { path, content: 'initial\n' })
+      const readA = await callTool('file_read', { path, sha256: true })
+      await callTool('file_write', { path, content: 'written by B\n' })
+      const stale = await attemptTool('file_write', {
+        path,
+        content: 'written by A\n',
+        expectedSha256: readA.sha256,
+      })
+      const afterStale = await callTool('file_read', { path, sha256: true })
+      check(
+        stale.ok === false && /current sha256 is/.test(stale.error ?? '') &&
+          afterStale.text === 'written by B\n',
+        "a stale client's guarded write is refused and leaves B's content intact",
+        stale.error?.slice(0, 60),
+      )
+      const retried = await callTool('file_write', {
+        path,
+        content: 'written by A\n',
+        expectedSha256: afterStale.sha256,
+      })
+      check(
+        retried.sha256 !== afterStale.sha256 &&
+          (await callTool('file_read', { path })).text === 'written by A\n',
+        'the retry with the current hash succeeds',
+        `${String(retried.sha256).slice(0, 12)}…`,
+      )
+    } finally {
+      rmSync(path, { force: true })
+    }
+  }
+
   if (has('session_list')) {
     const pages = await Promise.all(Array.from({ length: 12 }, () => callTool('session_list', { limit: 3 })))
     const totals = new Set(pages.map((page) => page.total))

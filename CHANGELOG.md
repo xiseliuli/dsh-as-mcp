@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.1
+
+- `tools/live-checks.mjs` exercises the compare-and-swap lost-update window for real:
+  client A reads the hash, client B rewrites the file, A's guarded write is refused with
+  the new hash and leaves B's content intact, and A's retry with the current hash
+  succeeds. The earlier tests covered the one-client cases; this covers the interleaving
+  the guard exists for.
+
 ## 0.51.0
 
 - `file_list { sha256: true }` hashes each file's content for bulk change detection; a
