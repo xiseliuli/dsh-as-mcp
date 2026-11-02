@@ -817,8 +817,8 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 面板里有、配置不接受的项写了也没用）；`package.json` 版本与 CHANGELOG 最新标题一致；发布 `files` 列表
 与实际文件一致（且不含维护者专用目录）；README 引用的 `docs/*.md` 与脚本路径都存在；`docs/LIVE-VERIFICATION.md` 里引用的每个版本号都在 CHANGELOG
 中有对应条目（引用一个从未发布的版本同样是漂移）；设置面板用到的本地化键在**中英两份字典里都存在且键集相同**，
-并列出未被引用的死键；以及**每个 inputSchema 选项都真的传到了 driver**（只加进 schema、handler 却没转发的参数会被接受却静默失效——这个错误在检查存在前被发布过三次）。它是
-`tools/release.sh` 的一步，也可以单独运行。
+并列出未被引用的死键；以及**每个 inputSchema 选项都真的传到了 driver**（只加进 schema、handler 却没转发的参数会被接受却静默失效——这个错误在检查存在前被发布过三次）。它既是 `tools/release.sh` 的一步，也会随测试套件一起跑（`vitest run` 会直接失败，而不
+把漂移留到发布时才发现）；也可以单独运行。
 
 `tools/release.sh` 把发布检查清单变成可执行脚本：两端 typecheck、测试、两个 bundle、打包、断言包里没有
 维护者专用目录、可选 live 检查（`--live URL [--with-model] [--with-subagent]`，或 `--full-live` 一次带上两者）、可选的完整验收（`--acceptance`：自建临时 profile 跑完

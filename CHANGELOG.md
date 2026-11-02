@@ -3,6 +3,12 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.2
+
+- The documentation drift check now runs in the test suite too (`tests/docs-consistency.test.ts`
+  spawns `tools/check-docs.mjs`), so `vitest run` alone reports README/changelog/wiring
+  drift instead of leaving it for the release step. Both READMEs say where it runs.
+
 ## 0.52.1
 
 - Documented and asserted where a model switch takes effect: a `session_set_model` during
