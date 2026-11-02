@@ -832,7 +832,12 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp                     # 不调用模型
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model        # 会消耗真实 token
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-subagent     # 还会真的spawn一个 subagent
+node tools/live-checks.mjs --url http://127.0.0.1:8790/mcp --old-endpoint      # 旧部署：不满足当前契约的项记为跳过
 ```
+
+检查项按端点自己的 `tools/list` 门控：旧构建没有的工具会自动记为跳过而不是失败；`--old-endpoint` 还会把
+"契约不匹配"（缺 `total`、缺 `WWW-Authenticate` 挑战）记为跳过——这样把脚本指向旧部署，得到的是"该构建
+缺少哪些契约"的说明，而不是一次失败。
 
 `smoke.mjs` 回答"这玩意儿会说 MCP 吗"，`exercise.mjs` 回答"外部 agent 真的能通过它驱动一个
 DSH 实例吗"——而为了回答这个问题，它会给一个真实的 DSH agent 下发一个真实的 prompt，对它解析到

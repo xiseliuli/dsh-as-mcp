@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.31.2
+
+- `tools/live-checks.mjs` is now usable against older deployments: every check is
+  gated on the endpoint's own `tools/list` (a build without `shell_start` or
+  `session_search` reports those sections as skipped), and `--old-endpoint` turns a
+  contract mismatch into a skip too. Against the desktop app's 0.2.0 build it
+  reports 3 protocol checks passing and 4 skips — the Bearer challenge,
+  `total`/`truncated`, paging metadata and workspace-scope usage — which is exactly
+  the list of contracts that build predates. A strict run against the current build
+  passes 16/16, so the gating does not hide a real regression.
+
 ## 0.31.1
 
 - `dsh_info.toolAvailability` now also names the tools that passed

@@ -20,6 +20,7 @@
  *   node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp
  *   node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model
  *   node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-subagent
+ *   node tools/live-checks.mjs --url http://127.0.0.1:8790/mcp --old-endpoint
  *
  * The endpoint resolution matches the shipped scripts: `--url`, then
  * `DSH_AS_MCP_URL`, then the loopback default; the token comes from `--token`,
@@ -71,7 +72,22 @@ if (token === undefined && !flag('--allow-anonymous')) process.exit(2)
 
 let passed = 0
 let failed = 0
+let skipped = 0
+/**
+ * `--old-endpoint` turns a contract mismatch into a skip.
+ *
+ * The checks describe the *current* build's contracts; an older deployment
+ * (the desktop app in this session runs 0.2.0) legitimately predates some of them.
+ * Pointing the script at such an endpoint is useful — it says exactly which
+ * contracts that build lacks — but it should not read as a failure of the run.
+ */
+const vintageEndpoint = flag('--old-endpoint')
 function check(ok, label, detail) {
+  if (!ok && vintageEndpoint) {
+    process.stdout.write(`  ${dim('-')} ${label} ${dim(`(older endpoint: ${String(detail ?? 'contract absent')})`)}\n`)
+    skipped += 1
+    return false
+  }
   const mark = ok ? green('✓') : red('✗')
   process.stdout.write(`  ${mark} ${label}${detail === undefined ? '' : ` ${dim(String(detail))}`}\n`)
   if (ok) passed += 1
@@ -135,6 +151,25 @@ async function attemptTool(name, args = {}) {
   }
 }
 
+/**
+ * The tools this endpoint advertises, read once after `initialize`.
+ *
+ * Checks are gated on it so the script can run against an older build and say
+ * "skipped" instead of reporting a missing feature as a failure. The desktop app
+ * in this session, for example, runs an old plugin build; running these checks
+ * against it should describe what that build cannot do, not accuse it.
+ */
+let surface = new Set()
+
+function has(tool) {
+  return surface.has(tool)
+}
+
+function skip(label, why) {
+  process.stdout.write(`  ${dim('-')} ${label} ${dim(`(skipped: ${why})`)}
+`)
+}
+
 // --- protocol --------------------------------------------------------------
 
 async function protocolChecks() {
@@ -186,6 +221,10 @@ async function protocolChecks() {
 
 async function shellChecks() {
   section('background shell')
+  if (!has('shell_start') || !has('shell_list') || !has('shell_kill')) {
+    skip('background shell checks', 'this endpoint advertises no shell_start/shell_list/shell_kill')
+    return
+  }
   const running = await callTool('shell_start', { command: 'sleep 20' })
   const listed = await callTool('shell_list', { running: true })
   check(
@@ -207,28 +246,40 @@ async function shellChecks() {
 
 async function listChecks() {
   section('list and paging contracts')
-  // The harness requires a directory: there is no "some default workspace" form.
-  const created = await callTool('session_create', { cwd: process.cwd() })
-  const sessionId = created.sessionId
-  const page = await callTool('session_list', { limit: 1 })
-  check(
-    page.sessions?.length <= 1 && typeof page.total === 'number' && (page.truncated === true) === (page.total > 1),
-    'session_list reports total and truncation',
-    `${page.sessions?.length ?? 0} of ${page.total ?? '?'}`,
-  )
+  let sessionId
+  if (!has('session_create') || !has('session_list')) {
+    skip('session listing checks', 'this endpoint advertises no session_create/session_list')
+  } else {
+    // The harness requires a directory: there is no "some default workspace" form.
+    const created = await callTool('session_create', { cwd: process.cwd() })
+    sessionId = created.sessionId
+    const page = await callTool('session_list', { limit: 1 })
+    check(
+      page.sessions?.length <= 1 && typeof page.total === 'number' && (page.truncated === true) === (page.total > 1),
+      'session_list reports total and truncation',
+      `${page.sessions?.length ?? 0} of ${page.total ?? '?'}`,
+    )
+  }
 
-  const path = join('/tmp', `dsh-as-mcp-live-checks-${process.pid}.txt`)
-  await callTool('file_write', { path, content: 'first line\nsecond line\nthird line\n' })
-  const sliced = await callTool('file_read', { path, maxBytes: 11 })
-  check(
-    sliced.truncated === true && typeof sliced.nextOffset === 'number' && sliced.size === 34,
-    'file_read reports truncated, nextOffset and the whole size',
-    `${sliced.bytes ?? '?'}/${sliced.size ?? '?'} bytes, next ${sliced.nextOffset ?? '?'}`,
-  )
+  if (!has('file_write') || !has('file_read')) {
+    skip('file paging checks', 'this endpoint advertises no file_write/file_read')
+  } else {
+    const path = join('/tmp', `dsh-as-mcp-live-checks-${process.pid}.txt`)
+    await callTool('file_write', { path, content: 'first line\nsecond line\nthird line\n' })
+    const sliced = await callTool('file_read', { path, maxBytes: 11 })
+    check(
+      sliced.truncated === true && typeof sliced.nextOffset === 'number' && sliced.size === 34,
+      'file_read reports truncated, nextOffset and the whole size',
+      `${sliced.bytes ?? '?'}/${sliced.size ?? '?'} bytes, next ${sliced.nextOffset ?? '?'}`,
+    )
+  }
 
   // Search is opt-in in shipped compositions, so both answers are legitimate. The
   // probe in dsh_info is the honest answer to "does search work here"; the tool
   // call must agree with it.
+  if (!has('session_search')) {
+    skip('session-search checks', 'this endpoint advertises no session_search')
+  } else {
   const info = await callTool('dsh_info', { probeSearch: true })
   const searchState = info.search
   check(
@@ -252,13 +303,29 @@ async function listChecks() {
       (search.error ?? '').slice(0, 60),
     )
   }
+  }
 
-  const usage = await callTool('session_usage', { cwd: '/tmp/definitely-no-sessions-here' })
-  check(
-    usage.scope === 'workspace' && (usage.sessions ?? []).length === 0 && (usage.notes ?? []).some((note) => /No session this DSH knows ran in/.test(note)),
-    'an empty workspace total is explained, not silently zero',
-    usage.scope,
-  )
+  if (!has('session_usage')) {
+    skip('usage-scope check', 'this endpoint advertises no session_usage')
+  } else {
+    const usage = await callTool('session_usage', { cwd: '/tmp/definitely-no-sessions-here' })
+    check(
+      usage.scope === 'workspace' && (usage.sessions ?? []).length === 0 && (usage.notes ?? []).some((note) => /No session this DSH knows ran in/.test(note)),
+      'an empty workspace total is explained, not silently zero',
+      usage.scope,
+    )
+  }
+
+  if (!has('session_queue')) {
+    skip('queue listing check', 'this endpoint advertises no session_queue')
+  } else if (sessionId !== undefined) {
+    const queue = await callTool('session_queue', { sessionId })
+    check(
+      Array.isArray(queue.queued) && (queue.note === undefined || typeof queue.note === 'string'),
+      'session_queue lists the pending inbox',
+      `${(queue.queued ?? []).length} queued`,
+    )
+  }
   return sessionId
 }
 
@@ -459,6 +526,14 @@ if (protocolVersion === undefined) {
   process.exit(2)
 }
 process.stdout.write(`${dim(`protocol ${protocolVersion}`)}\n`)
+try {
+  const listed = await rpc('tools/list', {})
+  surface = new Set((listed.tools ?? []).map((tool) => tool.name))
+  process.stdout.write(`${dim(`${surface.size} tool(s) advertised`)}\n`)
+} catch {
+  // Leaving `surface` empty makes every gated check report as skipped, which is
+  // the honest outcome when the endpoint cannot list tools.
+}
 
 try {
   await protocolChecks()
@@ -467,9 +542,13 @@ try {
   const sessionId = await listChecks()
   const withSubagent = flag('--with-subagent')
   if (flag('--with-model') || withSubagent) {
-    await progressCheck(sessionId)
-    await cancellationCheck()
-    if (withSubagent) await subagentCheck()
+    if (sessionId === undefined || !has('session_prompt')) {
+      skip('model-turn checks', 'needs session_prompt and a created session')
+    } else {
+      await progressCheck(sessionId)
+      await cancellationCheck()
+      if (withSubagent) await subagentCheck()
+    }
   } else {
     process.stdout.write(
       `\n${dim('skipping the checks that spend tokens: pass --with-model (progress/cancellation) '
@@ -480,5 +559,8 @@ try {
   check(false, 'run aborted', error instanceof Error ? error.message : String(error))
 }
 
-process.stdout.write(`\n${failed === 0 ? green('ALL GOOD') : red('FAILURES')} — ${passed} passed, ${failed} failed\n`)
+process.stdout.write(
+  `\n${failed === 0 ? green('ALL GOOD') : red('FAILURES')} — ${passed} passed, ${failed} failed`
+    + `${skipped === 0 ? '' : `, ${skipped} skipped (older endpoint)`}\n`,
+)
 process.exit(failed === 0 ? 0 : 1)

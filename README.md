@@ -960,7 +960,13 @@ failure.
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp                     # no LLM calls
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model        # spends real tokens
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-subagent     # also spawns a real subagent
+node tools/live-checks.mjs --url http://127.0.0.1:8790/mcp --old-endpoint      # older deployment: mismatches are skips
 ```
+
+Checks are gated on the endpoint's own `tools/list`, so a build that predates a tool reports it as skipped
+rather than failed; `--old-endpoint` also turns a contract mismatch (a missing `total`, an absent
+`WWW-Authenticate` challenge) into a skip, which is how pointing this script at an older deployment
+describes what that build lacks instead of failing.
 
 Two rules this codebase learned the hard way:
 
