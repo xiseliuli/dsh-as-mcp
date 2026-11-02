@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.8
+
+- Documented and asserted **subagent route inheritance**: a child spawned by a session
+  created on a non-default route spends on that same route (probe: parent
+  `deepseek-account/deepseek-flash` → child billed on the same route), so a caller
+  choosing the parent's model steers what its agents cost. Both READMEs say so, the live
+  subagent check asserts the child's `byModel` routes are within the parent's, and the
+  verification matrix records the probe.
+
 ## 0.51.7
 
 - Full sweep recorded in `docs/LIVE-VERIFICATION.md`: one profile with the search index

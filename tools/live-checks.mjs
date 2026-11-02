@@ -1290,6 +1290,19 @@ async function subagentCheck() {
   )
 
   if (child !== undefined) {
+    // Route inheritance, verified live before it was documented: a child spawned by a
+    // session created on a non-default route spent on that same route.
+    const routesOf = (row) => (row?.usage?.byModel ?? [])
+      .map((entry) => `${entry.provider}/${entry.model}`)
+      .filter((route) => !route.startsWith('null/'))
+    const parentRoutes = routesOf((report.sessions ?? []).find((row) => row.origin === 'self'))
+    const childRoutes = routesOf(child)
+    check(
+      childRoutes.length > 0 && childRoutes.every((route) => parentRoutes.includes(route)),
+      "a subagent spends on its parent session's selected route",
+      `child ${childRoutes.join(',') || '?'} within parent ${parentRoutes.join(',') || '?'}`,
+    )
+
     // Subagent sessions belong to the session tree: reading the child is reading
     // the cost of the parent, so this must work under session.scope "owned" too.
     const transcript = await callTool('session_messages', { sessionId: child.sessionId, limit: 5 })
