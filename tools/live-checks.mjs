@@ -640,6 +640,23 @@ async function filePagingChecks() {
     // 5000 bytes of 'a' then a 3-byte euro: offset 5001 leaves the euro's last two
     // bytes orphaned, which decode as two replacement characters. The point is that
     // the remainder after them is still aligned with the file.
+    // An offset at or past EOF is an empty, complete read, not an error: a paging
+    // loop that starts from "past the end" should stop rather than crash.
+    // Offsets are BYTES: '€' is one character but three bytes, so use byteLength.
+    const eofOffset = Buffer.byteLength(head + euro + tail, 'utf8')
+    const atEnd = await callTool('file_read', { path, offset: eofOffset })
+    check(
+      atEnd.text === '' && atEnd.truncated === false && atEnd.nextOffset === undefined,
+      'an offset at EOF is an empty complete read',
+      `${atEnd.bytes ?? '?'} bytes`,
+    )
+    const pastEnd = await attemptTool('file_read', { path, offset: 10_000_000 })
+    check(
+      pastEnd.ok === true && pastEnd.payload?.text === '',
+      'an offset past EOF is empty rather than an error',
+      pastEnd.ok ? '' : pastEnd.error?.slice(0, 60),
+    )
+
     const split = await callTool('file_read', { path, offset: 5_001, maxBytes: 100 })
     const replacements = /^\uFFFD*/.exec(split.text)?.[0].length ?? 0
     check(
@@ -1677,7 +1694,19 @@ async function orchestrationCheck() {
     preserved = remaining.length === 1
     check(preserved, 'cancelling preserves the work queued behind the turn', `${remaining.length} left`)
     if (preserved) {
-      // Editing a pending message must change what runs, not just what a listing shows.
+      // A message id that is not in the queue must say so instead of silently accepting.
+    const bogus = await attemptTool('session_queue', {
+      sessionId: session.sessionId,
+      messageId: 'no-such-message',
+      action: 'remove',
+    })
+    check(
+      bogus.ok === false && /no queued message|not found|unknown|no longer pending/i.test(bogus.error ?? ''),
+      'an unknown queued message id is refused with a readable message',
+      bogus.error?.slice(0, 70),
+    )
+
+    // Editing a pending message must change what runs, not just what a listing shows.
       const edited = await callTool('session_queue', {
         sessionId: session.sessionId,
         messageId: remaining[0].id,

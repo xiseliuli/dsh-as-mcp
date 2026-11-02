@@ -214,7 +214,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `session_tool_result` | 读取某次工具调用的结果，可用 `callId`（来自 `session_messages { includeToolCalls: true }`）或 `toolName`（该工具最近一次已完成的调用）定位：返回文本、原始长度、harness 是否标记为错误；`maxChars` 截断，`from: "end"` 保留尾部（堆栈与错误通常在末尾）。调试失败的工具而不必重读整段记录。 |
 | `session_cancel` | 让 agent 停下当前这一轮。 |
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。传 `sessionIds` 可一次结算多个已知会话，传 `cwd` 可汇总某个工作目录里跑过的所有会话。 |
-| `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件，`maxBytes` 用更小的窗口降低单次开销；`sha256: true` 返回整个文件的哈希，作为后续写入/编辑的比较并交换值。 |
+| `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件（两者都是**字节**偏移，因此 EOF 处或之后的偏移是空的完整读取），`maxBytes` 用更小的窗口降低单次开销；`sha256: true` 返回整个文件的哈希，作为后续写入/编辑的比较并交换值。 |
 | `file_read_image` | 读取图片（png/jpeg/gif/webp/bmp，按字节嗅探）并以 MCP image block 返回，让你直接看截图或图表而不是靠猜。上限 8 MiB。 |
 | `file_write` | 经 DSH 文件系统服务创建或覆盖文件。默认会创建缺失的父目录（`createDirectories: false` 则要求父目录已存在）；`expectedSha256` 让写入变成比较并交换：文件在读到哈希后变过就会被拒绝。 |
 | `file_edit` | 在一个文件里替换字面文本（`oldText` → `newText`）：精确匹配，除非 `replaceAll` 否则要求唯一，歧义匹配不写入，`expectedSha256` 在文件读后变过时拒绝编辑。不再需要"整读 + 整写"。 |

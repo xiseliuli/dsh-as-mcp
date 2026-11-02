@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.24
+
+- Two boundary contracts now have live checks: a `file_read` offset at EOF is an empty
+  complete read (`truncated: false`, no `nextOffset`) and a past-EOF offset is empty rather
+  than an error, so a paging loop terminates cleanly; and `session_queue` with an unknown
+  `messageId` is refused with a readable message ("queued item is no longer pending")
+  instead of silently accepting.
+- The first run failed both new checks for reasons in the *script*, not the plugin: the
+  EOF offset was computed from JavaScript string length while the tool counts **bytes**
+  ('€' is one char, three bytes), and the queue regex did not accept the harness's
+  "no longer pending" wording. Both fixed, and the README now says the paging offsets are
+  byte offsets.
+
 ## 0.52.23
 
 - The orchestration live check now edits a pending message while it waits (`action:
