@@ -28,14 +28,18 @@ afterEach(async () => {
   for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
 })
 
-/** What a target carries; the driver only ever reads `displayPath` through us. */
+/** What a target carries; the driver reads `displayPath`, `type` and `targetKey`. */
 function targetFor(displayPath: string, type: 'file' | 'directory' = 'file'): DshFsTarget {
-  return { displayPath, type } as unknown as DshFsTarget
+  // The real seam resolves links, so its key is an identity: two paths to the
+  // same directory share one. A recursive walk relies on that to stop cycles.
+  return { displayPath, type, targetKey: `${type}:${displayPath}` } as unknown as DshFsTarget
 }
 
 interface FileSystemCalls {
   readBytes: number
   readByteRange: { offset: number; length: number }[]
+  /** Files written through the seam, in call order. */
+  writes: string[]
 }
 
 /**
@@ -51,7 +55,7 @@ function fakeFileSystem(files: Record<string, Buffer | string>): {
   calls: FileSystemCalls
   directories: Record<string, readonly DshFsDirEntry[]>
 } {
-  const calls: FileSystemCalls = { readBytes: 0, readByteRange: [] }
+  const calls: FileSystemCalls = { readBytes: 0, readByteRange: [], writes: [] }
   const directories: Record<string, readonly DshFsDirEntry[]> = {}
 
   const bytesOf = (path: string): Buffer => {
@@ -67,17 +71,28 @@ function fakeFileSystem(files: Record<string, Buffer | string>): {
   const fs: DshFileSystem = {
     resolve: async (path: string) => targetFor(path, path in directories ? 'directory' : 'file'),
     processPath: (target: DshFsTarget) => target.displayPath,
-    stat: async (target: DshFsTarget) => ({
-      type: target.displayPath in directories ? ('directory' as const) : ('file' as const),
-      size: (files[target.displayPath] ?? '').length,
-    }),
+    // The real seam's `stat` answers `undefined` for a path that is not there —
+    // callers branch on that, so the double must not invent a file.
+    stat: async (target: DshFsTarget) => {
+      const path = target.displayPath
+      if (path in directories) return { type: 'directory' as const, size: 0 }
+      if (path in files) {
+        const value = files[path] as Buffer | string
+        return { type: 'file' as const, size: Buffer.isBuffer(value) ? value.byteLength : Buffer.byteLength(value) }
+      }
+      return undefined
+    },
     readText: async (target: DshFsTarget) => bytesOf(target.displayPath).toString('utf8'),
     readByteRange: async (target: DshFsTarget, range: { offset: number; length: number }) => {
       calls.readByteRange.push(range)
       return new Uint8Array(bytesOf(target.displayPath).subarray(range.offset, range.offset + range.length))
     },
     listDir: async (target: DshFsTarget) => directories[target.displayPath] ?? [],
-    writeText: async () => ({ operation: 'create' as const }),
+    writeText: async (target: DshFsTarget, content: string) => {
+      calls.writes.push(target.displayPath)
+      files[target.displayPath] = content
+      return { operation: 'create' as const }
+    },
   }
 
   // Faithful to the real `readBytes`, which imposes an inclusive cap on the WHOLE
@@ -117,7 +132,14 @@ describe('readFile', () => {
   it('reads a file under the cap whole and untruncated', async () => {
     const { fs } = fakeFileSystem({ '/a.txt': 'hello' })
     const result = await driverWith({ fs }).readFile({ path: '/a.txt', maxBytes: 100 })
-    expect(result).toEqual({ path: '/a.txt', text: 'hello', truncated: false })
+    expect(result).toEqual({
+      path: '/a.txt',
+      text: 'hello',
+      truncated: false,
+      offset: 0,
+      bytes: 5,
+      size: 5,
+    })
   })
 
   it('reads a file exactly at the cap whole and untruncated', async () => {
@@ -145,6 +167,37 @@ describe('readFile', () => {
     expect(calls.readBytes).toBe(0)
   })
 
+  it('pages through a file from a byte offset', async () => {
+    const { fs, calls } = fakeFileSystem({ '/big.txt': '0123456789abcdefghij' })
+    const result = await driverWith({ fs }).readFile({ path: '/big.txt', maxBytes: 5, offset: 10 })
+    expect(result).toEqual({
+      path: '/big.txt',
+      text: 'abcde',
+      truncated: true,
+      offset: 10,
+      bytes: 5,
+      nextOffset: 15,
+      size: 20,
+    })
+    // The window is the requested one, still asked one byte past the cap.
+    expect(calls.readByteRange).toEqual([{ offset: 10, length: 6 }])
+  })
+
+  it('finishes at the end of a file without promising more', async () => {
+    const { fs } = fakeFileSystem({ '/big.txt': '0123456789' })
+    const result = await driverWith({ fs }).readFile({ path: '/big.txt', maxBytes: 10, offset: 5 })
+    expect(result.truncated).toBe(false)
+    expect(result.text).toBe('56789')
+    expect(result.nextOffset).toBeUndefined()
+  })
+
+  it('reads an offset past the end as empty rather than failing', async () => {
+    const { fs } = fakeFileSystem({ '/a.txt': 'hello' })
+    const result = await driverWith({ fs }).readFile({ path: '/a.txt', maxBytes: 10, offset: 99 })
+    expect(result).toMatchObject({ text: '', truncated: false, offset: 99, bytes: 0 })
+    expect(result.nextOffset).toBeUndefined()
+  })
+
   it('names the alternative when handed a directory', async () => {
     const { fs, directories } = fakeFileSystem({})
     directories['/dir'] = []
@@ -169,6 +222,427 @@ describe('listDirectory', () => {
     const result = await driverWith({ fs }).listDirectory({ path: '/dir' })
     expect(result.entries.map((entry) => entry.name)).toEqual(['a', 'z.txt'])
     expect(result.entries[0]).not.toHaveProperty('size')
+  })
+})
+
+describe('readImage', () => {
+  /** A 1x1 PNG (the bytes matter, not the picture). */
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  )
+
+  it('returns the bytes as base64 with a sniffed mime type', async () => {
+    const { fs, calls } = fakeFileSystem({ '/shot.png': png })
+    const image = await driverWith({ fs }).readImage({ path: '/shot.png' })
+
+    expect(image.mimeType).toBe('image/png')
+    expect(image.base64).toBe(png.toString('base64'))
+    expect(Buffer.from(image.base64, 'base64').equals(png)).toBe(true)
+    expect(image).toMatchObject({ path: '/shot.png', bytes: png.byteLength, size: png.byteLength })
+    // The read is the windowed one: the file's size plus one byte proving it is
+    // not larger, and never wider than the cap.
+    expect(calls.readByteRange).toEqual([{ offset: 0, length: png.byteLength + 1 }])
+  })
+
+  it('sniffs the format instead of trusting the extension', async () => {
+    // A .png that actually holds a JPEG must be labelled JPEG, or the client
+    // fails to decode what it was told to expect.
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46])
+    const { fs } = fakeFileSystem({ '/lying.png': jpeg })
+    expect((await driverWith({ fs }).readImage({ path: '/lying.png' })).mimeType).toBe('image/jpeg')
+
+    const gif = fakeFileSystem({ '/a.gif': Buffer.from('GIF89a') })
+    expect((await driverWith({ fs: gif.fs }).readImage({ path: '/a.gif' })).mimeType).toBe('image/gif')
+
+    const webp = fakeFileSystem({ '/a.webp': Buffer.from('RIFF\0\0\0\0WEBPVP8 ') })
+    expect((await driverWith({ fs: webp.fs }).readImage({ path: '/a.webp' })).mimeType).toBe('image/webp')
+
+    const bmp = fakeFileSystem({ '/a.bmp': Buffer.from('BM\0\0\0\0') })
+    expect((await driverWith({ fs: bmp.fs }).readImage({ path: '/a.bmp' })).mimeType).toBe('image/bmp')
+  })
+
+  it('refuses non-image content with the supported list', async () => {
+    const { fs } = fakeFileSystem({ '/notes.txt': 'plain text, not a picture' })
+    await expect(driverWith({ fs }).readImage({ path: '/notes.txt' }))
+      .rejects.toThrow(/not an image this tool can carry.*png, jpeg, gif, webp, bmp/s)
+  })
+
+  it('refuses a missing file and a directory', async () => {
+    const { fs, directories } = fakeFileSystem({})
+    directories['/dir'] = []
+    const driver = driverWith({ fs })
+    await expect(driver.readImage({ path: '/missing.png' })).rejects.toThrow(/does not exist/)
+    await expect(driver.readImage({ path: '/dir' })).rejects.toThrow(/is a directory/)
+  })
+
+  it('refuses an image over the cap without reading it all into memory', async () => {
+    const { fs, calls } = fakeFileSystem({ '/huge.png': Buffer.alloc(9 * 1024 * 1024) })
+    await expect(driverWith({ fs }).readImage({ path: '/huge.png' }))
+      .rejects.toThrow(/is 9437184 bytes, larger than the .* cap/)
+    // The stated size already proves it is too large, so nothing is read at all.
+    expect(calls.readByteRange).toEqual([])
+  })
+})
+
+describe('editFile', () => {
+  it('replaces one unique match and reports the sizes', async () => {
+    const { fs, calls } = fakeFileSystem({ '/a.ts': 'const a = 1\nconst b = 2\n' })
+    const result = await driverWith({ fs }).editFile({
+      path: '/a.ts',
+      oldText: 'const b = 2',
+      newText: 'const b = 3',
+      replaceAll: false,
+      maxBytes: 1024,
+    })
+    expect(result).toMatchObject({ path: '/a.ts', replacements: 1 })
+    expect(result.bytesBefore).toBe(24)
+    expect(result.bytesAfter).toBe(24)
+    expect(calls.writes).toEqual(['/a.ts'])
+    // The bytes that landed are the edit, not a stale copy of the read.
+    await expect(fs.readText(targetFor('/a.ts'))).resolves.toBe('const a = 1\nconst b = 3\n')
+  })
+
+  it('refuses an ambiguous match and writes nothing', async () => {
+    const { fs, calls } = fakeFileSystem({ '/a.ts': 'x\nx\n' })
+    await expect(driverWith({ fs }).editFile({
+      path: '/a.ts',
+      oldText: 'x',
+      newText: 'y',
+      replaceAll: false,
+      maxBytes: 1024,
+    })).rejects.toThrow(/matches 2 times.*replaceAll: true/s)
+    // The point of the refusal: the file is untouched.
+    expect(calls.writes).toEqual([])
+    expect(await fs.readText(targetFor('/a.ts'))).toBe('x\nx\n')
+  })
+
+  it('replaces every occurrence when asked', async () => {
+    const { fs } = fakeFileSystem({ '/a.ts': 'x\ny\nx\n' })
+    const result = await driverWith({ fs }).editFile({
+      path: '/a.ts',
+      oldText: 'x',
+      newText: 'z',
+      replaceAll: true,
+      maxBytes: 1024,
+    })
+    expect(result.replacements).toBe(2)
+    expect(await fs.readText(targetFor('/a.ts'))).toBe('z\ny\nz\n')
+  })
+
+  it('reports a pattern that is not there instead of writing', async () => {
+    const { fs, calls } = fakeFileSystem({ '/a.ts': 'hello\n' })
+    await expect(driverWith({ fs }).editFile({
+      path: '/a.ts',
+      oldText: 'goodbye',
+      newText: 'hi',
+      replaceAll: false,
+      maxBytes: 1024,
+    })).rejects.toThrow(/oldText was not found/)
+    expect(calls.writes).toEqual([])
+  })
+
+  it('refuses a missing file, a directory, a no-op and an oversized file', async () => {
+    const { fs, directories } = fakeFileSystem({ '/big.txt': 'y'.repeat(100) })
+    directories['/dir'] = []
+    const driver = driverWith({ fs })
+    await expect(driver.editFile({ path: '/missing', oldText: 'a', newText: 'b', replaceAll: false, maxBytes: 1024 }))
+      .rejects.toThrow(/does not exist/)
+    await expect(driver.editFile({ path: '/dir', oldText: 'a', newText: 'b', replaceAll: false, maxBytes: 1024 }))
+      .rejects.toThrow(/is a directory/)
+    await expect(driver.editFile({ path: '/big.txt', oldText: 'y', newText: 'y', replaceAll: false, maxBytes: 1024 }))
+      .rejects.toThrow(/identical/)
+    await expect(driver.editFile({ path: '/big.txt', oldText: 'yy', newText: 'z', replaceAll: false, maxBytes: 10 }))
+      .rejects.toThrow(/above the 10-byte edit limit/)
+    await expect(driver.editFile({ path: '/big.txt', oldText: '', newText: 'z', replaceAll: false, maxBytes: 1024 }))
+      .rejects.toThrow(/must not be empty/)
+  })
+})
+
+describe('listDirectory recursive', () => {
+  function tree(): ReturnType<typeof fakeFileSystem> {
+    const fake = fakeFileSystem({
+      '/p/a.ts': 'a',
+      '/p/sub/b.ts': 'b',
+      '/p/sub/deep/c.ts': 'c',
+      '/p/.git/config': 'g',
+    })
+    fake.directories['/p'] = [
+      { name: 'a.ts', type: 'file', target: targetFor('/p/a.ts'), size: 1 },
+      { name: 'sub', type: 'directory', target: targetFor('/p/sub', 'directory') },
+      { name: '.git', type: 'directory', target: targetFor('/p/.git', 'directory') },
+    ]
+    fake.directories['/p/sub'] = [
+      { name: 'b.ts', type: 'file', target: targetFor('/p/sub/b.ts'), size: 1 },
+      { name: 'deep', type: 'directory', target: targetFor('/p/sub/deep', 'directory') },
+    ]
+    fake.directories['/p/sub/deep'] = [
+      { name: 'c.ts', type: 'file', target: targetFor('/p/sub/deep/c.ts'), size: 1 },
+    ]
+    fake.directories['/p/.git'] = [
+      { name: 'config', type: 'file', target: targetFor('/p/.git/config'), size: 1 },
+    ]
+    return fake
+  }
+
+  it('walks subdirectories and gives every entry a relative path and depth', async () => {
+    const { fs } = tree()
+    const result = await driverWith({ fs }).listDirectory({ path: '/p', recursive: true })
+    expect(result.path).toBe('/p')
+    expect(result.truncated).toBeUndefined()
+    expect(result.entries.map((entry) => [entry.path, entry.depth, entry.type])).toEqual([
+      ['.git', 1, 'directory'],
+      ['.git/config', 2, 'file'],
+      ['a.ts', 1, 'file'],
+      ['sub', 1, 'directory'],
+      ['sub/b.ts', 2, 'file'],
+      ['sub/deep', 2, 'directory'],
+      ['sub/deep/c.ts', 3, 'file'],
+    ])
+  })
+
+  it('honours maxDepth without dropping the directory entry itself', async () => {
+    const { fs } = tree()
+    const result = await driverWith({ fs }).listDirectory({ path: '/p', recursive: true, maxDepth: 1 })
+    expect(result.entries.map((entry) => entry.path)).toEqual(['.git', 'a.ts', 'sub'])
+  })
+
+  it('visits a directory once even when two links reach it', async () => {
+    const { fs, directories } = fakeFileSystem({ '/p/x/f.ts': 'x' })
+    // Same targetKey on both names: the seam resolves links, so this is one dir.
+    directories['/p'] = [
+      { name: 'real', type: 'directory', target: targetFor('/p/x', 'directory') },
+      { name: 'link', type: 'directory', target: targetFor('/p/x', 'directory') },
+    ]
+    directories['/p/x'] = [
+      { name: 'f.ts', type: 'file', target: targetFor('/p/x/f.ts'), size: 1 },
+    ]
+    const result = await driverWith({ fs }).listDirectory({ path: '/p', recursive: true })
+    const files = result.entries.filter((entry) => entry.type === 'file')
+    expect(files).toHaveLength(1)
+  })
+
+  it('stops at the entry cap and says the listing is truncated', async () => {
+    const { fs, directories } = fakeFileSystem({})
+    directories['/p'] = Array.from({ length: 2_500 }, (_, index) => ({
+      name: `f${index}.ts`,
+      type: 'file' as const,
+      target: targetFor(`/p/f${index}.ts`),
+      size: 1,
+    }))
+    const result = await driverWith({ fs }).listDirectory({ path: '/p', recursive: true })
+    expect(result.entries).toHaveLength(2_000)
+    expect(result.truncated).toBe(true)
+  })
+})
+
+describe('shell service shapes and background jobs', () => {
+  /** A process handle faithful to `ShellProcess` in 0.1.7+. */
+  class FakeProcess {
+    status: 'running' | 'completed' | 'killed' = 'running'
+    exitCode: number | null = null
+    signal: string | null = null
+    killed = false
+    private chunks: string[] = []
+    readonly done: Promise<void>
+    private finish!: () => void
+
+    constructor() {
+      this.done = new Promise((resolve) => {
+        this.finish = resolve
+      })
+    }
+
+    write(text: string): void {
+      this.chunks.push(text)
+    }
+
+    settle(exitCode = 0): void {
+      if (this.status !== 'running') return
+      this.status = 'completed'
+      this.exitCode = exitCode
+      this.finish()
+    }
+
+    readOutput(): { delta: string; lossy: boolean } {
+      const delta = this.chunks.join('')
+      this.chunks = []
+      return { delta, lossy: false }
+    }
+
+    kill(): boolean {
+      if (this.status !== 'running') return false
+      this.killed = true
+      this.status = 'killed'
+      this.finish()
+      return true
+    }
+
+    async result(): Promise<{
+      exitCode: number | null
+      signal: string | null
+      timedOut: boolean
+      aborted: boolean
+      timeoutMs: number
+      stdout: { text: string; truncated: boolean }
+      stderr: { text: string; truncated: boolean }
+    }> {
+      await this.done
+      return {
+        exitCode: this.exitCode,
+        signal: null,
+        timedOut: false,
+        aborted: false,
+        timeoutMs: 1_000,
+        stdout: { text: 'final stdout', truncated: false },
+        stderr: { text: '', truncated: false },
+      }
+    }
+  }
+
+  /** A shell double exposing the shape under test. */
+  function shellShape(
+    mode: 'run' | 'execute' | 'start' | 'none',
+    options: { settleImmediately?: boolean } = {},
+  ): {
+    shell: Record<string, unknown>
+    processes: FakeProcess[]
+    specs: Record<string, unknown>[]
+  } {
+    const processes: FakeProcess[] = []
+    const specs: Record<string, unknown>[] = []
+    const make = (): FakeProcess => {
+      const process = new FakeProcess()
+      processes.push(process)
+      // A foreground command has already exited by the time the caller awaits
+      // `result()`; modelling that keeps this double honest.
+      if (options.settleImmediately === true) process.settle()
+      return process
+    }
+    const result = {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      aborted: false,
+      timeoutMs: 1_000,
+      stdout: { text: 'run stdout', truncated: false },
+      stderr: { text: '', truncated: false },
+    }
+    const shell: Record<string, unknown> = {
+      resolve: (spec: Record<string, unknown>) => {
+        specs.push(spec)
+        return spec
+      },
+    }
+    if (mode === 'run') shell.run = async () => result
+    if (mode === 'execute') shell.execute = async () => make()
+    if (mode === 'start') shell.start = () => make()
+    return { shell, processes, specs }
+  }
+
+  it('awaits the foreground projection when execute() returns a live handle', async () => {
+    // The 0.2.1 regression: `execute` resolves a process handle, not a result.
+    // Reading the handle's own `stdout` is undefined and used to crash shell_run.
+    const { shell } = shellShape('execute', { settleImmediately: true })
+    const result = await driverWith({ shell }).runShell({ command: 'true', timeoutMs: 1_000 })
+    expect(result.stdout).toBe('final stdout')
+    expect(result.exitCode).toBe(0)
+  })
+
+  it('accepts the older run() shape that resolves the result directly', async () => {
+    const { shell } = shellShape('run')
+    const result = await driverWith({ shell }).runShell({ command: 'true', timeoutMs: 1_000 })
+    expect(result.stdout).toBe('run stdout')
+  })
+
+  it('names the missing capability when the shell service has no launcher', async () => {
+    const { shell } = shellShape('none')
+    await expect(driverWith({ shell }).runShell({ command: 'true', timeoutMs: 1_000 }))
+      .rejects.toThrow(/neither run\(\) nor execute\(\)/)
+  })
+
+  it('starts, reads and finishes a background job', async () => {
+    const { shell, processes, specs } = shellShape('execute')
+    const driver = driverWith({ shell })
+    const job = await driver.startShellJob({ command: 'make -j8', cwd: '/tmp/project' })
+
+    expect(job.status).toBe('running')
+    expect(job.command).toBe('make -j8')
+    expect(job.cwd).toBe('/tmp/project')
+    // A background job arms no deadline unless the caller asked for a watchdog.
+    expect(specs[0]).toMatchObject({ command: 'make -j8', workdir: '/tmp/project', onExpiry: 'none' })
+
+    const process = processes[0] as FakeProcess
+    process.write('line one\n')
+    expect(driver.readShellOutput({ jobId: job.jobId })).toMatchObject({
+      output: 'line one\n',
+      done: false,
+      pendingBytes: 0,
+    })
+
+    process.write('line two\n')
+    process.settle(2)
+    const last = driver.readShellOutput({ jobId: job.jobId })
+    expect(last).toMatchObject({ output: 'line two\n', done: true, exitCode: 2, status: 'completed' })
+
+    // Output is delivered once, and the final page is empty rather than repeated.
+    expect(driver.readShellOutput({ jobId: job.jobId }).output).toBe('')
+    expect(driver.listShellJobs()[0]).toMatchObject({ jobId: job.jobId, status: 'completed', exitCode: 2 })
+  })
+
+  it('starts a job through the 0.1.5 start() shape', async () => {
+    const { shell, processes } = shellShape('start')
+    // One driver, so the job started through it is the job read back from it.
+    const driver = driverWith({ shell })
+    const job: { jobId: string } = await driver.startShellJob({ command: 'sleep 1' })
+    ;(processes[0] as FakeProcess).write('older host output')
+    expect(driver.readShellOutput({ jobId: job.jobId }).output).toBe('older host output')
+  })
+
+  it('kills a running job and keeps its remaining output readable', async () => {
+    const { shell, processes } = shellShape('execute')
+    const driver = driverWith({ shell })
+    const job = await driver.startShellJob({ command: 'tail -f log' })
+    ;(processes[0] as FakeProcess).write('before kill\n')
+
+    const killed = await driver.killShellJob({ jobId: job.jobId, waitMs: 100 })
+    expect(killed).toMatchObject({ killed: true, status: 'killed' })
+    expect((processes[0] as FakeProcess).killed).toBe(true)
+    expect(driver.readShellOutput({ jobId: job.jobId })).toMatchObject({
+      output: 'before kill\n',
+      done: true,
+      status: 'killed',
+    })
+
+    // Idempotent: a settled job reports that nothing was killed.
+    expect(await driver.killShellJob({ jobId: job.jobId })).toMatchObject({ killed: false, status: 'killed' })
+  })
+
+  it('kills a job when its watchdog expires', async () => {
+    const { shell, processes } = shellShape('execute')
+    const driver = driverWith({ shell })
+    await driver.startShellJob({ command: 'sleep 100', timeoutMs: 10 })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect((processes[0] as FakeProcess).status).toBe('killed')
+    expect(driver.listShellJobs()[0]?.status).toBe('killed')
+  })
+
+  it('refuses an unknown job id with a pointer to shell_list', async () => {
+    const { shell } = shellShape('execute')
+    const driver = driverWith({ shell })
+    expect(() => driver.readShellOutput({ jobId: 'nope' })).toThrow(/unknown background job "nope".*shell_list/)
+    await expect(driver.killShellJob({ jobId: 'nope' })).rejects.toThrow(/shell_list/)
+  })
+
+  it('bounds per-call output and reports what is still pending', async () => {
+    const { shell, processes } = shellShape('execute')
+    const driver = driverWith({ shell })
+    const job = await driver.startShellJob({ command: 'yes' })
+    ;(processes[0] as FakeProcess).write('x'.repeat(100))
+    const page = driver.readShellOutput({ jobId: job.jobId, maxBytes: 30 })
+    expect(page.output).toHaveLength(30)
+    expect(page.pendingBytes).toBe(70)
+    expect(driver.readShellOutput({ jobId: job.jobId, maxBytes: 1_000 }).output).toBe('x'.repeat(70))
   })
 })
 

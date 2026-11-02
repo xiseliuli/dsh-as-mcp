@@ -5,7 +5,8 @@
  * Read-only by default: it shakes hands, lists tools, and calls `dsh_info` and
  * `workspace_list`. With `--prompt <text>` it also runs one real round trip —
  * create a workspace in a temp directory, start a session, hand the DSH agent a
- * task, and print what came back.
+ * task, and print what came back, including the token usage the reply carries and
+ * the same figure read back through `session_usage`.
  *
  * Configuration:
  *   DSH_AS_MCP_URL    endpoint URL, default http://127.0.0.1:8790/mcp
@@ -162,7 +163,19 @@ async function main() {
   const available = Object.entries(info.harnessServices ?? {})
     .filter(([, present]) => present)
     .map(([service]) => service)
-  step(available.length > 0, 'tools/call dsh_info', `services: ${available.join(', ') || 'none'}`)
+  // The catalog is what stops a caller guessing at session_create's provider,
+  // preset or sandbox: report what this profile says it accepts.
+  const catalog = info.catalog ?? {}
+  const catalogNote = [
+    Array.isArray(catalog.providers) ? `${catalog.providers.length} provider(s)` : undefined,
+    Array.isArray(catalog.agentPresets) ? `${catalog.agentPresets.length} preset(s)` : undefined,
+    typeof catalog.sandboxMode === 'string' ? `sandbox ${catalog.sandboxMode}` : undefined,
+  ].filter((part) => part !== undefined).join(', ')
+  step(
+    available.length > 0,
+    'tools/call dsh_info',
+    `services: ${available.join(', ') || 'none'}${catalogNote ? `; ${catalogNote}` : ''}`,
+  )
   if (available.length === 0) {
     process.stdout.write(
       `${red('This profile mounted no driveable harness service.')} Sessions, files, and shell need\n`
@@ -215,6 +228,31 @@ async function main() {
         process.stdout.write(`${dim('  tool')}  ${call.name} ${dim(call.arguments?.slice(0, 100) ?? '')}\n`)
       }
     }
+
+    // The usage the reply carries. Shown unconditionally when present: a caller
+    // that only reads the reply still needs to know what it spent, and printing
+    // the numbers here is how a maintainer sees the feature working at all.
+    if (outcome?.usage) {
+      process.stdout.write(
+        `${dim('  tokens')}  turn ${outcome.turn}: ${outcome.usage.totalTokens}`
+        + ` (uncached ${outcome.usage.uncachedInputTokens}, cache read ${outcome.usage.cacheReadTokens},`
+        + ` cache write ${outcome.usage.cacheWriteTokens}, out ${outcome.usage.outputTokens})\n`,
+      )
+    }
+    const cumulative = turn.session?.usage
+    if (cumulative?.totals) {
+      process.stdout.write(
+        `${dim('  tokens')}  session: ${cumulative.totals.totalTokens} over ${cumulative.turns ?? 0} turn(s)`
+        + `${cumulative.verifiedAgainstProjection === true ? '' : dim(', unverified')}\n`,
+      )
+      const cost = turn.session?.cost
+      if (cost?.available === true) {
+        process.stdout.write(`${dim('  cost')}    ${cost.costUsd} USD (estimate)\n`)
+      } else if (cost?.reason) {
+        process.stdout.write(`${dim('  cost')}    unavailable — ${cost.reason}\n`)
+      }
+    }
+
     if (outcome?.reply) {
       process.stdout.write(`\n${dim('reply:')}\n${outcome.reply}\n`)
     }
@@ -222,6 +260,19 @@ async function main() {
       process.stdout.write(
         `\n${red('The turn did not settle before the timeout.')} The message is queued; inspect the\n`
         + `session in the DSH UI. Raise session.promptTimeoutMs for long tasks.\n`,
+      )
+    }
+
+    // The explicit receipt. Worth one extra call even though the reply already
+    // carried the same totals: it exercises the tool a calling harness would use
+    // to collect a final tally, and the two agreeing is the check.
+    if (names.includes('session_usage')) {
+      const receipt = await callTool('session_usage', { sessionId: session.sessionId })
+      const total = receipt.totals?.totalTokens
+      step(
+        typeof total === 'number' && total > 0,
+        'session_usage',
+        `${total} tokens across ${receipt.sessions?.length ?? 0} session(s), scope ${receipt.scope}`,
       )
     }
   }

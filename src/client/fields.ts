@@ -83,6 +83,12 @@ export const GROUPS: readonly GroupSpec[] = [
         label: 'field.tools.agentTools',
         hint: 'field.tools.agentTools.hint',
       },
+      {
+        kind: 'toggle',
+        path: ['tools', 'usage'],
+        label: 'field.tools.usage',
+        hint: 'field.tools.usage.hint',
+      },
     ],
   },
   {

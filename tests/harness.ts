@@ -12,7 +12,13 @@ export const silentLog: DshLogger = { debug: () => {}, info: () => {}, warn: () 
 /** A driver stub: the MCP layer is what is under test, not the harness. */
 export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
   return {
-    describeCapabilities: () => ({ sessionController: true, shell: false }),
+    describeCapabilities: () => ({
+      sessionController: true,
+      shell: false,
+      sessionFork: false,
+      sessionRename: false,
+      approval: false,
+    }),
     ownsSession: (sessionId) => sessionId === 'session-1',
     createWorkspace: async ({ path, title }) => ({
       created: true,
@@ -27,18 +33,51 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
       },
     }),
     listWorkspaces: async () => [],
+    deleteWorkspace: async ({ workspaceId }) => ({ workspaceId, deleted: true }),
     createSession: async () => ({ sessionId: 'session-1' }),
     listSessions: async () => [],
+    renameSession: async ({ sessionId, title }) => ({ sessionId, title, seq: 1 }),
+    setSessionModel: async ({ sessionId, provider, model }) => ({ sessionId, provider, model }),
+    forkSession: async ({ sessionId }) => ({
+      sessionId: 'session-forked',
+      parentSessionId: sessionId,
+      inheritedEventCount: 1,
+    }),
     promptSession: async () => ({ accepted: true }),
     cancelSession: () => ({ accepted: true }),
     readTranscript: async () => [],
-    readFile: async ({ path }) => ({ path, text: 'hello', truncated: false }),
+    readImage: async ({ path }) => ({
+      path,
+      mimeType: 'image/png',
+      base64: 'iVBORw0KGgo=',
+      bytes: 8,
+      size: 8,
+    }),
+    readFile: async ({ path, offset }) => ({
+      path,
+      text: 'hello',
+      truncated: false,
+      offset: offset ?? 0,
+      bytes: 5,
+    }),
     writeFile: async ({ path }) => ({ path, operation: 'create' }),
+    editFile: async ({ path }) => ({ path, replacements: 1, bytesBefore: 0, bytesAfter: 0 }),
     listDirectory: async ({ path }) => ({ path, entries: [] }),
     // Present so the new group's tools can be registered; a test that exercises
     // them supplies its own driver.
     listAgentTools: async ({ sessionId }) => ({ tools: [], sessionId }),
-    callAgentTool: async ({ name }) => ({ name, ok: true, text: '' }),
+    callAgentTool: async ({ name }) => ({ name, ok: true, text: '', resultBytes: 0 }),
+    describeCatalog: async () => ({}),
+    sessionUsage: async () => ({
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      scope: 'pluginSessions',
+      sessions: [],
+      totals: { uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, totalTokens: 0, turns: 0, steps: 0, samples: 0 },
+      byModel: [],
+      subagentsIncluded: false,
+      cost: { available: false, reason: 'stub' },
+      notes: [],
+    }),
     runShell: async () => ({
       exitCode: 0,
       signal: null,
@@ -49,6 +88,28 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
       stdoutTruncated: false,
       stderrTruncated: false,
     }),
+    startShellJob: async ({ command }) => ({
+      jobId: 'shell-stub-1',
+      command,
+      status: 'running' as const,
+      startedAt: 0,
+      exitCode: null,
+      signal: null,
+      pendingBytes: 0,
+    }),
+    listShellJobs: () => [],
+    readShellOutput: ({ jobId }) => ({
+      jobId,
+      status: 'completed' as const,
+      exitCode: 0,
+      signal: null,
+      done: true,
+      output: '',
+      pendingBytes: 0,
+      truncated: false,
+      lossy: false,
+    }),
+    killShellJob: async ({ jobId }) => ({ jobId, killed: true, status: 'killed' as const }),
     ...overrides,
   }
 }
@@ -58,7 +119,7 @@ export function testConfig(overrides: Partial<Config['tools']> = {}, port = 0): 
   return {
     http: { enabled: true, host: '127.0.0.1', port, path: '/mcp', mountOnWebServer: false },
     auth: { token: TOKEN },
-    tools: { workspace: true, session: true, files: true, shell: false, agentTools: false, ...overrides },
+    tools: { workspace: true, session: true, files: true, shell: false, agentTools: false, usage: false, ...overrides },
     agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 1000 },
     limits: { maxReadBytes: 1024, shellTimeoutMs: 1000, agentToolTimeoutMs: 1000 },

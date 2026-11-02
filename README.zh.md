@@ -91,7 +91,7 @@ allowBuilds:
 
 这个放行等于允许在你机器上、在安装阶段执行这个包的代码——建议钉死到某个 commit
 （`github:xiseliuli/dsh-as-mcp#<sha>`），免得后续的 push 悄悄改掉实际跑的代码。`dsh plugin add` 使用的是
-DSH 锁定的 pnpm 版本（DSH 0.1.7-rc.2 为 v11.7.0，输出末尾会打印 `using pnpm v…`），所以下面这条要等
+DSH 锁定的 pnpm 版本（DSH 0.2.1-rc.5 为 v11.28.5，输出末尾会打印 `using pnpm v…`），所以下面这条要等
 DSH 自带更新的 pnpm 后才适用。如果 profile 用的 pnpm
 ≥11.19.0（若是克隆而非 `github:` 这种 tarball 形式的 git 依赖，则 ≥11.11.0 即可），可以改为放行整个
 仓库——`'dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git': true`，不带 `#<sha>`——这样同一个仓库
@@ -177,22 +177,38 @@ dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 `127.x.x.x` 地址，因此 `127.0.0.1.example.com` 这类域名会被当作它实际所属的远程主机处理。
 scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 
-**先调 `dsh_info`**。它会返回端点、token 的来源、哪些工具组开着，以及——这点很关键——当前 profile
-实际提供了哪些 harness 服务，这样客户端能区分「这个 profile 没有 shell」和「这条命令执行
-失败了」。
+**先调 `dsh_info`**。它会返回端点、插件版本与运行时长、token 的来源、哪些工具组开着，以及——这点很
+关键——当前 profile 实际提供了哪些 harness 服务、token 用量能不能读、有没有价格来源；这样客户端能区分
+「这个 profile 没有 shell」和「这条命令执行失败了」。
+
+它还会带 `catalog`：`session_create` 真正接受的选择——`providers`（已注册适配器的路由）、`agentPresets`
+及其 `defaultAgentPreset`、生效的 `sandboxMode`、`permissionPresets` 名单，以及 `sessionCount`。传
+`includeModels: true` 还会读每个路由声明的模型（`catalog.providerModels`）：这会去问 adapter，所以默认关闭、
+每个 provider 都有超时，但这是选对 `session_create.model` 或 `session_set_model.model` 最可靠的办法。
+每个字段都是可选的、各自独立兜底，`catalog.unavailable` 会点名哪个读取没能回答，所以缺字段表示
+「这个 profile 没说」，不是「什么都不允许」。
 
 ## 工具
 
+返回数据的工具（`dsh_info`、`session_list`、`session_usage`、`session_messages`、`file_list`、
+`workspace_list`）同时声明 output schema 并在文本块之外返回 `structuredContent`，支持结构化输出的客户端
+可以直接读对象，不必从文本里解析 JSON。
+
 | 工具 | 作用 |
 | --- | --- |
-| `dsh_info` | 端点、token 来源、已启用的工具组、可用的 harness 服务。 |
+| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用，以及可接受的 provider、agent preset 与 sandbox 模式的 `catalog`。 |
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、会话数、目录是否还在。 |
 | `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话。 |
-| `session_list` | 存活会话摘要，按最近更新排序。 |
-| `session_prompt` | 给 DSH 会话下发一个任务；默认等待本轮结束，返回回复以及 agent 调过的每个工具。 |
+| `session_create` | 在 workspace 或裸目录上创建一个 DSH agent 会话。 |
+| `session_fork` | 把一个会话（存活的，或从磁盘恢复的）分叉成继承其事件前缀的子会话（可用 `atSeq` 指定分叉点；不指定时 harness 取最近一个完整轮次）。从该点继续只需一轮，不用重放历史；`session_usage` 会单独报出继承前缀的用量。 |
+| `session_set_model` | 切换后续轮次使用的 provider 路由与模型：先用便宜模型、难任务时升级、或某路由不可用时回退。回复里的按模型用量会显示每条路由各花了多少。 |
+| `session_rename` | 给会话设置显式的用户标题，让外部 harness 为任务起的名字在 DSH 界面里保持不变（同时停止自动生成标题）。若该会话正被另一个 DSH 进程持有写句柄，harness 会拒绝并在错误里说明。 |
+| `session_list` | 存活会话摘要，按最近更新排序；`includeTitle` 附加每个会话的最新标题（每会话一次日志读取），`cwd`/`running` 会在 limit 生效前过滤。 |
+| `session_prompt` | 给 DSH 会话下发一个任务；默认等待本轮结束，返回回复、agent 调过的工具调用，以及本轮的 token 用量和该会话的累计量。`toolCalls` 控制每次调用的回显量：`summary`（默认）只给名称/id/参数字节数，`full` 附带参数（受 `maxArgumentChars` 限制），`none` 只留计数。可用 `images` 附带截图（png/jpeg/webp/gif，最多 4 张）。带 `idempotencyKey` 时可安全重试：重复调用会返回已有轮次，而不是把任务再发一遍。客户端带 `progressToken` 时，等待期间最多每秒一次 `notifications/progress`；客户端取消请求时等待立即结束，回复标明 `aborted`/partial。`maxReplyChars` 可选地限制 agent 最终回复长度（被截断时带 `replyTruncated` 和原始 `replyChars`）。 |
 | `session_messages` | 读取会话的用户/助手对话记录。 |
 | `session_cancel` | 让 agent 停下当前这一轮。 |
+| `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。 |
 | `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。 |
 | `file_write` | 经 DSH 文件系统服务创建或覆盖文件。 |
 | `file_list` | 经 DSH 文件系统服务列一层目录。 |
@@ -219,7 +235,7 @@ workspace_create { path: "/Users/me/project" }
 这里刻意没有"不带会话"的形式。DSH 把工具注册进**注册它的那个 context 的作用域**，而每个工具包都
 装在 agent preset 内，所以全局层本来就是空的——不带作用域的列举确实返回零个工具，不带作用域的调用
 会答 `unknown tool`。因此不带会话的 `dsh_tool_list` 会**直接报错**，而不是返回一个空工具箱（那会被
-读成"什么都不允许"）。要走不涉及 agent 的路径，请用 `file_read`／`file_write`／`file_list`／
+读成"什么都不允许"）。要走不涉及 agent 的路径，请用 `file_read`／`file_write`／`file_edit`／`file_list`／
 `shell_run`，它们直接解析部署策略，不需要会话。
 
 允许集是**白名单**，而且刻意很窄。不在名单里的一律**拒绝且不出现在 `dsh_tool_list` 中**。要紧的几项遗漏：
@@ -233,6 +249,180 @@ workspace_create { path: "/Users/me/project" }
   工作；**`create_goal`、`update_goal`** 会维持无人值守的持续执行。
 
 运维方可以通过 `agentTools.allow` 有意放宽，或用 `agentTools.deny` 从默认集合里减去。
+
+## 用量统计
+
+DSH 没有「会话结束」事件，所以没有可订阅的钩子，也没有最后一个回调可以等。花费就报在调用方能问
+的地方：每条 `session_prompt` 回复里，以及按需调用的 `session_usage`。
+
+**每条 prompt 回复都带。** `turn.usage` 是这次 prompt 消耗的量——本轮每一步、每步一次模型调用，
+含工具往返——`session` 则是该会话的累计总量，带按模型的拆分，装了价格插件时还带钱：
+
+```json
+{
+  "accepted": true,
+  "turn": {
+    "reply": "…", "toolCalls": [], "turn": 1, "turnEndReason": {"kind": "completed"},
+    "timedOut": false, "aborted": false,
+    "usage": {
+      "turn": 1, "steps": 157,
+      "uncachedInputTokens": 1032706, "cacheReadTokens": 21192320,
+      "cacheWriteTokens": 0, "outputTokens": 86148, "totalTokens": 22311174
+    }
+  },
+  "session": {
+    "sessionId": "session-…",
+    "usage": {
+      "totals": {"uncachedInputTokens": 1032706, "cacheReadTokens": 21192320,
+                 "cacheWriteTokens": 0, "outputTokens": 86148, "totalTokens": 22311174},
+      "byModel": [{"provider": "opencode-go-xise", "model": "deepseek-v4.1-flash",
+                   "samples": 157, "uncachedInputTokens": 1032706,
+                   "cacheReadTokens": 21192320, "cacheWriteTokens": 0,
+                   "outputTokens": 86148, "totalTokens": 22311174}],
+      "turns": 1, "steps": 157, "samples": 157,
+      "verifiedAgainstProjection": true
+    },
+    "cost": {
+      "available": true, "source": "dsh-cost-meter", "estimate": true,
+      "costUsd": 0.5384, "costEstimateUsd": 0.5384, "costCny": 3.5818, "costEur": 0.4819,
+      "calls": 157
+    }
+  }
+}
+```
+
+`mode: "steer"` 时那一轮本来就在跑，所以 `turn.usage` 覆盖整个轮次，也包括你这条消息之前已经
+跑过的步骤。
+
+本轮一个 token 都没花时（还没走到第一步就被取消，或 provider 没报 usage），`turn.usage` 不存在。
+用量本身读不出来时也同样不存在——但这种情况**不会静默**：回复会带 `usageUnavailable: true` 和一
+条 `reason`，所以拿这些数字结账的调用方能分清“日志读不出来”和“这一轮没花钱”，也就可以改用
+`session_usage` 重试。`wait: false` 时没有可描述的轮次，但 `session` 仍然返回（读失败时同样带
+`usageUnavailable`）。等待超时或被取消会把总量标成 `partial: true`：那一轮还没落定、还会继续
+增长；排队中的消息也标 `partial`，因为它的轮次还没跑。
+
+**或者直接问。** `session_usage` 是最后一次 prompt 之后用来收账的收据。它读的是持久会话日志而不是
+存活会话，所以对已经空闲、已经离开存活 session store、甚至是更早一次 DSH 运行建出来的会话都答得上
+来——只要你知道它的 id：
+
+```json
+{
+  "generatedAt": "2026-11-02T08:00:00.000Z",
+  "scope": "session",
+  "sessions": [
+    {
+      "sessionId": "session-…",
+      "cwd": "/Users/me/project",
+      "origin": "self",
+      "usage": {
+        "totals": {"uncachedInputTokens": 1032706, "cacheReadTokens": 21192320,
+                   "cacheWriteTokens": 0, "outputTokens": 86148,
+                   "totalTokens": 22311174},
+        "byModel": [{"provider": "opencode-go-xise", "model": "deepseek-v4.1-flash",
+                     "samples": 157, "uncachedInputTokens": 1032706,
+                     "cacheReadTokens": 21192320, "cacheWriteTokens": 0,
+                     "outputTokens": 86148, "totalTokens": 22311174}],
+        "turns": 1, "steps": 157, "samples": 157,
+        "verifiedAgainstProjection": true
+      },
+      "cost": {"available": true, "source": "dsh-cost-meter", "estimate": true,
+               "costUsd": 0.5384, "calls": 157}
+    }
+  ],
+  "totals": {"uncachedInputTokens": 1032706, "cacheReadTokens": 21192320,
+             "cacheWriteTokens": 0, "outputTokens": 86148, "totalTokens": 22311174,
+             "turns": 1, "steps": 157, "samples": 157},
+  "byModel": [{"provider": "opencode-go-xise", "model": "deepseek-v4.1-flash",
+               "samples": 157, "uncachedInputTokens": 1032706,
+               "cacheReadTokens": 21192320, "cacheWriteTokens": 0,
+               "outputTokens": 86148, "totalTokens": 22311174}],
+  "subagentsIncluded": false,
+  "cost": {"available": true, "source": "dsh-cost-meter", "estimate": true,
+           "costUsd": 0.5384},
+  "notes": ["…"]
+}
+```
+
+| 参数 | 含义 |
+| --- | --- |
+| `sessionId` | 报告这个会话，默认连同它下面的 subagent 会话一起。省略则汇总本端点创建的会话。 |
+| `all` | 不给 `sessionId` 时：扫描这个 DSH 知道的全部会话，按最近更新排序。给了 `sessionId` 时忽略。 |
+| `includeSubagents` | 把 subagent 子会话作为独立行折进来。默认 `true`。 |
+| `includeTurns` | 同时返回每行的按轮拆分。默认 `false`。 |
+| `includeCost` | 是否从 `dsh-cost-meter` 读金额。默认 `true`；大范围扫描时可设 `false`，省掉每行一次账本读取。 |
+| `limit` | 不给 `sessionId` 时扫描的会话数上限。默认 20，最大 200。 |
+
+如果在会话最新一轮还在运行时读取，该行会带 `partial: true`：折出来的数字是仍会增长的快照，
+不能据此结算。
+
+不带 `sessionId` 指的是**本 DSH 进程里由本端点创建的**会话。harness 并不记录这种归属，所以重启之后
+请传 id；改用 `all: true` 则扫描这个 DSH 知道的全部会话，被 limit 截断时会在 `notes` 里说明。
+
+**四个桶互不重叠**，就是 provider 报的原样，`totalTokens` 是它们的和：
+
+| 字段 | 含义 |
+| --- | --- |
+| `uncachedInputTokens` | provider 没有从缓存里命中的 prompt token。它就是 provider 的 `inputTokens`——按定义就是未缓存的输入，不是输入总量。 |
+| `cacheReadTokens` | 按缓存读计费的 prompt token。 |
+| `cacheWriteTokens` | 按缓存写（建缓存）计费的 prompt token。 |
+| `outputTokens` | 生成的 token。`reasoningTokens` 是它的子集，永远不是第五个桶，所以哪里都不会再加一次。 |
+| `totalTokens` | 四者之和——真正用来计费的数字——由四个桶算出来，而不是相信 provider 给的 `totalTokens` 字段。 |
+
+**精确性。** 总量是从持久会话日志折出来的——用的正是 harness 自己那个 `tokenUsage` 投影所依据的
+`assistant/message.data.usage` 记录，以及被重试的 `assistant/attempt` 里的 usage chunk——所以是
+provider 报的计数，不是估算。`verifiedAgainstProjection: true` 表示在同一个切点上 harness 自己的
+累计值也在、且四个桶逐一相等（在一个 1,146 个事件的真实会话上确实完全相等）。不一致时
+`projectionTotals` 会带上 harness 的那个数：日志折算的结果留在 `totals`，分歧照实报出来，而不是
+悄悄替你选一个。
+
+每一次真正计费的 provider 尝试都会被计入，包括失败后又被重试的那次——那些 token 已经扣了钱。同一个
+调用的更正或重复上报会**替换**它的桶而不是重复累加，完全相同的重复上报则什么都不做。所以 `samples`
+是折进来的 provider **调用次数**，不是不同的步数：重试的调用加一次，更正不加，因此它可能和 `steps`
+不同。`byModel` 只列真正扣了 token 的路由，所以一条报了 0 token 的调用会出现在 `samples` 里、却
+没有对应的路由行。`turns`、`steps` 则是上报过用量的轮数和步数。某条记录读不出来（缺字段或不是整数）时会出现
+`ignoredSamples`：此时总量会低于 provider 实际扣的量，藏起来比报出来更糟；聚合报告会把各行忽略的
+条数加起来并在 `notes` 里说明。
+
+**哪些没有算进去，以及为什么。**
+
+- **压缩（compaction）** 本身也是一次 LLM 调用，harness 把它的用量记在
+  `compaction/summary.data.usage`。它单独放在可选的 `compaction` 块里
+  （`{totals, summaries, ignoredSummaries}`），并刻意排除在 `usage.totals` 之外，因为 harness
+  自己的投影也不含它——折进去会让这些数字和 DSH 界面上同一会话的数字对不上。要整份 token 账单就
+  自己把它加上。
+- **会话标题** 由一次 LLM 调用生成，而这条调用在日志里根本不留用量记录（只有
+  `session/title-llm-request`，它只记路由）。任何 token 折算都看不到它。
+- **fork 出来的会话** 继承父会话的事件前缀。这部分是记在父会话账上的，所以单独报成 `inherited`，
+  `totals` 只覆盖子会话自己的轮次。
+- **subagent** 的 token 记在同一个账号上，所以 `session_usage` 默认把子会话作为独立行折进来
+  （`includeSubagents: false` 可排除），每个目标最多 50 个，被上限截断时给 `truncatedSubagents`。
+  子会话按 harness 自己的 `origin: "subagent"` 标记识别：普通 **fork** 也会记父会话链接，但 fork
+  是一个完整会话，所以永远不会被当成子会话折进来。prompt 回复里的 `session` 块不含 subagent：
+  那只是该会话自己轮次的量，这也正是需要有这个工具的原因。单份报告最多 100 行（给
+  `truncatedRows`，金额总量同时标成 `partial`）；如果连会话列表都读不到，报告会说明无法枚举
+  subagent，而不是声称没有 subagent。
+- **读不出来的会话**（被清理、损坏）会变成一行带 `error` 而没有 `usage` 的记录，被排除在总量之外，
+  并在 `notes` 里点名——一个坏会话不会让整份报告失败。
+
+**钱是另一回事，而且是可选的。** 只有装了第三方 **`dsh-cost-meter`** 插件时才有 `cost`：harness
+本身完全没有价格或货币服务。它是该插件价格目录给出的**估算**——目录带峰谷时段，路由不认识时按模型
+名匹配——不是账单；而且它给两个不同的美元数字，因为它们回答的是两个不同的问题：
+
+- **`costUsd`** 是真实扣的钱：cost-meter 的 `apiCost`。这是跨会话求和用的字段；订阅/编码套餐覆盖的
+  调用是 `0`，因为账号里并没有按 token 扣钱。
+- **`costEstimateUsd`** 是挂牌价估算：cost-meter 的 `cost`，按目录算出来、与怎么计费无关。它是同样
+  这些调用按 API 价格本该花多少，也是套餐会话里唯一会变的那个数字。
+
+`costCny`／`costEur` 是 cost-meter 冻结的估算汇率副本（它的账本是美元本位的），`calls` 是它记下的
+LLM 调用次数（轮次、压缩、标题；它的单会话数字不合并 subagent，所以每行单独计价）。没有这个插件时
+该块是 `available: false` 加一条可读的 `reason`（“no price source in this DSH profile: …”），
+token 数字不受影响。钱覆盖会话内每一次 LLM 调用，而 token 总量不含压缩、也看不到标题调用，所以
+**token 和钱对不上是正常的**：花钱看 `costUsd`，挂牌价看 `costEstimateUsd`，用量看
+`totalTokens`，不要拿一个推另一个。
+
+两条路径都由 `tools.usage` 控制（默认 `true`），见下面的配置。这个开关独立于 `tools.session`：
+关掉会话工具后，拿着已知的会话 id 仍然可以问用量。两种情况都不会改变记录本身——用量是从端点已经
+在读的会话日志里折出来的，开关只改变返回什么，不改变存在什么。
 
 ## 安全
 
@@ -249,7 +439,7 @@ workspace_create { path: "/Users/me/project" }
   普通 MCP 客户端不可达——请使用插件自有的监听端口。把 `http.host` 改成 `0.0.0.0` 等于把同样
   的权力开放到你的网络；插件会在绑定时告警，且只应在你自己的网关后面这么做。
 - **token 就是全部的安全边界，而这个边界等于你的用户账号。** 这里没有任何路径沙箱。调用方一旦
-  持有 token，`file_read`／`file_write`／`file_list` 就能触及 DSH 进程能触及的一切，`shell_run`
+  持有 token，`file_read`／`file_write`／`file_edit`／`file_list` 就能触及 DSH 进程能触及的一切，`shell_run`
   就是以你的身份执行任意命令——因为 harness 自己的 `fs` 与 `shell` 服务替 DSH agent 做事时正是
   如此。两条都在实机上验证过：`file_read` 读出了 `/etc/passwd`、`~/.dsh/settings.yaml` 以及本
   插件自己的 token 文件；`file_write` 在**所有**已注册工作区之外创建了文件。工作区决定的是
@@ -264,19 +454,28 @@ workspace_create { path: "/Users/me/project" }
   凭证——所以关掉 shell 工具的 profile，**不等于**可以交给一个你不愿给登录权限的调用方。
   要真正的隔离，请把整个 DSH 实例跑在操作系统级沙箱里、或用独立的非特权账号运行，并把 token
   当作那个账号的密码。
+- **花费在同一条边界上可读。** 令牌持有者能读到本端点够得到的任何会话的 token 用量——装了
+  `dsh-cost-meter` 时还有估算金额：`session_usage`，以及每条 `session_prompt` 回复里的用量块。
+  它并没有扩大**权限**（用量记录就在对话记录同一份持久会话日志里，`shell_run` 本来也能读到那份
+  日志），但它的**发现面**比会话工具更大：`session_usage` 加 `all: true` 时，即使 `tools.session`
+  是关的，也能列出每个会话的 id、`cwd` 和花费。如果你关掉会话工具是为了不让调用方碰这个实例，请把
+  `tools.usage` 一起关掉。
 - `approval.policy` 决定 DSH agent 想做一件本该问人的事时怎么办：
   - `inherit`（默认）—— 插件不参与应答。没有浏览器接进来时，需要审批的工具会解析为
     `unavailable`，即 agent 的动作**失败关闭**。
-  - `allow` —— 插件对**它自己创建的**会话所发起的每个审批请求都批准，对其他会话完全不进入
-    waterfall，所以你手动操作的会话仍然保持自己的策略。这是让无人值守的 agent 任务能跑通的
-    前提，也确实实质性地扩大了 agent 可执行的范围。
-- `file_write` 和 `shell_run` 是**调用方**的动作，不是 agent 的。它们走 harness 自己的文件
-  系统与 shell 服务，所以这个 DSH 实例配置的沙箱和策略照样生效。
+  - `allow` —— 通过 approval 服务把**本插件创建的**每个会话（以及 fork 出的子会话）切到 harness
+    的无人值守策略（`never`），harness 会把这次切换告知 agent；非本插件创建的会话保持你的策略，
+    你手动操作的会话不受影响。这是让无人值守的 agent 任务能跑通的前提，也确实实质性地扩大了
+    agent 可执行的范围。创建/fork 的回复会带 `approvalPolicy: "never"`，切换失败则带
+    `approvalPolicyError`。
+- `file_write`、`shell_run` 以及后台的 `shell_start`/`shell_kill` 都是**调用方**的动作，不是
+  agent 的。它们走 harness 自己的文件系统与 shell 服务，所以这个 DSH 实例配置的沙箱和策略照样生效。
 
 ## 装进 DSH Desktop（需要重启）
 
-`desktop` profile 由 Electron 保留，`dsh plugin --profile desktop add` 在普通终端会被拒绝，
-所以要手动装。装完**必须重启 DSH Desktop**。
+在当前的 harness（0.2.1-rc.5）上，普通终端里 `dsh plugin --profile desktop add <tarball>` 是可用的：
+被拒绝的只是应用独占的*管理类*操作（例如对 `desktop` profile 执行 `--dump-config`）。下面的 tarball
+安装是最简路径；手写 patch 层则是该子命令被拒绝时的兜底。无论哪种方式，装完**必须重启 DSH Desktop**。
 
 ### 为什么必须重启
 
@@ -369,7 +568,8 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs
 它会读 `<DSH_HOME>/dsh-as-mcp/token`、握手、列出工具、调 `dsh_info` 报出该 profile 实际挂载了
 哪些 harness 服务，再调 `workspace_list`。通过时最后一行是 `OK`，失败则退出码非 0。
 
-要跑一次真实链路（建临时工作区 → 建会话 → 交给 DSH agent 干活 → 打印回复与工具调用）：
+要跑一次真实链路（建临时工作区 → 建会话 → 交给 DSH agent 干活 → 打印回复、工具调用和本轮花掉的
+token，再经 `session_usage` 把同一个总量读回来核对）：
 
 ```bash
 node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
@@ -398,13 +598,17 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
       path: /mcp
       mountOnWebServer: false # 同时挂在 http://<dsh 主机>:<dsh web 端口>/mcp
     auth:
-      token: ''              # 空：读取/生成 $DSH_HOME/dsh-as-mcp/token
+      # 整个 `token` 都不写：用 $DSH_HOME/dsh-as-mcp/token（首次运行自动生成）。
+      # 不要写成 `token: ''`：只要这个键存在（哪怕是空串），设置面板就会认为
+      # 已经固定了密钥。
+      # token: '<一个够长的随机密钥>'
     tools:
       workspace: true
       session: true
       files: true
       shell: true
       agentTools: true
+      usage: true            # session_usage + session_prompt 回复里的用量块
     agentTools:
       allow: []              # 空：用内置白名单；非空则整体替换
       deny: []               # 从解析后的集合里减去
@@ -435,7 +639,7 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 
 | 改动 | 效果 |
 | --- | --- |
-| 工具开关 | 该组在下一次 `tools/list` 中消失或出现；被关闭的工具是真正不存在，调用它会报“未知工具”，而不是执行后被拒绝 |
+| 工具开关 | 该组在下一次 `tools/list` 中消失或出现；被关闭的工具是真正不存在，调用它会报“未知工具”，而不是执行后被拒绝。`usage: false` 还会让 `session_prompt` 回复不再带用量块 |
 | 上限、会话默认值 | 下一次调用开始时读取 |
 | 令牌 | 下一次请求就要求新值，旧令牌立即失效 |
 | `enabled`、`host`、`port`、`path`、`mountOnWebServer` | 监听器会被搬走 |
@@ -477,6 +681,12 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
   `configure({ auto: false }, ctx.fiber)`（本插件自带页面）。**面板需要 0.2 的设置模型**；在
   0.1.x 运行时上端点仍按配置文件正常运行，但没有面板——那种运行时只会为「插件通过已移除的那个
   调用注册过的命名空间」投影表单。
+- **用量需要会话日志。** token 数字经 `sessionQuery`（优先）或 `sessionController.inspect` 从持久
+  日志折出；`dsh_info` 把这一点报成 `tokenUsage`。两者都没有时，`session_prompt` 的回复会带
+  `usageUnavailable` 和原因，而不是假装这一轮没花钱；会话工具照常可用；带 `sessionId` 的
+  `session_usage` 会返回一行 `error`（其总量不含它）；不带 `sessionId` 时只报本端点自己创建的
+  会话（或给出解释的空报告），而 `all: true` 因为需要枚举会话，仍会报能力缺失错误。钱还需要
+  第三方 `dsh-cost-meter`，`dsh_info` 报成 `costMeter`。
 - **没有其它硬 `@deepseek-ai/*` 依赖。** 除上面这个版本闸门，本包的其它能力都通过
   `ctx.get(name)` 做结构化解析。唯一的例外是 `@deepseek-ai/schemastery`，作为 peer 直接 import：
   DSH 里没有免 schemastery 的设置表单路径。
@@ -524,8 +734,9 @@ loader 契约都是被真正跑过的，不是 mock 出来的。
 
 ```bash
 node scripts/smoke.mjs       # 握手、tools/list、dsh_info —— 线通不通？
-node scripts/exercise.mjs    # 约 40 项断言：建工作区、开会话、让 DSH agent 写代码、
-                             # 从磁盘读回来、运行它、检查对话记录，并确认失败路径可读
+node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让 DSH agent 写代码、
+                             # 从磁盘读回来、运行它、检查对话记录、核对回复里的 token
+                             # 用量与 `session_usage` 回执是否一致，并确认失败路径可读
 ```
 
 `smoke.mjs` 回答"这玩意儿会说 MCP 吗"，`exercise.mjs` 回答"外部 agent 真的能通过它驱动一个

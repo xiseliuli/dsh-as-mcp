@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
-import { TOKEN, boot, stubDriver } from './harness.js'
+import { TOKEN, boot, stubDriver, testConfig } from './harness.js'
 
 const exercisePath = fileURLToPath(new URL('../scripts/exercise.mjs', import.meta.url))
 
@@ -68,6 +68,30 @@ describe('scripts/exercise.mjs', () => {
     expect(stdout.toLowerCase()).toContain('costs real money')
     // --help must exit before the endpoint is even resolved, let alone printed.
     expect(stderr).toBe('')
+  })
+
+  it('runs past the early sections instead of aborting on an undefined variable', async () => {
+    // Regression for a scoping bug: `usageReported` was declared inside the
+    // `surface` section and read by later ones, so the run threw
+    // "usageReported is not defined" and stopped before the agent, shell, fork and
+    // usage sections — which meant those had never actually run. A failing `check`
+    // is fine; a thrown ReferenceError is not.
+    const dir = freshScratchDir('sections')
+    // Every group on: with the default stub config the shell/usage/agent sections
+    // are absent, and a missing tool legitimately aborts the run.
+    const full = await boot(stubDriver(), testConfig({ shell: true, agentTools: true, usage: true }))
+    try {
+      const result = await runExercise(['--url', full.url, '--token', TOKEN, '--dir', dir, '--no-color'])
+      expect(result.stdout).not.toContain('usageReported is not defined')
+      // Reaching the tool-call detail checks proves the run got past the section
+      // that used to throw; the stub cannot go further because later sections
+      // verify real files on disk, which a stub never writes.
+      for (const marker of ['sessions', 'the DSH agent writes code', 'toolCalls: full returns the arguments']) {
+        expect(result.stdout, `reached: ${marker}`).toContain(marker)
+      }
+    } finally {
+      await full.stop()
+    }
   })
 
   it('prefers --url over DSH_AS_MCP_URL when both are given', async () => {

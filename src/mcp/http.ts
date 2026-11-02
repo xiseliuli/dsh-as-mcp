@@ -9,6 +9,35 @@ import { registerTools, type ToolDeps } from './tools.js'
 import { presentedToken, tokenMatches } from './token.js'
 import { SERVER_NAME, VERSION } from '../version.js'
 
+/**
+ * The workflow note an MCP client receives in its `initialize` result.
+ *
+ * The MCP spec calls this "instructions": free text a client may put in front of
+ * its model. It is the one place to say what the endpoint *is* and how its tools
+ * fit together, because a model that lists 20 tools and guesses the order will
+ * reach for `shell_run` when `session_prompt` is the intended path. Kept short on
+ * purpose — every sentence here is paid for on every connection.
+ */
+export const SERVER_INSTRUCTIONS = [
+  'This is DeepSeek Harness exposed over MCP. Every call drives a real DSH agent session inside this instance;',
+  'work appears live in the DSH UI and is subject to the same sandbox and permission policy.',
+  '',
+  'Call dsh_info first. It reports which harness services this profile provides, whether usage can be read, and the',
+  'catalog of providers, agent presets and sandbox mode that session_create accepts.',
+  '',
+  'The usual flow is session_create, then session_prompt. session_prompt waits for the turn and returns the agent',
+  'reply, every tool call it made, and the token usage it consumed (per turn and cumulative, with money when a price',
+  'plugin is installed). Use session_usage when you need a receipt after the fact: DSH has no "session ended" event,',
+  'and the tool reads the durable log, so it also answers after a session went idle.',
+  '',
+  'Prefer session_prompt for work that needs judgement. file_read/file_write/file_list and shell_run act directly,',
+  "without spending a model turn or tokens. dsh_tool_list and dsh_tool_call run this instance's own agent tools, but",
+  'only the names listed there are reachable.',
+  '',
+  'The bearer token is the whole security boundary: a holder can read files, run commands, and read transcripts on',
+  'this machine. Do not print it into a shared transcript.',
+].join('\n')
+
 /** A live MCP endpoint and the disposer that tears it down. */
 export interface EndpointHandle {
   /** The URL an MCP client should POST to. */
@@ -84,7 +113,10 @@ export function createRequestHandler(options: RequestHandlerOptions): RequestHan
   // per-request lifetime, and our tools are stateless beyond the driver.
   const handler = createMcpHandler(
     () => {
-      const server = new McpServer({ name: SERVER_NAME, version: VERSION })
+      const server = new McpServer(
+        { name: SERVER_NAME, version: VERSION },
+        { instructions: SERVER_INSTRUCTIONS },
+      )
       registerTools(server, deps)
       return server
     },

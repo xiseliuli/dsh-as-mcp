@@ -37,13 +37,36 @@ export const inject: string[] = []
 export { Config }
 export { DshDriver, DshCapabilityError } from './dsh/driver.js'
 export type {
+  CatalogAgentPreset,
+  CatalogProvider,
+  CatalogProviderModels,
   DirectoryEntry,
+  DshCatalog,
   SessionInfo,
+  SessionUsageEnvelope,
+  SessionUsageReport,
+  SessionUsageRow,
+  UsageUnavailable,
   ToolCallInfo,
+  ToolCallDetail,
+  TurnProgress,
   TurnResult,
+  PromptImageRequest,
+  ShellJobSummary,
+  ShellOutputPage,
   TranscriptMessage,
   WorkspaceInfo,
 } from './dsh/driver.js'
+export type { CostReport } from './dsh/cost.js'
+export type { UsageCut, UsageReport, UsageSummary } from './dsh/report.js'
+export type {
+  CompactionUsage,
+  ModelUsage,
+  SessionUsage,
+  TurnUsage,
+  UsageBuckets,
+  UsageTotals,
+} from './dsh/usage.js'
 export type { Config as DshAsMcpConfig }
 export { SETTINGS_NAMESPACE } from './settings.js'
 

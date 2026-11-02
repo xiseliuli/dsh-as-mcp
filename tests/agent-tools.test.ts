@@ -28,7 +28,7 @@ function schema(name: string, description = `${name} tool`) {
 }
 
 /** A `ctx.tools` double recording what it was asked to do. */
-function fakeTools(options: { visible?: string[]; fail?: boolean } = {}) {
+function fakeTools(options: { visible?: string[]; fail?: boolean; text?: string } = {}) {
   const calls: { name: string; args: unknown; agent: unknown; callId: string }[] = []
   const scopes: unknown[] = []
   const visible = options.visible ?? [
@@ -55,7 +55,7 @@ function fakeTools(options: { visible?: string[]; fail?: boolean } = {}) {
         return {
           isError: false as const,
           value: { ran: exec.name },
-          content: [{ type: 'text', text: `ran ${exec.name}` }],
+          content: [{ type: 'text', text: options.text ?? `ran ${exec.name}` }],
         }
       },
     },
@@ -122,6 +122,46 @@ describe('the scope requirement', () => {
       .rejects.toThrow(/session_create/)
     await expect(driver.callAgentTool({ name: 'read', sessionId: '', timeoutMs: 1_000 }))
       .rejects.toThrow(/shell_run/)
+  })
+})
+
+describe('callAgentTool result size', () => {
+  it('returns the full text and its byte count when under the cap', async () => {
+    const tools = fakeTools({ text: 'small output' })
+    const result = await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'read',
+      sessionId: SESSION,
+      timeoutMs: 1_000,
+    })
+    expect(result).toMatchObject({ ok: true, text: 'small output', resultBytes: 12, value: { ran: 'read' } })
+    expect(result.truncated).toBeUndefined()
+  })
+
+  it('cuts a large result and reports what it was, instead of flooding the caller', async () => {
+    const tools = fakeTools({ text: 'x'.repeat(5_000) })
+    const result = await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'read',
+      sessionId: SESSION,
+      timeoutMs: 1_000,
+      maxResultChars: 500,
+    })
+    expect(result.text).toHaveLength(500)
+    expect(result.resultBytes).toBe(5_000)
+    expect(result.truncated).toBe(true)
+    // A structured duplicate of output the caller cannot see would bound nothing.
+    expect(result.value).toBeUndefined()
+  })
+
+  it('applies a default cap so an unbounded tool result cannot pass through', async () => {
+    const tools = fakeTools({ text: 'y'.repeat(25_000) })
+    const result = await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'bash',
+      sessionId: SESSION,
+      timeoutMs: 1_000,
+    })
+    expect(result.text).toHaveLength(20_000)
+    expect(result.resultBytes).toBe(25_000)
+    expect(result.truncated).toBe(true)
   })
 })
 

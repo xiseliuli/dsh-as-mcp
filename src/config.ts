@@ -89,6 +89,17 @@ export interface ToolToggles {
    * directly, without spending a model turn to decide to call them.
    */
   agentTools: boolean
+  /**
+   * `session_usage`, plus the per-turn and cumulative usage blocks every
+   * `session_prompt` reply carries.
+   *
+   * One toggle covers both because they answer the same question — how much did
+   * this session cost — and an operator turning usage off means "do not report
+   * spend from this endpoint", not "report it in one place only". Nothing else
+   * is affected: usage is read from the session log the endpoint already reads,
+   * so the toggle changes what is returned, never what is recorded.
+   */
+  usage: boolean
 }
 
 /**
@@ -134,9 +145,12 @@ export interface ApprovalConfig {
   /**
    * - `inherit`: leave the harness policy untouched. Without a browser or other
    *   answerer attached, approval-requiring tools fail closed.
-   * - `allow`: install an answerer that approves every request raised by a
-   *   session this plugin created. This grants the driving agent whatever the
-   *   harness sandbox permits.
+   * - `allow`: switch every session this plugin creates (and every forked child)
+   *   to the harness's deterministic unattended stance (`never`), so an agent
+   *   driven from outside a browser does not stall on an approval prompt it has no
+   *   answerer for. The harness tells the agent about the switch; a session whose
+   *   agent cannot be resolved reports `approvalPolicyError` instead of silently
+   *   keeping the default.
    */
   policy: 'inherit' | 'allow'
 }
@@ -319,7 +333,7 @@ export function normalizeConfig(input: unknown = {}): Config {
   rejectUnknown(auth, ['token'], 'auth', issues)
 
   const tools = section(root, 'tools', 'tools', issues)
-  rejectUnknown(tools, ['workspace', 'session', 'files', 'shell', 'agentTools'], 'tools', issues)
+  rejectUnknown(tools, ['workspace', 'session', 'files', 'shell', 'agentTools', 'usage'], 'tools', issues)
 
   const agentTools = section(root, 'agentTools', 'agentTools', issues)
   rejectUnknown(agentTools, ['allow', 'deny'], 'agentTools', issues)
@@ -352,6 +366,7 @@ export function normalizeConfig(input: unknown = {}): Config {
       files: bool(tools, 'files', fallback.tools.files, 'tools', issues),
       shell: bool(tools, 'shell', fallback.tools.shell, 'tools', issues),
       agentTools: bool(tools, 'agentTools', fallback.tools.agentTools, 'tools', issues),
+      usage: bool(tools, 'usage', fallback.tools.usage, 'tools', issues),
     },
     agentTools: {
       // An empty `allow` means "use the built-in list", so a config that sets
@@ -421,6 +436,8 @@ export const Config = Schema.object({
       .description('Expose shell_run, which executes commands as this DSH instance.'),
     agentTools: Schema.boolean().default(DEFAULT_TOOLS.agentTools).volatile()
       .description("Expose dsh_tool_list and dsh_tool_call, which run this instance's own agent tools."),
+    usage: Schema.boolean().default(DEFAULT_TOOLS.usage).volatile()
+      .description('Expose session_usage and report token usage in session_prompt replies.'),
   }).description('Which tool groups the endpoint advertises.'),
   agentTools: Schema.object({
     allow: Schema.array(Schema.string()).default([...DEFAULT_AGENT_TOOLS.allow]).volatile()

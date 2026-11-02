@@ -110,9 +110,9 @@ describe('configuration changes reach the next request', () => {
   it('hands the next call the new limit rather than the one captured at boot', async () => {
     const seen: number[] = []
     const driver = stubDriver({
-      readFile: async ({ path, maxBytes }) => {
+      readFile: async ({ path, maxBytes, offset }) => {
         seen.push(maxBytes)
-        return { path, text: 'hello', truncated: false }
+        return { path, text: 'hello', truncated: false, offset: offset ?? 0, bytes: 5 }
       },
     })
     const endpoint = await mountMutable(testConfig({ files: true }), driver)

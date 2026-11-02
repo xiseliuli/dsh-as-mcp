@@ -91,6 +91,9 @@ const bold = (text) => (useColor ? `\u001b[1m${text}\u001b[0m` : text)
 
 let passed = 0
 let failed = 0
+/** Set by the `surface` section and read by every later section. */
+let usageReported = true
+
 
 function check(ok, label, detail) {
   const mark = ok ? green('✓') : red('✗')
@@ -215,27 +218,43 @@ section('surface')
 {
   const { tools } = await rpc('tools/list')
   const names = tools.map((entry) => entry.name).sort()
+  // `dsh_info` first: whether `session_usage` is part of this endpoint's surface
+  // depends on the `tools.usage` setting, and an operator who turned usage off is
+  // not a failed acceptance run.
+  const info = await must('dsh_info')
+  usageReported = info.usage?.reported !== false
   // Sorted, because `names` is sorted above — so this list must be in collation
   // order, not registration order.
   const expected = [
     'dsh_info',
     'dsh_tool_call',
     'dsh_tool_list',
+    'file_edit',
     'file_list',
     'file_read',
+    'file_read_image',
     'file_write',
     'session_cancel',
     'session_create',
+    'session_fork',
     'session_list',
     'session_messages',
     'session_prompt',
+    'session_rename',
+    'session_set_model',
+    ...(usageReported ? ['session_usage'] : []),
+    'shell_kill',
+    'shell_list',
+    'shell_output',
     'shell_run',
+    'shell_start',
     'workspace_create',
+    'workspace_delete',
     'workspace_list',
   ]
   check(
     JSON.stringify(names) === JSON.stringify(expected),
-    'tools/list exposes all 14 tools',
+    usageReported ? 'tools/list exposes all 25 tools' : 'tools/list exposes all 24 tools (usage reporting off)',
     `${names.length} tools`,
   )
   check(
@@ -243,8 +262,30 @@ section('surface')
     'every tool is described',
   )
 
-  const info = await must('dsh_info')
+  // Data-returning tools advertise an object output schema, so schema-aware
+  // clients can consume structuredContent.
+  const structured = tools.filter((entry) =>
+    ['dsh_info', 'session_list', 'file_list', 'workspace_list'].includes(entry.name))
+  check(
+    structured.length > 0 &&
+      structured.every((entry) => entry.outputSchema?.type === 'object'),
+    'data tools advertise an output schema',
+    structured.map((entry) => `${entry.name}:${entry.outputSchema?.type ?? 'none'}`).join(', '),
+  )
+
   check(info.listening === true, 'endpoint reports itself listening', info.endpoint)
+
+  // Model discovery is opt-in and per-provider guarded; when it does answer, the
+  // shape must be a list of {provider, models[]}.
+  const withModels = await must('dsh_info', { includeModels: true })
+  const providerModels = withModels.catalog?.providerModels
+  check(
+    providerModels === undefined ||
+      (Array.isArray(providerModels) &&
+        providerModels.every((entry) => typeof entry.provider === 'string' && Array.isArray(entry.models))),
+    'dsh_info includeModels returns per-provider model lists',
+    providerModels === undefined ? 'not reported' : `${providerModels.length} routes`,
+  )
   check(
     info.listenError === null || info.listenError === undefined,
     'no bind error',
@@ -266,10 +307,58 @@ section('surface')
   const groups = info.enabledToolGroups ?? {}
   const wanted = ['workspace', 'session', 'files', 'shell', 'agentTools']
     .filter((group) => groups[group] !== true)
-  check(wanted.length === 0, 'all five tool groups are enabled', Object.keys(groups).join(', '))
+  check(wanted.length === 0, 'all five core tool groups are enabled', Object.keys(groups).join(', '))
+  check(
+    usageReported === (groups.usage === true),
+    usageReported ? 'usage reporting is enabled' : 'usage reporting is off by configuration',
+    `usage=${groups.usage === true}`,
+  )
+  if (usageReported) {
+    check(
+      info.usage?.tokensReadable === true,
+      'the session log is readable for token usage',
+      `cost meter: ${info.usage?.costAvailable === true ? 'present' : 'absent'}`,
+    )
+  }
   const services = info.harnessServices ?? {}
   for (const service of ['workspaceRegistry', 'sessionController', 'agents', 'fs', 'shell', 'tools']) {
     check(services[service] === true, `harness service: ${service}`)
+  }
+
+  check(typeof info.version === 'string' && info.version !== '', 'dsh_info reports the plugin version', info.version)
+  // The catalog is the answer to "what may I pass to session_create?" — a profile
+  // that mounts a catalog service must list something, and an entry that could not
+  // be read is named rather than silently absent.
+  const catalog = info.catalog
+  check(catalog !== undefined, 'dsh_info reports a catalog')
+  if (catalog !== undefined) {
+    check(
+      Array.isArray(catalog.unavailable) === false ||
+        catalog.unavailable.every((entry) => typeof entry === 'string'),
+      'catalog.unavailable is a list of reasons',
+      Array.isArray(catalog.unavailable) ? catalog.unavailable.join('; ') : 'none',
+    )
+    if (services.llm === true) {
+      check(
+        Array.isArray(catalog.providers) && catalog.providers.length > 0,
+        'catalog lists provider routes',
+        Array.isArray(catalog.providers) ? `${catalog.providers.length} providers` : 'absent',
+      )
+    }
+    if (services.agentPresets === true) {
+      check(
+        Array.isArray(catalog.agentPresets) && catalog.agentPresets.length > 0,
+        'catalog lists agent presets',
+        Array.isArray(catalog.agentPresets) ? `${catalog.agentPresets.length} presets` : 'absent',
+      )
+    }
+    if (services.sandboxPolicy === true) {
+      check(
+        typeof catalog.sandboxMode === 'string' && catalog.sandboxMode !== '',
+        'catalog reports the effective sandbox mode',
+        catalog.sandboxMode,
+      )
+    }
   }
 }
 
@@ -286,6 +375,9 @@ await rm(projectPath, { recursive: true, force: true })
 const codePath = join(projectPath, 'fizzbuzz.mjs')
 let workspaceId
 let sessionId
+// The last `session_prompt` reply, kept so the usage section can compare the
+// receipt against the cumulative block the reply already reported.
+let lastPrompt
 
 try {
   section('workspaces')
@@ -318,6 +410,85 @@ try {
       'the session appears in session_list',
       `${(listed.sessions ?? []).length} sessions`,
     )
+
+    // Titles are opt-in (one log read per session); the shape must not change when
+    // they are asked for, and a title that cannot be folded must not drop the row.
+    const titled = await must('session_list', { limit: 50, includeTitle: true })
+    const titledRow = (titled.sessions ?? []).find((entry) => (entry.sessionId ?? entry.id) === sessionId)
+    check(
+      titledRow !== undefined,
+      'session_list includeTitle keeps the session rows',
+      titledRow?.title === undefined ? 'no title yet' : `title: ${titledRow.title}`,
+    )
+
+    // Filters run before the limit, so "my sessions in this directory" is the whole
+    // answer rather than whichever page happened to be recent.
+    const filtered = await must('session_list', { limit: 50, cwd: projectPath })
+    check(
+      (filtered.sessions ?? []).some((entry) => (entry.sessionId ?? entry.id) === sessionId),
+      'session_list filters by workspace directory',
+      `${(filtered.sessions ?? []).length} sessions`,
+    )
+
+    // Unregistering is idempotent and leaves the directory alone, so a harness can
+    // clean up the workspaces it created for a task.
+    const throwawayPath = join(scratch, 'throwaway-workspace')
+    const throwaway = await must('workspace_create', { path: throwawayPath })
+    const deleted = await must('workspace_delete', { workspaceId: throwaway.workspace?.id ?? throwaway.id })
+    check(deleted.deleted === true, 'workspace_delete unregisters a workspace', throwawayPath)
+    const afterDelete = await must('workspace_delete', { workspaceId: throwaway.workspace?.id ?? throwaway.id })
+    check(afterDelete.deleted === false, 'workspace_delete is idempotent')
+    check(existsSync(throwawayPath), 'workspace_delete leaves the directory on disk', throwawayPath)
+    const listedAfter = await must('workspace_list')
+    check(
+      !(listedAfter.workspaces ?? []).some((entry) => entry.id === (throwaway.workspace?.id ?? throwaway.id)),
+      'the workspace is gone from workspace_list',
+    )
+
+    // A name from the caller must be the name the UI shows: rename, then read it
+    // back through the title fold.
+    const wanted = 'exercise: named by the MCP caller'
+    const renamed = await must('session_rename', { sessionId, title: wanted })
+    check(renamed.title === wanted, 'session_rename accepts the title', renamed.title)
+    const afterRename = await must('session_list', { limit: 50, includeTitle: true })
+    const renamedRow = (afterRename.sessions ?? []).find((entry) => (entry.sessionId ?? entry.id) === sessionId)
+    check(
+      renamedRow?.title === wanted,
+      'the renamed title comes back through session_list',
+      renamedRow?.title,
+    )
+
+    // A retried message must not run twice: same key, same content, replayed turn.
+    const retryKey = 'exercise-retry-1'
+    const firstTry = await must('session_prompt', {
+      sessionId,
+      prompt: 'Reply with exactly: retry marker',
+      idempotencyKey: retryKey,
+      timeoutMs: 180_000,
+    })
+    const replay = await must('session_prompt', {
+      sessionId,
+      prompt: 'Reply with exactly: retry marker',
+      idempotencyKey: retryKey,
+      timeoutMs: 180_000,
+    })
+    check(replay.replayed === true, 'a retried idempotency key replays instead of re-sending')
+    check(
+      replay.turn?.reply === firstTry.turn?.reply,
+      'the replay returns the same answer',
+      `${(replay.turn?.reply ?? '').slice(0, 40)}`,
+    )
+    const mismatch = await tool('session_prompt', {
+      sessionId,
+      prompt: 'This is different content under the same key.',
+      idempotencyKey: retryKey,
+      timeoutMs: 30_000,
+    })
+    check(
+      mismatch.ok === false && /reused for different content/.test(mismatch.error ?? ''),
+      'reusing a key for different content is refused',
+      mismatch.error?.slice(0, 80),
+    )
   }
 
   section('the DSH agent writes code')
@@ -328,6 +499,7 @@ try {
       'Then run it and confirm it works. Do not print anything else.',
     ].join(' ')
     const outcome = await must('session_prompt', { sessionId, prompt, timeoutMs: 300_000 })
+    lastPrompt = outcome
     const turn = outcome.turn ?? {}
     check(
       turn.timedOut !== true,
@@ -338,7 +510,112 @@ try {
     check((turn.toolCalls ?? []).length > 0, 'the agent used its own tools', `${(turn.toolCalls ?? []).length} calls`)
     const names = [...new Set((turn.toolCalls ?? []).map((call) => call.name))]
     check(names.length > 0, 'tool calls are named', names.join(', '))
+
+    // Tool-call arguments are summarised by default: the byte count is reported
+    // but the arguments are not echoed, because an agent's file_write carries the
+    // whole file and duplicating it would dominate the caller's context.
+    check(
+      (turn.toolCalls ?? []).every((call) => typeof call.argumentsBytes === 'number' && call.arguments === undefined),
+      'tool calls are summarised by default',
+      `${(turn.toolCalls ?? []).filter((call) => call.arguments !== undefined).length} with raw arguments`,
+    )
+    // `full` returns them on request, still bounded.
+    const full = await must('session_prompt', {
+      sessionId,
+      prompt: 'Run `echo tool-args-check` with your shell tool, then say done.',
+      toolCalls: 'full',
+      maxArgumentChars: 200,
+      timeoutMs: 180_000,
+    })
+    const fullCalls = full.turn?.toolCalls ?? []
+    check(
+      fullCalls.some((call) => typeof call.arguments === 'string'),
+      'toolCalls: full returns the arguments',
+      `${fullCalls.length} calls`,
+    )
     check(existsSync(codePath), 'the file really exists on disk', codePath)
+
+    // Usage rides the reply: the turn's own tokens, and the session total so far.
+    const turnUsage = turn.usage
+    if (usageReported) {
+      check(
+        turnUsage !== undefined && turnUsage.totalTokens > 0,
+        'the reply reports the turn token usage',
+        turnUsage === undefined ? 'absent' : `${turnUsage.totalTokens} tokens, ${turnUsage.steps} steps`,
+      )
+      const buckets = turnUsage === undefined
+        ? 0
+        : turnUsage.uncachedInputTokens + turnUsage.cacheReadTokens
+          + turnUsage.cacheWriteTokens + turnUsage.outputTokens
+      check(
+        turnUsage !== undefined && buckets === turnUsage.totalTokens,
+        'the bucket total adds up',
+        turnUsage === undefined ? 'absent' : `${buckets} == ${turnUsage.totalTokens}`,
+      )
+      const cumulative = outcome.session?.usage
+      check(
+        cumulative !== undefined && cumulative.totals.totalTokens >= turnUsage.totalTokens,
+        'the reply reports the session total',
+        cumulative === undefined ? 'absent' : `${cumulative.totals.totalTokens} tokens`,
+      )
+      check(
+        typeof cumulative?.verifiedAgainstProjection === 'boolean',
+        'the session total says whether the harness projection agreed',
+        cumulative?.verifiedAgainstProjection === true ? 'verified' : 'unverified',
+      )
+    }
+  }
+
+  section('usage accounting')
+  if (usageReported) {
+    // The explicit receipt. Equality with the reply's cumulative block is the
+    // check that matters: a calling harness reads one or the other, never both,
+    // and the two must not disagree about what the session spent.
+    const batch = await must('session_usage', { sessionIds: [sessionId, sessionId] })
+    check(
+      batch.scope === 'sessionIds' && (batch.sessions ?? []).length === 1 && batch.totals.totalTokens > 0,
+      'session_usage accepts a batch of ids and collapses duplicates',
+      `${(batch.sessions ?? []).length} rows, ${batch.totals.totalTokens} tokens`,
+    )
+
+    const receipt = await must('session_usage', { sessionId, includeTurns: true })
+    check(receipt.scope === 'session', 'session_usage scopes to the session', String(receipt.scope))
+    check(
+      receipt.sessions?.some((row) => row.sessionId === sessionId && row.origin === 'self'),
+      'the session appears as its own row',
+      `${receipt.sessions?.length ?? 0} row(s)`,
+    )
+    check(
+      receipt.totals?.totalTokens > 0,
+      'the receipt totals the tokens',
+      `${receipt.totals?.totalTokens} tokens, ${receipt.totals?.turns} turn(s)`,
+    )
+    const replyTotals = lastPrompt?.session?.usage?.totals?.totalTokens
+    check(
+      replyTotals === undefined || receipt.totals?.totalTokens >= replyTotals,
+      'the receipt is at least the total the last reply reported',
+      `receipt ${receipt.totals?.totalTokens} vs reply ${replyTotals}`,
+    )
+    const own = receipt.sessions?.find((row) => row.origin === 'self')
+    check(
+      (own?.usage?.byTurn?.length ?? 0) > 0,
+      'includeTurns returns the per-turn breakdown',
+      `${own?.usage?.byTurn?.length ?? 0} turn(s)`,
+    )
+    check(
+      typeof receipt.cost?.available === 'boolean',
+      'the receipt states whether money is available',
+      receipt.cost?.available === true ? `${receipt.cost.costUsd} USD (estimate)` : receipt.cost?.reason ?? 'no reason given',
+    )
+
+    // Money is one ledger read per row, so a wide scan can opt out; the report
+    // must say that is why the amount is missing, not pretend no price source.
+    const unprimed = await must('session_usage', { sessionId, includeCost: false })
+    check(
+      unprimed.cost?.available === false && /includeCost/.test(unprimed.cost?.reason ?? ''),
+      'includeCost: false skips pricing and says so',
+      unprimed.cost?.reason ?? 'no reason given',
+    )
   }
 
   section("reading the agent's work back through MCP")
@@ -368,6 +645,60 @@ try {
     const read = await must('file_read', { path })
     check((read.content ?? read.text ?? '') === 'written over MCP\n', 'file_write then file_read round-trips')
     check((await readFile(path, 'utf8')) === 'written over MCP\n', 'the bytes match on disk')
+
+    // Paging: a slice read from an offset must be the tail, and must report the
+    // window it actually read rather than implying the whole file.
+    const tail = await must('file_read', { path, offset: 8 })
+    check(
+      (tail.text ?? '') === 'over MCP\n' && tail.offset === 8 && tail.truncated !== true,
+      'file_read offset returns the requested window',
+      `${JSON.stringify(tail.text)} at ${tail.offset}`,
+    )
+
+    // file_edit: a literal replacement without re-sending the file each way, and
+    // an ambiguous match that must be refused rather than guessed at.
+    const edited = await must('file_edit', { path, oldText: 'written over MCP', newText: 'edited over MCP' })
+    check(edited.replacements === 1, 'file_edit replaces one unique match', `${edited.replacements} replacement(s)`)
+    check(
+      (await readFile(path, 'utf8')) === 'edited over MCP\n',
+      'file_edit wrote the replacement to disk',
+    )
+    const ambiguous = await tool('file_edit', { path, oldText: 'ed', newText: 'X' })
+    check(
+      ambiguous.ok === false && /matches \d+ times/.test(ambiguous.error ?? ''),
+      'file_edit refuses an ambiguous match',
+      ambiguous.error ?? 'no error payload',
+    )
+
+    // An image round-trip: write a real 1x1 PNG and read it back through the
+    // image tool, so the MCP image block is exercised, not just described.
+    const pngPath = join(projectPath, 'pixel.png')
+    const pngScript = `require('node:fs').writeFileSync(${JSON.stringify(pngPath)}, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))`
+    const madePng = await tool('shell_run', { command: `node -e ${JSON.stringify(pngScript)}`, timeoutMs: 30_000 })
+    check(madePng.ok, 'a test image can be written', madePng.error ?? pngPath)
+    const image = await must('file_read_image', { path: pngPath })
+    check(image.mimeType === 'image/png', 'file_read_image sniffs the mime type', image.mimeType)
+    check((image.bytes ?? 0) > 0, 'file_read_image reports the byte count', `${image.bytes} bytes`)
+
+    // The same picture pasted into a prompt: the agent must be able to see it.
+    const vision = await tool('session_prompt', {
+      sessionId,
+      prompt: 'The attached image is a single square pixel. Reply with exactly: image seen',
+      images: [{ path: pngPath }],
+      timeoutMs: 180_000,
+    })
+    check(
+      vision.ok && /image seen/i.test(vision.payload?.turn?.reply ?? ''),
+      'session_prompt attaches an image the agent can see',
+      vision.ok ? (vision.payload?.turn?.reply ?? '').slice(0, 60) : vision.error,
+    )
+
+    const walked = await must('file_list', { path: projectPath, recursive: true })
+    check(
+      (walked.entries ?? []).some((entry) => entry.name === 'fizzbuzz.mjs' && entry.path === 'fizzbuzz.mjs'),
+      'file_list recursive reports relative paths',
+      `${(walked.entries ?? []).length} entries`,
+    )
   }
 
   section('shell')
@@ -386,6 +717,76 @@ try {
       'FizzBuzz 1..15 is correct',
       `${lines.length} lines`,
     )
+
+    // Background jobs: start, poll, collect, and stop. This is what keeps a long
+    // build from holding one MCP call open.
+    const job = await must('shell_start', { command: 'sh -c "echo started; sleep 0.3; echo finished"' })
+    check(typeof job.jobId === 'string', 'shell_start returns a job id', job.jobId)
+    let collected = ''
+    let page
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      page = await must('shell_output', { jobId: job.jobId })
+      collected += page.output ?? ''
+      if (page.done) break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    check(
+      collected.includes('started') && collected.includes('finished'),
+      'shell_output collects the job output',
+      `${collected.length} bytes`,
+    )
+    check(page?.done === true && page.exitCode === 0, 'shell_output reports the job finished', `exit ${page?.exitCode}`)
+    const listed = await must('shell_list', {})
+    check(
+      (listed.jobs ?? []).some((entry) => entry.jobId === job.jobId),
+      'shell_list includes the job',
+      `${(listed.jobs ?? []).length} jobs`,
+    )
+
+    const doomed = await must('shell_start', { command: 'sleep 30' })
+    const stopped = await must('shell_kill', { jobId: doomed.jobId })
+    check(stopped.killed === true && stopped.status === 'killed', 'shell_kill stops a running job', stopped.status)
+  }
+
+  section('fork')
+  {
+    // Forking copies the conversation prefix, so the child continues the same
+    // context for the price of one turn instead of a replay.
+    const forked = await must('session_fork', { sessionId })
+    check(
+      typeof forked.sessionId === 'string' && forked.sessionId !== sessionId,
+      'session_fork returns a child session id',
+      forked.sessionId,
+    )
+    check(forked.parentSessionId === sessionId, 'the child names its parent')
+    check(
+      (forked.inheritedEventCount ?? 0) > 0,
+      'the child inherited the parent history',
+      `${forked.inheritedEventCount} events`,
+    )
+
+    if (usageReported) {
+      const childUsage = await must('session_usage', { sessionId: forked.sessionId })
+      const inherited = childUsage.sessions?.[0]?.usage?.inherited?.totalTokens ?? 0
+      check(inherited > 0, 'usage separates the inherited prefix from the child\'s own spend', `${inherited} inherited tokens`)
+    }
+
+    const childReply = await must('session_prompt', {
+      sessionId: forked.sessionId,
+      prompt: 'Reply with exactly: fork works',
+      timeoutMs: 120_000,
+    })
+    check(
+      /fork works/i.test(childReply.turn?.reply ?? ''),
+      'the forked session continues the conversation',
+      (childReply.turn?.reply ?? 'no reply').slice(0, 60),
+    )
+
+    const listed = await must('session_list', { limit: 50 })
+    check(
+      (listed.sessions ?? []).some((entry) => entry.sessionId === forked.sessionId),
+      'the child appears in session_list',
+    )
   }
 
   section('transcript')
@@ -400,6 +801,20 @@ try {
     check(
       list.some((entry) => entry.role === 'assistant'),
       'the transcript contains the reply',
+    )
+
+    // Per-message caps are opt-in; when asked for, the cut is reported rather than
+    // looking like a complete message.
+    const capped = await must('session_messages', { sessionId, limit: 50, maxCharsPerMessage: 20 })
+    const cappedMessages = capped.messages ?? []
+    check(
+      cappedMessages.length > 0 && cappedMessages.every((entry) => entry.text.length <= 20),
+      'maxCharsPerMessage caps every message',
+      `${cappedMessages.length} messages`,
+    )
+    check(
+      cappedMessages.some((entry) => entry.truncated === true && entry.chars > entry.text.length),
+      'a cut message reports truncated and its original length',
     )
   }
 
@@ -474,6 +889,25 @@ try {
     check(
       typeof read.payload?.text === 'string' && read.payload.text.includes('via dsh_tool_call'),
       'its text is returned to the caller',
+    )
+    check(
+      typeof read.payload?.resultBytes === 'number' && read.payload.resultBytes > 0,
+      'the result reports its size',
+      `${read.payload?.resultBytes} bytes`,
+    )
+    // An agent tool can return a whole file; the cap is what keeps one call from
+    // flooding the caller's context, and the reply must say it was cut.
+    const cut = await tool('dsh_tool_call', {
+      name: 'read',
+      args: { file_path: target },
+      sessionId,
+      maxResultChars: 100,
+    })
+    check(
+      cut.ok && cut.payload?.truncated === true &&
+        typeof cut.payload?.text === 'string' && cut.payload.text.length <= 100,
+      'maxResultChars caps the result and says so',
+      cut.ok ? `${cut.payload?.text?.length ?? 0} chars of ${cut.payload?.resultBytes ?? '?'} bytes` : cut.error,
     )
 
     // Refused on call even though the harness itself registers it.

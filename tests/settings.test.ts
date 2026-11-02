@@ -112,6 +112,7 @@ describe('Config, as the harness reads it', () => {
       'tools.files',
       'tools.session',
       'tools.shell',
+      'tools.usage',
       'tools.workspace',
     ])
   })

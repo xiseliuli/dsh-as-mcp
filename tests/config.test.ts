@@ -53,7 +53,7 @@ describe('cordis.patch.yml', () => {
     expect(config).toEqual({
       http: { enabled: true, host: '127.0.0.1', port: 8790, path: '/mcp', mountOnWebServer: false },
       auth: { token: '' },
-      tools: { workspace: true, session: true, files: true, shell: true, agentTools: true },
+      tools: { workspace: true, session: true, files: true, shell: true, agentTools: true, usage: true },
       // The patch spells out `agentTools` too. An empty `allow` means "keep the
       // built-in list", so the row and the schema still agree on the default.
       agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [] },

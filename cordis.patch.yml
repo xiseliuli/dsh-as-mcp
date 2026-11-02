@@ -49,6 +49,12 @@
           # `dsh_tool_list` and `dsh_tool_call`: run this instance's own agent
           # tools directly, with no model turn spent deciding to call them.
           agentTools: true
+          # `session_usage`, plus the token usage block every `session_prompt`
+          # reply returns: how many tokens this session spent, per turn, per
+          # model, and in total. Read from the session log the endpoint already
+          # reads, so it adds no recording and no state of its own. Set false to
+          # stop reporting spend from this endpoint.
+          usage: true
         agentTools:
           # Which harness tools `dsh_tool_call` may reach. This is an ALLOW-LIST:
           # anything absent is refused AND hidden from `dsh_tool_list`. A

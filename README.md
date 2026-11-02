@@ -95,8 +95,8 @@ allowBuilds:
 
 Treat that allowance as permission to run this package's code on your machine at install time;
 pin a commit (`github:xiseliuli/dsh-as-mcp#<sha>`) so a later push cannot silently change what runs.
-`dsh plugin add` runs the pnpm version DSH pins (v11.7.0 as of DSH 0.1.7-rc.2 — its output ends
-with `using pnpm v…`), so the following applies only once DSH ships a newer pnpm. If the
+`dsh plugin add` runs the pnpm version DSH pins (v11.28.5 in DSH 0.2.1-rc.5 — its output ends with
+`using pnpm v…`), so the following applies only once DSH ships a newer pnpm. If the
 profile's pnpm is ≥11.19.0 (≥11.11.0 for a cloned, non-`github:` git dependency), you can instead
 approve the repository itself — `'dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git': true`, with
 no `#<sha>` — so a later commit on the same repo keeps building without re-approval; on an older
@@ -185,26 +185,53 @@ machine-local credential. "Loopback" means an exact match — `localhost`, `::1`
 `127.x.x.x` address — so a name such as `127.0.0.1.example.com` is treated as the remote host it
 is. A scheme is optional: `127.0.0.1:8790/mcp` is accepted and understood.
 
-Start with **`dsh_info`**. It reports the endpoint, where its token comes from, which tool groups are enabled,
-and — importantly — which harness services the current profile actually provides, so a client
-can tell "this profile has no shell" from "the command failed".
+Start with **`dsh_info`**. It reports the endpoint, the plugin version and uptime, where its token comes
+from, which tool groups are enabled, and — importantly — which harness services the current profile actually
+provides, whether token usage can be read and whether a price source exists, so a client can tell "this
+profile has no shell" from "the command failed".
+
+It reports the effective `config` (limits, approval policy, configured defaults — never the token) and endpoint
+`health` (node version, memory), so a caller can tell a failed tool call from a struggling process. It also
+carries `catalog`: the choices `session_create` actually accepts — `providers` (routes with a
+registered adapter), `agentPresets` with `defaultAgentPreset`, the effective `sandboxMode`, the
+`permissionPresets` roster, and `sessionCount`. Pass `includeModels: true` to also read each route's
+advertised models (`catalog.providerModels`): that asks the adapters, some of which answer with remote
+discovery, so it is opt-in and time-boxed per provider — and it is the reliable way to pick a valid
+`session_create.model` or `session_set_model.model`. Every catalog field is optional and independently
+guarded, and `catalog.unavailable` names whichever read could not be answered, so a missing entry means
+"this profile does not say" rather than "nothing is allowed".
 
 ## Tools
 
+The data-returning tools (`dsh_info`, `session_list`, `session_usage`, `session_messages`, `file_list`,
+`workspace_list`) also declare an output schema and return `structuredContent` beside the text block, so a
+schema-aware client can read the object directly instead of parsing JSON out of text.
+
 | Tool | What it does |
 | --- | --- |
-| `dsh_info` | Endpoint, token source, enabled groups, available harness services. |
+| `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, and the `catalog` of accepted providers, agent presets and sandbox mode. |
 | `workspace_create` | Register a directory as a DSH workspace (creating it if needed). |
 | `workspace_list` | Every registered workspace with id, path, title, session count, directory status. |
+| `workspace_delete` | Unregister a workspace (files and session history untouched); idempotent. |
 | `session_create` | Start a DSH agent session bound to a workspace or bare directory. |
-| `session_list` | Live session summaries, most recently updated first. |
-| `session_prompt` | Send one task to a DSH session; by default waits for the turn and returns the reply plus every tool call the agent made. |
-| `session_messages` | Read a session's user/assistant transcript. |
+| `session_fork` | Branch a session (live or restored from disk) into a child that inherits its event prefix, optionally up to `atSeq`; with no boundary the harness picks the latest completed turn. Continuing from that point costs one turn, not a replay, and `session_usage` reports the inherited prefix separately. |
+| `session_set_model` | Change the provider route and model later turns use: start cheap, escalate for a hard turn, or fall back when a route is unavailable. The reply's per-model usage shows which route spent what. |
+| `session_rename` | Set an explicit user title on a session, so what an external harness names a task stays the name a human sees in the DSH UI (and automatic title generation stops). A session currently held open by another DSH process is refused by the harness. |
+| `session_list` | Live session summaries, most recently updated first; `includeTitle` also folds each session's latest title (one log read per session), and `cwd`/`running` filter before the limit applies. |
+| `session_prompt` | Send one task to a DSH session; by default waits for the turn and returns the reply, the tool calls the agent made, and that turn's token usage plus the session's running total. `toolCalls` controls how much of each call is echoed: `summary` (default) gives name/id/argument size, `full` also the arguments (bounded by `maxArgumentChars`), `none` just counts. Attach screenshots with `images` (png/jpeg/webp/gif, at most 4). Pass an `idempotencyKey` and a retried call returns the existing turn instead of sending the task twice. If the client sends a `progressToken`, the wait reports `notifications/progress` at most once a second; if the client cancels the request, the wait ends and the reply says `aborted`/partial. `maxReplyChars` optionally caps the agent's final reply (a cut reply reports `replyTruncated` and its original `replyChars`). |
+| `session_messages` | Read a session's user/assistant transcript; `sinceSeq`/`role` make it an incremental poll, and `maxCharsPerMessage` caps each message (a cut message reports `truncated` and its original `chars`). |
 | `session_cancel` | Ask the agent to stop its current turn. |
-| `file_read` | Read a UTF-8 file through DSH's filesystem service. |
+| `session_usage` | Token usage per session (its subagents included by default): exact bucket counts, a per-model breakdown, optional per-turn detail, and money when a price plugin is installed. Pass `sessionIds` to tally several known sessions in one receipt. |
+| `file_read` | Read a UTF-8 file through DSH's filesystem service. Bounded by a byte limit; `offset`/`nextOffset` page through a larger file, and `maxBytes` asks for a smaller window so reading a slice costs less. |
+| `file_read_image` | Read an image (png/jpeg/gif/webp/bmp, detected from the bytes) and return it as an MCP image block, so you can look at a screenshot or chart instead of guessing. Capped at 8 MiB. |
 | `file_write` | Create or replace a file through DSH's filesystem service. |
-| `file_list` | List a directory through DSH's filesystem service. |
-| `shell_run` | Run one command through DSH's shell service. |
+| `file_edit` | Replace literal text in one file: exact match, unique unless `replaceAll`, nothing written on an ambiguous match. Editing no longer costs a full read + write of the file. |
+| `file_list` | List a directory through DSH's filesystem service; `recursive` walks subdirectories (bounded, with `truncated`) and gives each entry a relative `path`. |
+| `shell_run` | Run one command through DSH's shell service and wait for it. |
+| `shell_start` | Start a command in the background (build, test run, dev server) and return a job id; optional watchdog. |
+| `shell_output` | Read a background job's new output, once each, with `done`/`status`/`pendingBytes` and spill paths when the service dropped bytes. |
+| `shell_kill` | Stop a background job and wait briefly for it to settle (idempotent). |
+| `shell_list` | Every background job with status, timestamps, exit code and unread bytes. |
 | `dsh_tool_list` | The agent tools this endpoint permits, with the schema DSH's own agent sees. |
 | `dsh_tool_call` | Run one of them directly, through the same pipeline the agent uses. |
 
@@ -231,7 +258,7 @@ that registers it, and every tool package ships inside an agent preset, so the g
 empty — an unscoped listing really does return zero tools, and an unscoped call answers
 `unknown tool`. A `dsh_tool_list` without a session therefore **fails loudly** rather than
 reporting an empty toolbox, which would read as "nothing is permitted". For the agentless path
-use `file_read` / `file_write` / `file_list` / `shell_run`, which resolve the deployment policy
+use `file_read` / `file_write` / `file_edit` / `file_list` / `shell_run`, which resolve the deployment policy
 directly and need no session.
 
 The permitted set is an **allow-list**, and it is deliberately narrow. Everything absent is
@@ -248,6 +275,200 @@ refused *and* hidden from `dsh_tool_list`. The omissions that matter:
 
 An operator can widen this deliberately with the `agentTools.allow` setting, or subtract from
 the default with `agentTools.deny`.
+
+## Usage accounting
+
+DSH has no "session ended" event, so there is no hook to subscribe to and no final callback to
+wait for. Spend is reported where a caller can ask for it: on every `session_prompt` reply, and
+on demand with `session_usage`.
+
+**Every prompt reply carries it.** `turn.usage` is what that prompt consumed — every step of the
+turn, one model call each, including tool round trips — and `session` is that session's running
+total, with a per-model breakdown and, when a price plugin is installed, money:
+
+```json
+{
+  "accepted": true,
+  "turn": {
+    "reply": "…", "toolCalls": [], "turn": 1, "turnEndReason": {"kind": "completed"},
+    "timedOut": false, "aborted": false,
+    "usage": {
+      "turn": 1, "steps": 157,
+      "uncachedInputTokens": 1032706, "cacheReadTokens": 21192320,
+      "cacheWriteTokens": 0, "outputTokens": 86148, "totalTokens": 22311174
+    }
+  },
+  "session": {
+    "sessionId": "session-…",
+    "usage": {
+      "totals": {"uncachedInputTokens": 1032706, "cacheReadTokens": 21192320,
+                 "cacheWriteTokens": 0, "outputTokens": 86148, "totalTokens": 22311174},
+      "byModel": [{"provider": "opencode-go-xise", "model": "deepseek-v4.1-flash",
+                   "samples": 157, "uncachedInputTokens": 1032706,
+                   "cacheReadTokens": 21192320, "cacheWriteTokens": 0,
+                   "outputTokens": 86148, "totalTokens": 22311174}],
+      "turns": 1, "steps": 157, "samples": 157,
+      "verifiedAgainstProjection": true
+    },
+    "cost": {
+      "available": true, "source": "dsh-cost-meter", "estimate": true,
+      "costUsd": 0.5384, "costEstimateUsd": 0.5384, "costCny": 3.5818, "costEur": 0.4819,
+      "calls": 157
+    }
+  }
+}
+```
+
+With `mode: "steer"` the turn was already running, so `turn.usage` covers the whole turn including
+steps that ran before your message.
+
+`turn.usage` is absent when the turn billed nothing (a cancelled turn with no step, a provider that
+reported no usage). It is also absent when the usage read itself failed — that case is never silent:
+the reply carries `usageUnavailable: true` and a `reason`, so a caller that bills against these
+numbers can tell "the log was unreadable" from "nothing was spent", and can retry with
+`session_usage`. With `wait: false` there is no turn to describe, but `session` is still returned
+(and a failed read says so the same way). A wait that timed out or was cancelled flags the totals
+`partial: true`: that turn had not settled, so they can still grow, and it is why a queued message
+also reports `partial` — its turn has not run yet.
+
+**Or ask for it.** `session_usage` is the receipt to call after the last prompt. It reads the
+durable session log rather than a live session, so it answers for a session that has gone idle,
+left the live store, or was created by an earlier DSH run — as long as you know its id:
+
+```json
+{
+  "generatedAt": "2026-11-02T08:00:00.000Z",
+  "scope": "session",
+  "sessions": [
+    {
+      "sessionId": "session-…",
+      "cwd": "/Users/me/project",
+      "origin": "self",
+      "usage": {
+        "totals": {"uncachedInputTokens": 1032706, "cacheReadTokens": 21192320,
+                   "cacheWriteTokens": 0, "outputTokens": 86148,
+                   "totalTokens": 22311174},
+        "byModel": [{"provider": "opencode-go-xise", "model": "deepseek-v4.1-flash",
+                     "samples": 157, "uncachedInputTokens": 1032706,
+                     "cacheReadTokens": 21192320, "cacheWriteTokens": 0,
+                     "outputTokens": 86148, "totalTokens": 22311174}],
+        "turns": 1, "steps": 157, "samples": 157,
+        "verifiedAgainstProjection": true
+      },
+      "cost": {"available": true, "source": "dsh-cost-meter", "estimate": true,
+               "costUsd": 0.5384, "calls": 157}
+    }
+  ],
+  "totals": {"uncachedInputTokens": 1032706, "cacheReadTokens": 21192320,
+             "cacheWriteTokens": 0, "outputTokens": 86148, "totalTokens": 22311174,
+             "turns": 1, "steps": 157, "samples": 157},
+  "byModel": [{"provider": "opencode-go-xise", "model": "deepseek-v4.1-flash",
+               "samples": 157, "uncachedInputTokens": 1032706,
+               "cacheReadTokens": 21192320, "cacheWriteTokens": 0,
+               "outputTokens": 86148, "totalTokens": 22311174}],
+  "subagentsIncluded": false,
+  "cost": {"available": true, "source": "dsh-cost-meter", "estimate": true,
+           "costUsd": 0.5384},
+  "notes": ["…"]
+}
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `sessionId` | Report this session, plus its subagent sessions by default. Omit it to total the sessions this endpoint created. |
+| `all` | Without a `sessionId`: scan every session this DSH knows, most recently updated first. Ignored when `sessionId` is given. |
+| `includeSubagents` | Fold subagent children in as their own rows. Default `true`. |
+| `includeTurns` | Also return each row's per-turn breakdown. Default `false`. |
+| `includeCost` | Read money from `dsh-cost-meter`. Default `true`; set `false` on a wide scan, where pricing costs one ledger read per row and a session list usually does not need money. |
+| `limit` | Sessions to scan when no `sessionId` is given. Default 20, max 200. |
+
+A row read while the session's newest turn is still running carries `partial: true`: the fold is a
+snapshot that will grow, so do not finalize a bill from it.
+
+No `sessionId` means the sessions **this endpoint created in this DSH process**. Nothing in the
+harness records that ownership, so after a restart pass the id; `all: true` instead walks every
+session this DSH knows, and says so in `notes` when the limit cut it short.
+
+**The buckets are disjoint**, exactly as the provider reports them, and `totalTokens` is their
+sum:
+
+| Field | Meaning |
+| --- | --- |
+| `uncachedInputTokens` | Prompt tokens the provider did not serve from its cache. This is the provider's `inputTokens`, which is uncached by definition rather than a total input. |
+| `cacheReadTokens` | Prompt tokens billed as cache reads. |
+| `cacheWriteTokens` | Prompt tokens billed as cache writes (cache creation). |
+| `outputTokens` | Generated tokens. `reasoningTokens` is a subset of this, never a fifth bucket, so it is not added anywhere. |
+| `totalTokens` | The sum of the four — the number to bill against — computed from the buckets rather than trusted from a provider `totalTokens` field. |
+
+**Exactness.** The totals are folded from the durable session log — the same
+`assistant/message.data.usage` records, and the usage chunk inside a retried
+`assistant/attempt`, that the harness's own `tokenUsage` projection is built from — so they are
+provider-reported counts, not estimates. `verifiedAgainstProjection: true` means the harness's own
+cumulative figure was present at the same cut and agreed bucket for bucket (it did, exactly, on a
+1,146-event session). When it disagrees, `projectionTotals` carries the harness figure: the log
+fold stays in `totals`, and the disagreement is reported rather than silently resolved.
+
+Every provider attempt that was billed is counted, including a failed attempt that was later
+retried — those tokens were charged. A corrected or repeated report for a call already counted
+*replaces* its buckets instead of double counting it, and an identical re-report is a no-op.
+`samples` is therefore the number of provider **calls** folded, not distinct steps: a retried call
+adds one, a correction does not, and it can differ from `steps`. `byModel` lists only routes that
+actually charged tokens, so a call that reported zero tokens appears in `samples` but in no route
+row. `turns` and `steps` count how many turns and steps reported usage. `ignoredSamples` appears when a record could not be read (missing or
+non-integer counts), because the totals then under-report what the provider charged and hiding that
+would be worse; an aggregate report adds up the ignored counts across its rows and notes it.
+
+**What is left out, and why.**
+
+- **Compaction** is its own LLM call, and the harness records its usage on
+  `compaction/summary.data.usage`. It is reported in an optional `compaction` block
+  (`{totals, summaries, ignoredSummaries}`) and deliberately kept out of `usage.totals`,
+  because the harness's own projection excludes it — folding it in would make these numbers
+  disagree with the DSH UI's figure for the same session. Add it in yourself if you want the
+  whole token bill.
+- **The session title** is generated by an LLM call that leaves no usage record in the log at all
+  (only `session/title-llm-request`, which names the route). No token fold can see it.
+- **A forked session** inherits its parent's event prefix. That prefix was billed to the parent,
+  so it is reported separately as `inherited`, and `totals` covers only the child's own turns.
+- **Subagents** are billed to the same account, so `session_usage` folds children in as their own
+  rows by default (`includeSubagents: false` excludes them), up to 50 per target, with
+  `truncatedSubagents` when that cap stopped the walk. Children are identified by the harness's own
+  `origin: "subagent"` mark: an ordinary **fork** of a session also records a parent link, and it is
+  a full session of its own, so it is never folded in as a child. A prompt reply's `session` block
+  does not include subagents: it is that session's own turns only, which is why the tool exists.
+  One report is bounded at 100 rows (`truncatedRows`, and the money total is marked `partial` when
+  it applies), and if the session listing itself is unavailable the report says subagents could not
+  be enumerated rather than claiming there were none.
+- **An unreadable session** (pruned, corrupt) becomes a row with `error` instead of `usage`, is
+  excluded from the totals, and is called out in `notes`, so one bad session does not fail the
+  whole report.
+
+**Money is separate, and optional.** `cost` exists only when the third-party
+**`dsh-cost-meter`** plugin is installed: the harness has no price or currency service at all. It
+is an **estimate** from that plugin's price catalog — which applies peak/off-peak windows and
+matches an unrecognised route by model name — not an invoice, and it comes as two different USD
+figures because they answer different questions:
+
+- **`costUsd`** is the real money charged: cost-meter's `apiCost`. This is the field to sum across
+  sessions, and it is `0` for a call a subscription or coding plan covered, because no per-token
+  money left the account.
+- **`costEstimateUsd`** is the list-price estimate: cost-meter's `cost`, computed from the catalog
+  regardless of how the call was billed. It is what the same call would have cost at API rates, and
+  it is the only figure that moves for a plan-covered session.
+
+`costCny`/`costEur` are cost-meter's frozen FX copies of the estimate (its ledger is
+USD-canonical), and `calls` is the number of LLM calls it booked (turns, compaction, and titling;
+its per-session figure does not merge subagents, which is why each row is priced on its own).
+Without the plugin the block is `available: false` with a readable `reason` ("no price source in
+this DSH profile: …"), and the tokens are unaffected. Money covers every in-session LLM call while
+the token totals exclude compaction and cannot see titling, so **tokens and money do not reconcile
+exactly**: use `costUsd` for spend, `costEstimateUsd` for list-price value, and `totalTokens` for
+volume — and do not derive one from another.
+
+Both paths are gated by `tools.usage` (default `true`); see the configuration below. The toggle is
+independent of `tools.session`, so with sessions off you can still ask for the usage of a session
+id you already hold. Nothing is recorded differently either way: usage is folded from the session
+log the endpoint already reads, so the toggle changes what is returned, never what exists.
 
 ## Security
 
@@ -268,8 +489,9 @@ draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
   listener. Setting `http.host: 0.0.0.0` exposes that same power to your network; the plugin
   warns at bind time, and you should do it only behind your own gateway.
 - **The token is the entire security boundary, and that boundary is your user account.** There
-  is no path sandbox. Once a caller holds the token, `file_read`/`file_write`/`file_list` reach
-  anything the DSH process can reach, and `shell_run` runs arbitrary commands as you — because
+  is no path sandbox. Once a caller holds the token, `file_read`/`file_read_image`/`file_write`/`file_edit`/`file_list` reach
+  anything the DSH process can reach (images included, and `session_prompt` can attach them to an
+  agent turn), and `shell_run` runs arbitrary commands as you — because
   that is exactly what the harness's own `fs` and `shell` services do for DSH's own agent. Both
   properties were verified against a live instance: `file_read` returned `/etc/passwd`,
   `~/.dsh/settings.yaml`, and this plugin's own token file; `file_write` created a file outside
@@ -281,6 +503,14 @@ draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
   a token holder sees your conversation history, and a calling agent's context accumulates it.
   This is not an escalation (the same bytes are in `$DSH_HOME/sessions`, reachable through
   `shell_run`), but it is a privacy consequence worth knowing before you hand out a token.
+- **Spend is readable on the same boundary.** A token holder can read token usage — and, where
+  `dsh-cost-meter` is installed, an estimated money figure — for any session this endpoint can
+  reach: `session_usage`, and the usage block on every `session_prompt` reply. It is not a wider
+  *authority* (the usage records sit in the same durable session log the transcripts come from, and
+  `shell_run` reaches that log anyway), but it is a wider *discovery* surface than the session
+  tools: `session_usage` with `all: true` enumerates every session id, its `cwd`, and its spend even
+  when `tools.session` is off. If you turned the session tools off to stop a caller touching this
+  instance, turn `tools.usage` off in the same breath.
 - Consequently the `tools` toggles **narrow what a client can discover and call; they are not
   containment.** `tools.shell: false` removes the shell tool, but `file_write` still writes your
   shell startup files and `file_read` still reads your credentials, so a profile with the shell
@@ -291,18 +521,23 @@ draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
   would normally ask a human about:
   - `inherit` (default) — the plugin does not answer. With no browser attached, an
     approval-requiring tool resolves `unavailable` and the agent's action fails closed.
-  - `allow` — the plugin approves every request raised by a session **it created**, and stays
-    out of the waterfall for every other session, so your own interactive sessions keep their
-    policy. This is what makes unattended agent runs work; it is a real widening of what the
-    agent may execute.
-- `file_write` and `shell_run` are the *caller's* actions, not the agent's. They run through
-  the harness's own filesystem and shell services, so the sandbox and policy configured for
-  this DSH instance still apply.
+  - `allow` — every session **this plugin creates** (and every forked child) is switched to the
+    harness's unattended stance (`never`) through the approval service, and the harness tells the
+    agent about the switch. Sessions the plugin did not create keep your policy, so your own
+    interactive sessions are untouched. This is what makes unattended agent runs work; it is a
+    real widening of what the agent may execute. The create/fork reply reports
+    `approvalPolicy: "never"`, or `approvalPolicyError` when the switch could not be made.
+- `file_write`, `shell_run`, and the background `shell_start`/`shell_kill` are the *caller's*
+  actions, not the agent's. They run through the harness's own filesystem and shell services, so
+  the sandbox and policy configured for this DSH instance still apply.
 
 ## Installing into DSH Desktop (restart required)
 
-Electron reserves the `desktop` profile, so `dsh plugin --profile desktop add` is refused from a
-plain terminal and the install is manual. DSH Desktop must then be **restarted**.
+On the current harness (0.2.1-rc.5) `dsh plugin --profile desktop add <tarball>` works from a plain
+terminal: only the app's *managed* operations are refused there (for example `--dump-config` for the
+`desktop` profile). The tarball route below is the simplest install; the hand-written patch layer in
+the next section is the fallback for a host that refuses the subcommand. Either way, DSH Desktop
+must then be **restarted**.
 
 ### Why a restart is required
 
@@ -404,8 +639,8 @@ It reads `<DSH_HOME>/dsh-as-mcp/token`, shakes hands, lists tools, calls `dsh_in
 harness services this profile actually mounted, then calls `workspace_list`. The last line is `OK`
 on success and the exit status is non-zero on failure.
 
-For one real round trip (temp workspace → session → hand the DSH agent a task → print the reply and
-tool calls):
+For one real round trip (temp workspace → session → hand the DSH agent a task → print the reply,
+its tool calls, and the tokens it spent, then read the same total back through `session_usage`):
 
 ```bash
 node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
@@ -435,12 +670,20 @@ key named, because a silently ignored typo means your override is not being appl
       path: /mcp
       mountOnWebServer: false # also serve at http://<dsh host>:<dsh web port>/mcp
     auth:
-      token: ''              # empty: read/generate $DSH_HOME/dsh-as-mcp/token
+      # Leave `token` out entirely to use $DSH_HOME/dsh-as-mcp/token (generated on
+      # first run). Do not write `token: ''`: a present value, even empty, reads as
+      # a pinned secret in the settings panel.
+      # token: '<a long random secret>'
     tools:
       workspace: true
       session: true
       files: true
       shell: true
+      agentTools: true       # dsh_tool_list / dsh_tool_call: run the instance's own tools
+      usage: true            # session_usage + the usage blocks in session_prompt replies
+    agentTools:
+      allow: []              # empty: the built-in allow-list; non-empty replaces it
+      deny: []               # subtracted from the resolved set
     session:
       agentPreset: ''        # empty: harness default
       provider: ''           # must be paired with model
@@ -469,7 +712,7 @@ Every change applies **live**:
 
 | Change | Effect |
 | --- | --- |
-| a tool toggle | the group leaves or joins the very next `tools/list`; a disabled tool is genuinely absent, so calling it reports an unknown tool rather than running and being refused |
+| a tool toggle | the group leaves or joins the very next `tools/list`; a disabled tool is genuinely absent, so calling it reports an unknown tool rather than running and being refused. `usage: false` also stops the usage blocks in `session_prompt` replies |
 | a limit, or a session default | read at the start of the next call |
 | the token | the new value is required by the next request; the old one stops working immediately |
 | `enabled`, `host`, `port`, `path`, `mountOnWebServer` | the listener is moved |
@@ -523,6 +766,14 @@ what protects a host that cannot supply it.
   settings model**; on a 0.1.x runtime the endpoint still runs from the configuration file, but
   there is no panel, because that runtime only projects a form for a namespace a plugin
   registered through the removed call.
+- **Usage needs the session log.** Token figures are folded from the durable log through
+  `sessionQuery` (preferred) or `sessionController.inspect`; `dsh_info` reports this as
+  `tokenUsage`. Without either, a `session_prompt` reply says `usageUnavailable` with a reason
+  instead of pretending the turn was free, the session tools keep working, and `session_usage` with
+  a `sessionId` returns an `error` row (its totals exclude it). Without a `sessionId` it reports the
+  sessions it created itself (or an empty report explaining why) — but `all: true`, which needs to
+  enumerate sessions, fails with the capability error. Money additionally needs the third-party
+  `dsh-cost-meter`, reported by `dsh_info` as `costMeter`.
 - **No other hard `@deepseek-ai/*` dependency.** This package resolves every other capability
   structurally through `ctx.get(name)`. The one exception is `@deepseek-ai/schemastery`, a
   declared peer imported directly: DSH offers no schemastery-free path to a settings form.
@@ -579,9 +830,11 @@ whatever DSH instance happens to be listening on the default port:
 
 ```bash
 node scripts/smoke.mjs       # handshake, tools/list, dsh_info — is the wire up?
-node scripts/exercise.mjs    # ~40 checks: create a workspace, start a session, have the
+node scripts/exercise.mjs    # ~60 checks: create a workspace, start a session, have the
                              # DSH agent write code, read it back off disk, run it, check
-                             # the transcript, and confirm the failure paths are legible
+                             # the transcript, verify the reply's token usage and the
+                             # session_usage receipt against each other, and confirm the
+                             # failure paths are legible
 ```
 
 `smoke.mjs` answers "does this speak MCP". `exercise.mjs` answers "can an outside agent

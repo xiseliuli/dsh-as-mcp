@@ -216,6 +216,52 @@ describe('locateTurn', () => {
   })
 })
 
+describe('bounded replies', () => {
+  it('cuts each transcript message to the requested cap and reports the original size', async () => {
+    const sessions = fakeSessions()
+    sessions.log.push(userMessage('req-1', 'x'.repeat(500), 0))
+    sessions.log.push(event('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'short' }] } }, 1))
+    const { driver } = driverWith(sessions)
+
+    const messages = await driver.readTranscript('session-1', 10, { maxCharsPerMessage: 100 })
+    const long = messages[0] as { text: string; chars: number; truncated?: boolean }
+    expect(long.text).toHaveLength(100)
+    expect(long.chars).toBe(500)
+    expect(long.truncated).toBe(true)
+    // An uncapped read keeps the historical full-fidelity shape.
+    const full = await driver.readTranscript('session-1', 10)
+    expect(full[0]?.text).toHaveLength(500)
+    expect(full[0]?.truncated).toBeUndefined()
+    expect(full[0]?.chars).toBe(500)
+  })
+
+  it('cuts the agent reply to maxReplyChars and says it did', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const pending = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+      maxReplyChars: 100,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    sessions.log.push(event('turn/start', { turn: 1 }, 100))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'y'.repeat(500) }] },
+    }, 101))
+    sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 102))
+
+    const result = await pending
+    expect(result.turn?.reply).toHaveLength(100)
+    expect(result.turn?.replyChars).toBe(500)
+    expect(result.turn?.replyTruncated).toBe(true)
+  })
+})
+
 describe('DshDriver.promptSession', () => {
   it('returns the reply and tool calls of its own turn', async () => {
     const sessions = fakeSessions()
@@ -237,8 +283,163 @@ describe('DshDriver.promptSession', () => {
     expect(outcome.turn).toBe(1)
     expect(outcome.timedOut).toBe(false)
     expect(outcome.aborted).toBe(false)
-    expect(outcome.toolCalls).toEqual([{ name: 'read', arguments: '{"path":"a"}', callId: 'c1' }])
+    // Arguments are omitted by default: the size is the useful fact, and an agent's
+    // file_write arguments are the whole file.
+    expect(outcome.toolCalls).toEqual([{ name: 'read', callId: 'c1', argumentsBytes: 12 }])
     expect(locateTurn(sessions.log, requestId).promptIndex).toBe(0)
+  })
+
+  /** Start a prompt and settle its turn with one tool call whose arguments are given. */
+  async function promptWithToolCall(
+    driver: DshDriver,
+    sessions: ReturnType<typeof fakeSessions>,
+    args: string,
+    options: { toolCalls?: 'summary' | 'full' | 'none'; maxArgumentChars?: number } = {},
+  ): Promise<TurnResult> {
+    const pending = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'do it',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+      ...options,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    sessions.log.push(event('turn/start', { turn: 1 }, 100))
+    sessions.log.push(event('tool/call', { turn: 1, step: 0, callId: 'c1', name: 'write', arguments: args }, 101))
+    sessions.log.push(event('assistant/message', { turn: 1, step: 0, message: { content: [{ type: 'text', text: 'ok' }] } }, 102))
+    sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 103))
+    const result = await pending
+    return result.turn as TurnResult
+  }
+
+  it('returns arguments when asked, and truncates them at the requested length', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const seen = await promptWithToolCall(driver, sessions, 'x'.repeat(500), {
+      toolCalls: 'full',
+      maxArgumentChars: 120,
+    })
+    expect(seen.toolCalls[0]).toMatchObject({
+      name: 'write',
+      callId: 'c1',
+      argumentsBytes: 500,
+      truncated: true,
+    })
+    expect(seen.toolCalls[0]?.arguments).toHaveLength(120)
+  })
+
+  it('reports the whole argument string when it fits', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const seen = await promptWithToolCall(driver, sessions, '{"path":"a"}', { toolCalls: 'full' })
+    expect(seen.toolCalls[0]).toEqual({
+      name: 'write',
+      callId: 'c1',
+      argumentsBytes: 12,
+      arguments: '{"path":"a"}',
+    })
+    expect(seen.toolCalls[0]?.truncated).toBeUndefined()
+  })
+
+  it('drops the tool call list entirely when told to', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const seen = await promptWithToolCall(driver, sessions, '{"path":"a"}', { toolCalls: 'none' })
+    expect(seen.toolCalls).toEqual([])
+    // The reply itself is unaffected.
+    expect(seen.reply).toBe('ok')
+  })
+
+  it('returns the admitted turn for a retried idempotency key instead of sending twice', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+
+    const first = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'do it',
+      idempotencyKey: 'retry-1',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    sessions.log.push(event('turn/start', { turn: 1 }, 100))
+    sessions.log.push(event('assistant/message', { turn: 1, step: 0, message: { content: [{ type: 'text', text: 'done once' }] } }, 101))
+    sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 102))
+    const original = await first
+    expect(original.turn?.reply).toBe('done once')
+    expect(original.replayed).toBeUndefined()
+
+    // The caller retries after its own timeout: no second admission, same answer.
+    const retry = await driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'do it',
+      idempotencyKey: 'retry-1',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+    })
+    expect(sessions.prompts).toHaveLength(1)
+    expect(retry.replayed).toBe(true)
+    expect(retry.turn?.reply).toBe('done once')
+  })
+
+  it('replays a queued message without waiting when wait is false', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const first = await driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'do it later',
+      idempotencyKey: 'queued-1',
+      mode: 'queue',
+      wait: false,
+    })
+    expect(first.replayed).toBeUndefined()
+    expect(sessions.prompts).toHaveLength(1)
+
+    const retry = await driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'do it later',
+      idempotencyKey: 'queued-1',
+      mode: 'queue',
+      wait: false,
+    })
+    expect(sessions.prompts).toHaveLength(1)
+    expect(retry.replayed).toBe(true)
+  })
+
+  it('refuses a key reused for different content', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    await driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'the original task',
+      idempotencyKey: 'reused',
+      mode: 'queue',
+      wait: false,
+    })
+    await expect(driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'a different task',
+      idempotencyKey: 'reused',
+      mode: 'queue',
+      wait: false,
+    })).rejects.toThrow(/idempotencyKey was reused for different content/)
+    expect(sessions.prompts).toHaveLength(1)
+  })
+
+  it('refuses a key the session log cannot carry', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    await expect(driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'do it',
+      idempotencyKey: 'has spaces and / slashes',
+      mode: 'queue',
+      wait: false,
+    })).rejects.toThrow(/idempotencyKey may contain only letters, digits/)
+    expect(sessions.prompts).toHaveLength(0)
   })
 
   it('does not mistake a turn that was already in flight for its own', async () => {
@@ -401,6 +602,11 @@ describe('DshDriver.createSession', () => {
 
     expect(created.sessionId).toBe('session-1')
     expect(created.modelSelectionError).toMatch(/unavailable/)
+    // The message must say what was asked for and how to find a valid value,
+    // rather than forwarding only the harness's context-free sentence.
+    expect(created.modelSelectionError).toMatch(/requested provider "no-such" model "model"/)
+    expect(created.modelSelectionError).toMatch(/this profile lists no provider routes/)
+    expect(created.modelSelectionError).toMatch(/includeModels: true/)
     expect(created.model).toBeUndefined()
   })
 
@@ -453,6 +659,38 @@ describe('DshDriver.createSession', () => {
     await driver.createSession({ cwd: link })
 
     expect(sessions.creates[0]?.cwd).toBe(realpathSync(real))
+  })
+})
+
+describe('DshDriver.deleteWorkspace', () => {
+  /** A driver over a registry whose delete reports `found`. */
+  function withRegistry(options: { found: boolean; hasDelete?: boolean }): DshDriver {
+    const ctx = new Context()
+    contexts.push(ctx)
+    const registry: Record<string, unknown> = {
+      create: async () => ({}),
+      get: () => undefined,
+      list: () => [],
+      resolveByPath: async () => undefined,
+    }
+    if (options.hasDelete !== false) registry.delete = async () => options.found
+    ctx.provide('workspaceRegistry', registry)
+    return new DshDriver(ctx, () => testConfig())
+  }
+
+  it('unregisters a known workspace', async () => {
+    await expect(withRegistry({ found: true }).deleteWorkspace({ workspaceId: 'ws-1' }))
+      .resolves.toEqual({ workspaceId: 'ws-1', deleted: true })
+  })
+
+  it('is idempotent: an unknown id answers deleted: false', async () => {
+    await expect(withRegistry({ found: false }).deleteWorkspace({ workspaceId: 'gone' }))
+      .resolves.toEqual({ workspaceId: 'gone', deleted: false })
+  })
+
+  it('names the missing capability when the harness has no delete', async () => {
+    await expect(withRegistry({ found: true, hasDelete: false }).deleteWorkspace({ workspaceId: 'ws-1' }))
+      .rejects.toThrow(/no workspace delete/)
   })
 })
 

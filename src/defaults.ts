@@ -40,6 +40,7 @@ export const DEFAULT_TOOLS = {
   files: true,
   shell: true,
   agentTools: true,
+  usage: true,
 } as const satisfies ToolToggles
 
 /**

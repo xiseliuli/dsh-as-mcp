@@ -1,6 +1,6 @@
 # Capability gaps: what DSH can do that `dsh-as-mcp` cannot reach
 
-**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with 12 tools.
+**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with 25 tools.
 The author wants to know exactly what is missing, what is worth adding, and what should never be added.
 
 **Artifacts**
@@ -12,6 +12,13 @@ The author wants to know exactly what is missing, what is worth adding, and what
 | Second harness | `/Users/xiseliuli/test_code/dsh-harness-ref` — **0.1.7-rc.2** |
 | Installed MCP SDK | `node_modules/@modelcontextprotocol/server` — **2.1.0** |
 | Profile composition | `packages/bundle/base/cordis.patch.yml` (84 rows), `packages/bundle/web-app/cordis.patch.yml` (68 rows) in the 015 checkout — this *is* the Desktop profile |
+
+> **Later work (plugin 0.2.x, harness 0.2.1-rc.5).** The audit below was written against 0.1.5-rc.1
+> and 0.1.7-rc.2. Since then the plugin shipped the items this page recommended as "what I would build
+> next": `dsh_tool_list`/`dsh_tool_call` (§2.1 G1), usage accounting (`session_usage` plus per-turn and
+> cumulative usage in every `session_prompt` reply), and the `dsh_info` catalog block (providers, agent
+> presets, sandbox mode, permission presets, session count). All of it works on 0.2.1-rc.5 as well; the
+> version-sensitive claims below were re-checked when those features landed.
 
 **Evidence standard.** Anything marked **verified** was read first-hand in the source named. Citations of
 the form `api-catalog.ts:NNNN` without a second path refer to
@@ -25,7 +32,7 @@ executed against the harness.
 
 ## 1. Inventory: what the plugin already uses
 
-### 1.1 The 12 MCP tools
+### 1.1 The MCP tools
 
 | Tool | Driver method | Harness service | Gate |
 | --- | --- | --- | --- |
@@ -38,9 +45,12 @@ executed against the harness.
 | `session_messages` | `readTranscript` | `sessionQuery` | `tools.session` |
 | `session_cancel` | `cancelSession` | `sessionController` | `tools.session` |
 | `file_read` | `readFile` | `fs` | `tools.files` |
+| `file_edit` | `editFile` | `fs` | `tools.files` |
 | `file_write` | `writeFile` | `fs` | `tools.files` |
 | `file_list` | `listDirectory` | `fs` | `tools.files` |
 | `shell_run` | `runShell` | `shell` | `tools.shell` |
+| `session_usage` | `sessionUsage` | `sessionQuery` / `sessionController.inspect` (+ optional `costMeter`) | `tools.usage` |
+| `dsh_tool_list` / `dsh_tool_call` | `listAgentTools` / `callAgentTool` | `tools`, `sessionController.resolveAgent` | `tools.agentTools` |
 
 Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of the real driver
 (`src/mcp/tools.ts:45-60`).
@@ -346,11 +356,16 @@ notifications only fire if the caller sent `_meta.progressToken`, which most MCP
 `tools/call`.
 
 **Verdict: add it, and be honest about the conditionality.** `session_prompt` may wait up to
-`promptTimeoutMs: 900000` (set in this machine's profile patch, `~/.dsh/profiles/desktop/cordis.patch.yml`), and the driver
-already re-reads the session log every 200 ms (`driver.ts:470-494`, `TURN_POLL_INTERVAL_MS` at `driver.ts:22`).
-Emitting a progress tick per poll is a few lines, costs nothing, lets a client reset its own request
-timeout (`RequestOptions.resetTimeoutOnProgress`), and turns a silent fifteen-minute wait into an
+`promptTimeoutMs: 900000` (set in this machine's profile patch, `~/.dsh/profiles/desktop/cordis.patch.yml`).
+A progress tick per wake costs nothing, lets a client reset its own request timeout
+(`RequestOptions.resetTimeoutOnProgress`), and turns a silent fifteen-minute wait into an
 observably-live one.
+
+**SHIPPED in plugin 0.4.0**, and the wait itself changed with it: the driver no longer re-reads the log on
+a fixed 200 ms cadence — it wakes on the `session/event` feed for that session with a one-second ceiling
+(`waitForSessionActivity`), so an idle wait costs one read per second and a busy turn reports progress
+without polling. Ticks are throttled to one per second and sent only when the client supplied a
+`progressToken`.
 
 What is **not** worth building on top: fake token-level streaming. The harness has a real streaming
 surface — `sessionController.follow` returns `AsyncIterable<SessionFollowFrame>` including
@@ -399,19 +414,25 @@ of `driver.ts` is about contract fidelity. Two constraints:
 
 ## 7. Version note: 0.1.5-rc.1 vs 0.1.7-rc.2
 
-`package.json` declares `dsh.compatibility.dsh: ">=0.1.5-rc.1"`, so the plugin claims to load on both.
+`package.json` declares `peerDependencies["@deepseek-ai/dsh"]: ">=0.1.5-rc.1"`, so the plugin claims to load on both.
 One claim is already false.
 
 **Breaks on 0.1.7-rc.2, and it matters:**
 
-- **`ctx.shell.run` no longer exists.** 0.1.5-rc.1 has `shell.resolve` `:2123`, `shell.run` `:2129`,
-  `shell.start` `:2135` (`api-catalog.ts`). 0.1.7-rc.2 has only `shell.resolve`
-  (`dsh-harness-ref/.../api-catalog.ts:2532`) and `shell.execute(spec): Promise<ShellExecution>` (`:2538`),
-  where `ShellExecution extends ShellProcess { result(): Promise<ShellRunResult> }` (`:6890`). Both
-  `run` and `start` are gone. **`driver.ts:653-659` calls `shell.resolve` then `shell.run`, so `shell_run`
-  breaks on 0.1.7-rc.2.** Any background-shell work (gap #4) must be written against both shapes:
-  `start(spec)` on 015 and `execute(spec)` on ref, with `result()`/`readOutput()` unified behind one local
-  adapter — the same pattern `types.ts` already uses for `readBytes` vs `readByteRange`.
+- **`ctx.shell.run` no longer exists, and `execute()` returns a handle, not a result.** 0.1.5-rc.1 has
+  `shell.resolve` `:2123`, `shell.run` `:2129` (resolves the finished result), `shell.start` `:2135`
+  (resolves a process handle) (`api-catalog.ts`). 0.1.7-rc.2 has `shell.resolve` (`:2532`) and
+  `shell.execute(spec): Promise<ShellExecution>` (`:2538`), where
+  `ShellExecution extends ShellProcess { result(): Promise<ShellRunResult> }` (`:6890`): the awaited value
+  is the live process, and the foreground result is `await execution.result()`.
+
+  **This page originally got that wrong in the most expensive way.** It read `execute` as
+  result-returning, so the plugin awaited it and then read `.stdout.text` off the handle — which is
+  `undefined`, so `shell_run` failed on 0.2.1-rc.5 with "Cannot read properties of undefined (reading
+  'text')". Fixed in plugin 0.5.0 by separating the two shapes (`settleShellResult`), which is also what
+  made background jobs trivial: the handle *is* the background process (`readOutput()`/`kill()`/`done`).
+  0.1.5's `start(spec)` is supported on the same path. The lesson kept in the code: a declared method
+  signature is not the runtime shape — the installed `dsh-bash-local` was checked for this one.
 - **`codeRuntime` and `e2b` services are removed** (015 `api-catalog.ts:646`, `:874`), replaced by
   `ptcRuntime` (ref `:1740`). Nothing in the plugin uses them and `describeCapabilities` does not probe
   them, so there is no impact today — but a future "run code" tool must target `ptcRuntime`, not
@@ -454,7 +475,9 @@ are identical.
 
 **The short list, in order.**
 
-1. **`dsh_info` grows a posture and catalog block** — gaps #7, #8, #14, #15. Add
+1. ~~**`dsh_info` grows a posture and catalog block** — gaps #7, #8, #14, #15.~~ **SHIPPED** as
+   `dsh_info.catalog` (providers, agent presets + default, sandbox mode, permission presets, session
+   count, with `catalog.unavailable` naming any read the profile cannot answer). The original note: Add
    `sandboxPolicy.defaultMode` / `resolve()`, `permissionPresets.current()`, `llm.listProviders()`,
    `agentPresets.list()`, and live agent counts. It is read-only, ~40 lines, version-stable, and it fixes
    the worst usability defect in the current surface: `session_create`'s `provider`, `model` and
@@ -467,12 +490,27 @@ are identical.
    and it makes a future harness tool unsafe-by-default under one. This was the
    change that turns the bridge from a chat relay into an operator console. Ship it with an explicit
    allow-list, and start read-mostly (`read`, `glob`, `grep`, `edit`, `read_image`) before opening `bash`.
-3. **`file_edit`** — gap #3, plus ranged `file_read` — gap #15. Small, version-stable, and it removes the
-   single largest per-call token cost in the current surface.
+3. ~~**`file_edit`** — gap #3, plus ranged `file_read` — gap #15.~~ **SHIPPED** (`file_edit` with an
+   exact-match count, `file_read` with `offset`/`nextOffset`/`maxBytes`, `file_list` recursive). The
+   original note: small, version-stable, and it removes the single largest per-call token cost.
 
 Then, in rough order: `shell_start`/`shell_output`/`shell_kill` (gap #4, written against both shell
 shapes), `file_read_image` (gap #5), `web_search`/`web_fetch` (gap #6), `session_fork` (gap #9), and
 progress notifications (§6.3) — all cheap and none of them contentious.
+
+**Since then (plugins 0.2.0–0.10.0), shipped from this list and around it:**
+
+- usage accounting: `session_usage` plus per-turn/cumulative tokens (and money, when `dsh-cost-meter` is
+  installed) in every `session_prompt` reply — the original request behind this work;
+- `dsh_info` catalog (`providers`, `agentPresets`, `sandboxMode`, `permissionPresets`, `sessionCount`),
+  opt-in `includeModels`, plus effective `config` and endpoint `health`;
+- `dsh_tool_list`/`dsh_tool_call` (gaps #1/#2) and the `initialize` instructions note;
+- `file_edit` (gap #3), ranged `file_read`, recursive `file_list`, `file_read_image` (gap #5);
+- `shell_start`/`shell_output`/`shell_kill`/`shell_list` (gap #4) against both shell shapes, including the
+  `shell_run` fix described below;
+- `session_fork` (gap #9), `session_rename`, `session_set_model`, `session_list` titles;
+- progress notifications (§6.3), client-abort handling, prompt image attachments, and tool-call
+  `summary`/`full`/`none` detail so a `file_write` argument does not get echoed back to the caller.
 
 **What I would refuse to add.**
 
@@ -491,7 +529,7 @@ specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 |
+| MCP tools registered on 0.1.5-rc.1 | 12 (25 as of plugin 0.19.0) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |

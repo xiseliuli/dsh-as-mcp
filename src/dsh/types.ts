@@ -68,6 +68,79 @@ export interface DshSessionEvent {
   readonly data: unknown
 }
 
+/**
+ * One provider-reported token usage sample — `TokenUsage` in
+ * `packages/llm/llm/src/types.ts`.
+ *
+ * The buckets are disjoint: `inputTokens` is the *uncached* prompt, cache reads
+ * and writes are separate charges, and `reasoningTokens` is a subset of
+ * `outputTokens`. `totalTokens` is the provider's own full-call total when it
+ * reported a self-consistent one; it is deliberately not the field this plugin
+ * bills against (see `usage.ts`).
+ */
+export interface DshTokenUsage {
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly totalTokens?: number
+  readonly cacheReadTokens?: number
+  readonly cacheWriteTokens?: number
+  readonly reasoningTokens?: number
+}
+
+/**
+ * The `tokenUsage` session projection's wire view —
+ * `TokenUsageProjection` in `packages/llm/token-meter/src/projection.ts`.
+ *
+ * Different field names from {@link DshTokenUsage} on purpose (that is the
+ * harness's own naming, `uncachedInputTokens` for the disjoint use of
+ * `inputTokens`), which is why the two are separate types here rather than one
+ * with optional aliases.
+ */
+export interface DshTokenUsageProjection {
+  readonly uncachedInputTokens: number
+  readonly outputTokens: number
+  readonly cacheReadTokens: number
+  readonly cacheWriteTokens: number
+}
+
+/** `ProjectionSnapshot` from `packages/session/session-projection/src/index.ts` (`snapshot()`). */
+export interface DshProjectionSnapshot {
+  /** Seq of the last event every value reflects; `-1` for an empty log. */
+  readonly asOfSeq: number
+  /** Whole current client value per registered key. */
+  readonly values: Partial<Record<string, unknown>>
+}
+
+/**
+ * `SessionObservation` from
+ * `SessionObservation` in `packages/session-query/session-query/src/observation.ts`.
+ *
+ * A caller-owned lease over one immutable cut of a session; `Disposable`
+ * releases it, and not releasing it pins the prepared-session cache. Only the
+ * fields this plugin reads are declared.
+ */
+export interface DshSessionObservation extends Disposable {
+  /** Whether the cut came from an attached session or a retained preparation. */
+  readonly source: 'live' | 'prepared'
+  readonly header: {
+    readonly id: string
+    readonly cwd?: string
+    readonly createdAt?: number
+    /** Set when this session is a subagent child. */
+    readonly origin?: 'subagent'
+    /** Fork lineage, not subagent parentage. */
+    readonly parentSession?: string
+  }
+  readonly inheritedEventCount: number
+  readonly events: readonly DshSessionEvent[]
+  /** Last observed event seq, `-1` for an empty log. */
+  readonly cursor: number
+  /** Projection baseline at {@link cursor}, when the projection registry is mounted. */
+  readonly projections?: DshProjectionSnapshot
+  /** Retain the same immutable cut for another owner. */
+  retain?(): DshSessionObservation
+}
+
 /** `ctx.sessionQuery` — packages/session-query/session-query/src/index.ts */
 export interface DshSessionQuery {
   readSession(sessionId: string): Promise<{
@@ -75,7 +148,52 @@ export interface DshSessionQuery {
     readonly inheritedEventCount: number
     readonly events: readonly DshSessionEvent[]
   }>
+
+  /**
+   * Observe one live **or persisted-only** session, with its projections.
+   *
+   * This is the read this plugin prefers for usage: it is the only one that
+   * answers for a session that has left the live store, and `projections` gives
+   * the harness's own cumulative `tokenUsage` for cross-checking the log fold.
+   * Added in 0.1.5-rc.1 (`packages/session-query/session-query/src/index.ts:140`);
+   * declared optional because a profile may mount an older `sessionQuery`, and a
+   * missing method must degrade to {@link DshSessionQuery.readSession}, not throw.
+   */
+  observeSession?(
+    sessionId: string,
+    options?: {
+      readonly signal?: AbortSignal
+      /** `all` computes every projection; `none` leaves projection state untouched. */
+      readonly projectionMode?: 'all' | 'none'
+    },
+  ): Promise<DshSessionObservation>
+
+  /**
+   * Fold the latest title of one live-or-persisted session —
+   * `SessionTitleObservation` in `packages/session-query/session-query/src/types.ts`.
+   *
+   * Declared optional: a harness without the title package still lists sessions,
+   * it just cannot name them. Reading a title costs one corpus observation, which
+   * is why `session_list` asks for it only when the caller opts in.
+   */
+  readTitleSnapshot?(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    readonly session: { readonly id: string }
+    readonly title?: { readonly title: string; readonly eventSeq?: number }
+  }>
 }
+
+/** One part of a prompt's content: the text, or an image the harness supports. */
+export type DshPromptPart =
+  | { readonly type: 'text'; readonly text: string }
+  | {
+    readonly type: 'image'
+    readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+    readonly data: string
+    readonly name?: string
+  }
 
 /** `ctx.sessionController` — packages/api/session-controller/src/index.ts */
 export interface DshSessionController {
@@ -122,7 +240,13 @@ export interface DshSessionController {
       readonly requestId: string
       readonly sessionId: string
       readonly mode: 'queue' | 'steer'
-      readonly content: readonly { readonly type: 'text'; readonly text: string }[]
+      /**
+       * Text and, from the harness's attachment support, images. The image shape is
+       * `PromptContentPart`'s image variant in
+       * `packages/api/session-controller/src/types.ts`: base64 `data` with one of
+       * `image/png`, `image/jpeg`, `image/webp`, `image/gif`.
+       */
+      readonly content: readonly DshPromptPart[]
       readonly clientTimeZone?: string
     },
     signal: AbortSignal,
@@ -151,6 +275,111 @@ export interface DshAgent {
 /** `ctx.agents` */
 export interface DshAgentRegistry {
   get(sessionId: string): DshAgent | undefined
+}
+
+/** One model a provider route advertises — `LlmModelInfo` in packages/llm/llm/src/types.ts. */
+export interface DshLlmModelInfo {
+  readonly provider: string
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+}
+
+/** `LlmProviderInfo` — packages/llm/llm/src/types.ts. */
+export interface DshLlmProviderInfo {
+  /** Provider route key a caller passes as `session_create.provider`. */
+  readonly id: string
+  /** Human-readable name for selectors and diagnostics. */
+  readonly name: string
+}
+
+/**
+ * `ctx.llm` — packages/llm/llm/src/index.ts.
+ *
+ * Only the catalog read is declared: `listProviders()` is synchronous and
+ * returns the routes with a **registered adapter**, which is exactly what a
+ * caller may name. `listModels()` is deliberately absent — it can perform remote
+ * model discovery, and a diagnostics tool must not trigger network work.
+ */
+export interface DshLlmRegistry {
+  listProviders?(): readonly DshLlmProviderInfo[]
+  /** Models the adapter advertises for one route; may perform remote discovery. */
+  listModels?(provider: string): Promise<readonly DshLlmModelInfo[]>
+}
+
+/** `AgentPreset` — packages/preset/agent-preset-registry/src/preset.ts. */
+export interface DshAgentPresetInfo {
+  /** Preset id a caller passes as `session_create.agentPreset`. */
+  readonly id: string
+  readonly name?: string
+  readonly description?: string
+  /** Set when the preset failed to compose; such a preset cannot be selected. */
+  readonly broken?: string
+}
+
+/** `ctx.agentPresets` — packages/preset/agent-preset-registry/src/index.ts. */
+export interface DshAgentPresetRegistry {
+  /** The preset used when a caller names none. */
+  readonly defaultId?: string
+  list?(): Promise<readonly DshAgentPresetInfo[]>
+}
+
+/**
+ * `ctx.permissionPresets` — packages/interaction/permission-presets/src/index.ts.
+ *
+ * `names` is the advertised preset roster (a getter, not a method). `current()`
+ * needs a live `Session` object and is not used here.
+ */
+export interface DshPermissionPresets {
+  readonly names?: readonly string[]
+}
+
+/**
+ * One ledger row `dsh-cost-meter` reports for a session —
+ * `dsh-cost-meter/lib/typert.host.js` (`sessionSchema`).
+ *
+ * Only the fields this plugin reads are declared. The token counts here are
+ * cost-meter's own bookkeeping and are deliberately NOT used: this plugin folds
+ * tokens from the durable log instead, so there is one arithmetic path that can
+ * be reviewed and tested. Money is the only thing borrowed.
+ */
+export interface DshCostMeterSession {
+  readonly id: string
+  /** LLM calls booked for the session: turns, compaction, and titling. */
+  readonly calls: number
+  /** List-price USD estimate (cost-meter's `cost`), independent of how it was billed. */
+  readonly cost: number
+  /**
+   * Real-money USD charged (cost-meter's `apiCost`), `0` for a plan-covered
+   * call. Absent on ledger rows written before the plan/API split existed.
+   */
+  readonly apiCost?: number
+  /** Frozen FX copies of the estimate; the ledger itself is USD-canonical. */
+  readonly costCny?: number
+  readonly costEur?: number
+}
+
+/**
+ * `ctx.costMeter` — the optional host service of the third-party
+ * `dsh-cost-meter` plugin (`dsh-cost-meter/lib/index.js:3795`).
+ *
+ * Declared as an optional, structurally-minimal shim for the same reason as
+ * every other service here: the plugin is not part of the harness, may be absent
+ * or replaced, and must never be imported. Only the one method this plugin calls
+ * is declared.
+ */
+export interface DshCostMeter {
+  /**
+   * Price one session.
+   *
+   * `found: false` means cost-meter's ledger has no row for it — which is a
+   * normal answer, not an error.
+   */
+  getSessionCost?(sessionId: string): Promise<{
+    /** This session's own spend (does not merge subagents; this plugin reports those per row). */
+    readonly own: DshCostMeterSession
+    readonly found: boolean
+  }>
 }
 
 /** `ctx.fs` resolved target — packages/fs/fs/src/types.ts */
@@ -217,6 +446,43 @@ export interface DshShellRunResult {
   readonly stderr: DshCollectedOutput
 }
 
+/** One incremental read of a background process's captured output. */
+export interface DshShellProcessRead {
+  /** Output produced since the previous read (stderr in a marked section). */
+  readonly delta: string
+  /** True when truncation dropped unread bytes the delta cannot include. */
+  readonly lossy: boolean
+  /** Full stdout spill file, when stdout truncation occurred and one exists. */
+  readonly stdoutSpillPath?: string
+  /** Full stderr spill file, when stderr truncation occurred and one exists. */
+  readonly stderrSpillPath?: string
+}
+
+/**
+ * A background process handle — `ShellProcess` in
+ * `packages/shell/shell/src/types.ts`.
+ *
+ * Buffered output stays readable after exit, and `kill()` is idempotent. This is
+ * the same object the foreground path now goes through: from 0.1.7-rc.2,
+ * `execute()` resolves to a live handle and the foreground projection is its
+ * `result()`.
+ */
+export interface DshShellProcess {
+  readonly status: 'running' | 'completed' | 'killed'
+  readonly exitCode: number | null
+  readonly signal: string | null
+  /** Resolves when the process settles; never rejects. */
+  readonly done?: Promise<void>
+  readOutput(): DshShellProcessRead
+  kill(): boolean
+}
+
+/** What `execute()` returns from 0.1.7-rc.2 onward: a handle plus its foreground result. */
+export interface DshShellExecution extends DshShellProcess {
+  /** Settles with the foreground result; rejects only for infrastructure failures. */
+  result?(): Promise<DshShellRunResult>
+}
+
 /** `ctx.shell` — packages/shell/shell/src/index.ts + src/types.ts */
 export interface DshShellExecutor {
   resolve(request: {
@@ -225,19 +491,27 @@ export interface DshShellExecutor {
     timeoutMs?: number
     stdoutMaxBytes?: number
     signal?: AbortSignal
+    /** Deadline policy at `timeoutMs`; `none` arms no deadline (background jobs). */
+    onExpiry?: 'kill' | 'none'
   }): unknown
   /**
-   * Run a resolved spec to completion.
+   * 0.1.5-rc.1's background entry point: spawn and resolve the handle.
+   */
+  start?(spec: unknown): DshShellProcess
+  /**
+   * 0.1.5-rc.1's foreground entry point: run to completion.
    *
-   * The method was renamed across harness versions: 0.1.5-rc.1 — the one shipped
-   * in DSH Desktop — exposes `run`, while 0.1.7-rc.2 replaces it with `execute`
-   * and drops `run` and `start` altogether, so a plugin calling `run` there dies
-   * with "not a function". Both are declared optional and the driver picks
-   * whichever the running host provides, the same way the filesystem seam
-   * straddles `readBytes` and `readByteRange`.
+   * 0.1.7-rc.2 replaced `run`/`start` with {@link execute}, which resolves to a
+   * live {@link DshShellExecution} handle: its `result()` is the foreground
+   * projection, and the handle itself is the background process. The live
+   * 0.2.1-rc.5 executor behaves exactly that way (`dsh-bash-local`'s
+   * `executeArgv`).
+   *
+   * All three are optional because the plugin straddles versions; the driver
+   * picks whichever the running host provides and says so when none exists.
    */
   run?(spec: unknown): Promise<DshShellRunResult>
-  execute?(spec: unknown): Promise<DshShellRunResult>
+  execute?(spec: unknown): Promise<DshShellExecution>
 }
 
 /**

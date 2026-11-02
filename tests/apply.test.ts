@@ -73,7 +73,7 @@ function pluginConfig(overrides: {
       mountOnWebServer: overrides.mountOnWebServer ?? false,
     },
     auth: { token: overrides.token ?? TOKEN },
-    tools: { workspace: true, session: true, files: true, shell: true, agentTools: true, ...overrides.tools },
+    tools: { workspace: true, session: true, files: true, shell: true, agentTools: true, usage: true, ...overrides.tools },
     agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 500 },
     limits: { maxReadBytes: 1024, shellTimeoutMs: 1000, agentToolTimeoutMs: 1000 },
