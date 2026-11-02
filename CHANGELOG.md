@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.8
+
+- Closed the money row: installed `dsh-cost-meter@1.9.41` from its registry into a
+  throwaway profile and compared the receipt with the plugin's own ledger for the same
+  session — `costUsd 0.00008131200000000001, calls 2` against the ledger's
+  `cost 8.131200000000001e-05, calls 2`: the same float and the same call count, so the
+  figures are a faithful pass-through rather than a recomputation. (The earlier attempt
+  failed because a copied package directory loses its hoisted dependencies.)
+- live-checks now asserts the implication when a price plugin is mounted: if
+  `dsh_info.usage.costAvailable` is true, the receipt must actually be priced by
+  `dsh-cost-meter`.
+- Both READMEs say the money figures are the plugin's ledger values passed through.
+
 ## 0.52.7
 
 - Attempted the money reconciliation in a throwaway profile and recorded why it did not

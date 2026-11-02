@@ -1721,7 +1721,7 @@ async function modelSelectionCheck() {
   // The receipt is a second view of the same turns: its per-turn model list must
   // agree with what each prompt reply reported, or billing and routing disagree.
   if (has('session_usage')) {
-    const receipt = await callTool('session_usage', { sessionId: session.sessionId, includeTurns: true })
+    const receipt = await callTool('session_usage', { sessionId: session.sessionId, includeTurns: true, includeCost: true })
     const turns = receipt.sessions?.[0]?.usage?.byTurn ?? []
     const firstTurn = reply.turn?.turn
     const secondTurn = switched.turn?.turn
@@ -1737,6 +1737,17 @@ async function modelSelectionCheck() {
     // session receipt must agree, and the session total must be their sum.
     const replyTokens = reply.turn?.usage?.totalTokens
     const switchedTokens = switched.turn?.usage?.totalTokens
+    // DSH's own price plugin, when installed, is the only source of money: the info
+    // block claims costAvailable, so the receipt must actually have it.
+    if (info.usage?.costAvailable === true) {
+      const rowCost = receipt.sessions?.[0]?.cost
+      check(
+        rowCost?.available === true && typeof rowCost.costUsd === 'number' &&
+          typeof rowCost.costEstimateUsd === 'number' && rowCost.source === 'dsh-cost-meter',
+        'dsh_info advertises money and the receipt can price the session',
+        `costUsd ${rowCost?.costUsd ?? '?'} / estimate ${rowCost?.costEstimateUsd ?? '?'}`,
+      )
+    }
     const receiptTurns = (rowFor(firstTurn)?.totalTokens ?? 0) + (rowFor(secondTurn)?.totalTokens ?? 0)
     check(
       typeof replyTokens === 'number' && replyTokens === rowFor(firstTurn)?.totalTokens &&
