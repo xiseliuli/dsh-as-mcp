@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.20.6
+
+- A 401 now carries `WWW-Authenticate: Bearer realm="dsh-as-mcp"`. Without the
+  challenge a standard MCP client cannot tell that presenting a bearer token is
+  the fix and reports a dead endpoint instead of retrying.
+- Acceptance gained protocol-contract checks (malformed JSON -> parse error,
+  unknown method -> method-not-found, missing token -> Bearer challenge,
+  declared oversized body -> 413) and model-selection failure checks (a bad
+  route is reported by name with the known routes and the discovery hint).
+
 ## 0.20.5
 
 - **Fixed `http.mountOnWebServer: true` mounting nothing on a real install.** The

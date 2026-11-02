@@ -34,6 +34,7 @@
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
+import { request as httpRequest } from 'node:http'
 import { join } from 'node:path'
 
 const argv = process.argv.slice(2)
@@ -282,6 +283,43 @@ section('surface')
     `listening=${info.listening === true} mounted=${info.mountedOnDshWebServer === true}`,
   )
 
+  // --- protocol contract -----------------------------------------------------
+  // What a generic MCP client relies on before any tool runs: a parse error, a
+  // method-not-found, a challenge it can act on, and a bounded body.
+  const unauthHeaders = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
+  const parseFailure = await fetch(endpoint, { method: 'POST', headers: { ...unauthHeaders, ...(token === undefined ? {} : { authorization: `Bearer ${token}` }) }, body: '{not json' })
+  const parseBody = await parseFailure.text()
+  check(
+    parseFailure.status === 400 && parseBody.includes('-32700'),
+    'malformed JSON is answered with a parse error',
+    `HTTP ${parseFailure.status}`,
+  )
+
+  const unknownMethod = await post({ jsonrpc: '2.0', id: 9_001, method: 'no/such-method', params: {} })
+  const unknownText = await unknownMethod.text()
+  check(unknownMethod.ok && unknownText.includes('-32601'), 'an unknown method is method-not-found', `HTTP ${unknownMethod.status}`)
+
+  const denied = await fetch(endpoint, { method: 'POST', headers: unauthHeaders, body: '{}' })
+  check(
+    denied.status === 401 && (denied.headers.get('www-authenticate') ?? '').toLowerCase().includes('bearer'),
+    'a missing token challenges with WWW-Authenticate: Bearer',
+    `HTTP ${denied.status}`,
+  )
+
+  const endpointUrl = new URL(endpoint)
+  const oversizeStatus = await new Promise((resolve) => {
+    const attempt = httpRequest({
+      host: endpointUrl.hostname,
+      port: endpointUrl.port,
+      path: endpointUrl.pathname,
+      method: 'POST',
+      headers: { ...unauthHeaders, 'content-length': String(999 * 1024 * 1024) },
+    }, (response) => { resolve(response.statusCode); response.resume() })
+    attempt.on('error', (error) => resolve(`error: ${error.message}`))
+    attempt.end()
+  })
+  check(oversizeStatus === 413, 'a declared oversized body is refused before it is read', `HTTP ${oversizeStatus}`)
+
   // Model discovery is opt-in and per-provider guarded; when it does answer, the
   // shape must be a list of {provider, models[]}.
   const withModels = await must('dsh_info', { includeModels: true })
@@ -410,6 +448,22 @@ try {
     const created = await must('session_create', { workspaceId })
     sessionId = created.sessionId ?? created.session?.id ?? created.id
     check(typeof sessionId === 'string' && sessionId !== '', 'session_create', sessionId)
+
+  // Model selection failures must name the route and how to discover good ones.
+  const badRoute = await tool('session_create', { cwd: projectPath, provider: 'nope-provider', model: 'nope-model' })
+  check(
+    badRoute.ok && /not a registered provider route/.test(badRoute.payload?.modelSelectionError ?? ''),
+    'a bad model route is reported, not silently ignored',
+    (badRoute.payload?.modelSelectionError ?? '').slice(0, 60),
+  )
+  const badRouteSession = badRoute.payload?.sessionId
+  const badSetModel = await tool('session_set_model', { sessionId: badRouteSession, provider: 'nope-provider', model: 'nope-model' })
+  check(
+    !badSetModel.ok && /known routes/.test(badSetModel.error ?? '') && /includeModels/.test(badSetModel.error ?? ''),
+    'a bad session_set_model names the known routes and how to list models',
+    (badSetModel.error ?? '').slice(0, 60),
+  )
+
 
     const listed = await must('session_list', { limit: 50 })
     check(

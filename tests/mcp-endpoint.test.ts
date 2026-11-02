@@ -3,6 +3,25 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { TOKEN, boot, callTool, readJsonRpc, rpc, silentLog, stubDriver, testConfig } from './harness.js'
 import { MAX_REQUEST_BYTES, createRequestHandler, declaresOversizedBody, startListener } from '../src/mcp/http.js'
 
+describe('endpoint admission', () => {
+  it('answers 401 with a Bearer challenge so a standard client knows to authenticate', async () => {
+    const own = await boot(stubDriver())
+    try {
+      const response = await fetch(own.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+      })
+      expect(response.status).toBe(401)
+      // Without this header a standard MCP client cannot tell that presenting a
+      // bearer token is the fix, so it reports a dead endpoint instead of retrying.
+      expect(response.headers.get('www-authenticate')).toContain('Bearer')
+    } finally {
+      await own.stop()
+    }
+  })
+})
+
 describe('request body bound', () => {
   it('accepts an undeclared, small, or exactly-at-cap body', () => {
     expect(declaresOversizedBody({})).toBe(false)

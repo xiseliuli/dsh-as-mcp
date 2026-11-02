@@ -489,6 +489,9 @@ draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
   is read. This is defence in depth: every tool that could carry a large payload
   already has its own cap, and a chunked request declares no size and is not
   covered by this check.
+- A rejected request answers `401` with `WWW-Authenticate: Bearer realm="dsh-as-mcp"`, so a standard
+  MCP client can tell that presenting its configured token is the fix rather than reporting a dead
+  endpoint. The realm is a fixed label; the token is never echoed.
 - The listener binds to `127.0.0.1` and every request is bearer-checked, including requests on
   a route mounted on DSH's own web server. That check is the *only* gate there: an exact route
   registered on the web server is matched **before** DSH's authorization fence — anything

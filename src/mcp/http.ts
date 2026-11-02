@@ -82,6 +82,16 @@ export function declaresOversizedBody(headers: { 'content-length'?: string | num
   return Number.isFinite(bytes) && bytes > MAX_REQUEST_BYTES
 }
 
+/**
+ * The challenge a 401 carries.
+ *
+ * A bare 401 without `WWW-Authenticate` tells a standard MCP client that it is
+ * unauthorized but not that a bearer token is the answer, so the client reports a
+ * dead endpoint instead of retrying with its configured credential. The realm is
+ * a fixed label, not the token: nothing here may echo the secret.
+ */
+const BEARER_CHALLENGE = 'Bearer realm="dsh-as-mcp"'
+
 /** Reply with a minimal, non-reflective error body. */
 function deny(res: Parameters<NodeMcpRequestHandler>[1], status: number, body: string): void {
   const payload = Buffer.from(body, 'utf8')
@@ -89,6 +99,7 @@ function deny(res: Parameters<NodeMcpRequestHandler>[1], status: number, body: s
     'content-type': 'text/plain; charset=utf-8',
     'content-length': String(payload.byteLength),
     'cache-control': 'no-store',
+    ...(status === 401 ? { 'www-authenticate': BEARER_CHALLENGE } : {}),
   })
   res.end(payload)
 }

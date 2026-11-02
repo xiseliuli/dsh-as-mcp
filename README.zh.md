@@ -435,6 +435,8 @@ token 数字不受影响。钱覆盖会话内每一次 LLM 调用，而 token �
 所以调用方 agent 的上下文里不会攒下这个凭证。启动时，短于 16 个字符的自定义 token 会触发告警；
 自动生成的 token 是 43 个字符的 CSPRNG 输出。
 
+- 被拒绝的请求返回 `401` 并带 `WWW-Authenticate: Bearer realm="dsh-as-mcp"`，标准 MCP 客户端因此
+  知道"带上配置好的 token 重试"才是解法，而不是把它当成端点不可用。realm 是固定标签，token 不会回显。
 - 监听绑定在 `127.0.0.1`，所有请求都做 bearer 校验——包括挂在 DSH 自身 web server 上的那条
   路由。但在那条路由上，**这个校验是唯一的关卡**：插件注册的精确路由会先于 DSH 的鉴权围栏被
   匹配，没匹配上的请求才会作为 fallback 交给围栏（`webserver/src/index.ts:222-227`）。所以
