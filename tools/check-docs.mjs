@@ -104,6 +104,46 @@ for (const block of toolBlocks) {
   }
 }
 
+// --- panel select options match the host enums -------------------------------
+//
+// A `select` that offers a value the host refuses is worse than a free text field:
+// it looks like the supported choice. This compares each panel select against the
+// exported enum array the config schema validates with, and fails when a new select
+// appears without a mapping here (so it cannot drift silently).
+
+const selectEnumByPath = {
+  'session.scope': 'SESSION_SCOPES',
+  'approval.policy': 'APPROVAL_POLICIES',
+}
+const fieldsSource = read('src/client/fields.ts')
+const enumConfigSource = read('src/config.ts')
+
+function hostEnumValues(name) {
+  const match = new RegExp(`export const ${name} = \\[([^\\]]*)\\] as const`).exec(enumConfigSource)
+  if (match === null) return undefined
+  return [...match[1].matchAll(/'([^']*)'/g)].map((entry) => entry[1])
+}
+
+for (const block of fieldsSource.matchAll(/kind: 'select',\s*path: \[([^\]]*)\]([\s\S]*?)\]/g)) {
+  const path = [...block[1].matchAll(/'([^']*)'/g)].map((entry) => entry[1]).join('.')
+  const expectedName = selectEnumByPath[path]
+  if (expectedName === undefined) {
+    problems.push(`panel select "${path}" has no host-enum mapping in tools/check-docs.mjs`)
+    continue
+  }
+  const hostValues = hostEnumValues(expectedName)
+  if (hostValues === undefined) {
+    problems.push(`could not read ${expectedName} from src/config.ts`)
+    continue
+  }
+  const offered = [...block[2].matchAll(/\{ value: '([^']*)'/g)].map((entry) => entry[1])
+  if (offered.length !== hostValues.length || offered.some((value, index) => value !== hostValues[index])) {
+    problems.push(
+      `panel select "${path}" offers [${offered.join(', ')}], ${expectedName} is [${hostValues.join(', ')}]`,
+    )
+  }
+}
+
 // --- option references are translated together -------------------------------
 //
 // A tool option documented in one README and not the other is how `probeSearch` drifted:

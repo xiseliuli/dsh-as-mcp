@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.47
+
+- The drift check now compares each panel `select` against the exported enum the config
+  schema validates with (`SESSION_SCOPES`, `APPROVAL_POLICIES`): offering a value the host
+  refuses looks like a supported choice, which is worse than free text. A new select without
+  a mapping fails the check rather than drifting silently. Proven by deleting the `allow`
+  option — `DRIFT: panel select "approval.policy" offers [inherit], APPROVAL_POLICIES is
+  [inherit, allow]` — then restoring. Both READMEs list the new check.
+
 ## 0.52.46
 
 - The four positive-integer settings (`session.promptTimeoutMs`, `limits.maxReadBytes`,
