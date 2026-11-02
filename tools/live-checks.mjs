@@ -262,6 +262,35 @@ async function listChecks() {
   return sessionId
 }
 
+// --- availability contract -------------------------------------------------
+
+async function availabilityCheck() {
+  section('availability contract')
+  const info = await callTool('dsh_info')
+  const availability = info.toolAvailability
+  if (availability === undefined) {
+    process.stdout.write('  - endpoint predates dsh_info.toolAvailability; skipping\n')
+    return
+  }
+  const listed = await rpc('tools/list', {})
+  const names = new Set((listed.tools ?? []).map((tool) => tool.name))
+  const availableTools = new Set(availability.availableTools ?? [])
+  check(
+    availableTools.size === availability.available,
+    'dsh_info.available matches the availableTools list',
+    `${availability.available} advertised, ${availableTools.size} named`,
+  )
+  const missing = [...names].filter((name) => !availableTools.has(name))
+  const extra = [...availableTools].filter((name) => !names.has(name))
+  check(
+    missing.length === 0 && extra.length === 0,
+    'availableTools equals the tools/list set',
+    missing.length + extra.length === 0 ? `${names.size} tools` : `missing ${missing.join(',') || '-'} / extra ${extra.join(',') || '-'}`,
+  )
+  const reasonless = (availability.unavailable ?? []).filter((entry) => typeof entry.reason !== 'string' || entry.reason === '')
+  check(reasonless.length === 0, 'every unavailable tool explains why', `${(availability.unavailable ?? []).length} unavailable`)
+}
+
 // --- model-spending checks -------------------------------------------------
 
 async function progressCheck(sessionId) {
@@ -434,6 +463,7 @@ process.stdout.write(`${dim(`protocol ${protocolVersion}`)}\n`)
 try {
   await protocolChecks()
   await shellChecks()
+  await availabilityCheck()
   const sessionId = await listChecks()
   const withSubagent = flag('--with-subagent')
   if (flag('--with-model') || withSubagent) {

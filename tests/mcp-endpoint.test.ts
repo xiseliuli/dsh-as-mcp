@@ -567,10 +567,15 @@ describe('MCP Streamable HTTP endpoint', () => {
     const own = await boot(stubDriver())
     try {
       const payload = JSON.parse((await callTool(own.url, 'dsh_info', {})).text) as {
-        toolAvailability?: { available: number; unavailable: { tool: string; reason: string }[] }
+        toolAvailability?: {
+          available: number
+          availableTools: string[]
+          unavailable: { tool: string; reason: string }[]
+        }
       }
       expect(payload.toolAvailability).toBeDefined()
       expect(payload.toolAvailability?.available).toBeGreaterThan(0)
+      expect(payload.toolAvailability?.availableTools?.length).toBe(payload.toolAvailability?.available)
       // The stub provides neither a filesystem nor a shell: the tools that need
       // them must be named, with the missing service in the reason.
       const fileRead = payload.toolAvailability?.unavailable.find((entry) => entry.tool === 'file_read')

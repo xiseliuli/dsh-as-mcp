@@ -209,7 +209,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 
 | Tool | What it does |
 | --- | --- |
-| `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, the `catalog` of accepted providers, agent presets and sandbox mode, and `toolAvailability` — which tools this deployment cannot serve and why. |
+| `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, the `catalog` of accepted providers, agent presets and sandbox mode, and `toolAvailability` — the tools that passed every rule (`availableTools`, comparable with `tools/list`), those this deployment cannot serve, and why. |
 | `workspace_create` | Register a directory as a DSH workspace (creating it if needed). |
 | `workspace_list` | Every registered workspace with id, path, title, session count, directory status. |
 | `workspace_delete` | Unregister a workspace (files and session history untouched); idempotent. |

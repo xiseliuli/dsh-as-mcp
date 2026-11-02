@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.31.1
+
+- `dsh_info.toolAvailability` now also names the tools that passed
+  (`availableTools`), so a caller can compare it with `tools/list` instead of
+  trusting a count. It is the same set — disabled groups are absent from both, and
+  group-enabled tools missing a service appear only in `unavailable` — which
+  `tools/live-checks.mjs` now asserts at runtime (skipping endpoints that predate
+  the field).
+- Unit and endpoint tests cover the new list; the count and the list length agree.
+
 ## 0.31.0
 
 - `dsh_info` now reports **`toolAvailability`**: for every advertised tool, whether

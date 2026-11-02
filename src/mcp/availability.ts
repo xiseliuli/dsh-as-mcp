@@ -26,6 +26,8 @@ export interface UnavailableTool {
 export interface ToolAvailability {
   /** Number of advertised tools that passed every rule (`dsh_info` included). */
   readonly available: number
+  /** The tools that passed, so a caller can compare this with `tools/list`. */
+  readonly availableTools: readonly string[]
   /** Tools a caller should not bother calling, each with the concrete reason. */
   readonly unavailable: readonly UnavailableTool[]
   /** Caveats that do not make a tool unavailable. */
@@ -123,7 +125,8 @@ export function describeToolAvailability(
 ): ToolAvailability {
   const unavailable: UnavailableTool[] = []
   const notes: string[] = []
-  let available = 1 // `dsh_info` has no dependency beyond the plugin itself.
+  // `dsh_info` has no dependency beyond the plugin itself.
+  const availableTools: string[] = ['dsh_info']
 
   for (const [group, tools] of Object.entries(GROUP_TOOLS) as [keyof ToolToggles, readonly string[]][]) {
     if (enabled[group] !== true) {
@@ -136,7 +139,7 @@ export function describeToolAvailability(
       const required = REQUIRED_CAPABILITIES[tool] ?? []
       const missing = required.find((probe) => capabilities[probe] !== true)
       if (missing === undefined) {
-        available += 1
+        availableTools.push(tool)
         continue
       }
       unavailable.push({
@@ -163,7 +166,8 @@ export function describeToolAvailability(
   }
 
   return {
-    available,
+    available: availableTools.length,
+    availableTools,
     unavailable,
     ...(notes.length === 0 ? {} : { notes }),
   }

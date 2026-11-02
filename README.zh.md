@@ -198,7 +198,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 
 | 工具 | 作用 |
 | --- | --- |
-| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`，以及 `toolAvailability`（本部署无法服务的工具及原因）；`probeSearch` 可验证搜索是否真的可用。 |
+| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`，以及 `toolAvailability`（通过全部规则的 `availableTools`，可与 `tools/list` 对照；以及本部署无法服务的工具及原因）；`probeSearch` 可验证搜索是否真的可用。 |
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、会话数、目录是否还在。 |
 | `workspace_delete` | 注销一个工作区（文件与会话历史不受影响）；幂等。 |
