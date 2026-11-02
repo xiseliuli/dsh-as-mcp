@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.0
+
+- Per-turn usage rows now carry a `byModel` split when the turn used more than one
+  route: a mid-turn escalation or fallback has a single row total, which hides how much
+  the expensive model charged. Single-route turns omit the field (the row and
+  `models[0]` already describe them fully), so the common case costs nothing.
+- Usage-fold test covers the multi-route split, the single-route omission and the row
+  total; both READMEs describe the field.
+
 ## 0.51.11
 
 - Verified two items that had been listed as unverified, and corrected one claim:

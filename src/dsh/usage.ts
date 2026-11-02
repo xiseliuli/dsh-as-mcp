@@ -59,6 +59,12 @@ export interface UsageTotals extends UsageBuckets {
   readonly totalTokens: number
 }
 
+/** One route's share of a turn, when that turn used more than one model. */
+export interface TurnModelUsage extends UsageTotals {
+  readonly provider: string | null
+  readonly model: string | null
+}
+
 /** One turn's usage, which is the unit a released `session_prompt` reports. */
 export interface TurnUsage extends UsageTotals {
   /** The harness's turn number inside the session; starts at 1. */
@@ -81,6 +87,12 @@ export interface TurnUsage extends UsageTotals {
    * no sample named a route (a retried attempt has no assistant message to attribute).
    */
   readonly models?: readonly string[]
+  /**
+   * Per-route split of this turn's tokens, present only when the turn used more than
+   * one route (an escalation or fallback mid-turn). A single-route turn's numbers are
+   * already fully described by the row itself and `models[0]`.
+   */
+  readonly byModel?: readonly TurnModelUsage[]
 }
 
 /**
@@ -153,6 +165,7 @@ interface TurnCell {
   buckets: UsageBuckets
   readonly steps: Set<number>
   readonly routes: Set<string>
+  readonly modelBuckets: Map<string, { route: Route | null; buckets: UsageBuckets }>
 }
 
 /** A running per-route cell. */
@@ -351,7 +364,12 @@ function modelCell(cells: Map<string, ModelCell>, route: Route | null): ModelCel
 function turnCell(cells: Map<number, TurnCell>, turn: number): TurnCell {
   const existing = cells.get(turn)
   if (existing !== undefined) return existing
-  const created: TurnCell = { buckets: emptyBuckets(), steps: new Set<number>(), routes: new Set() }
+  const created: TurnCell = {
+    buckets: emptyBuckets(),
+    steps: new Set<number>(),
+    routes: new Set(),
+    modelBuckets: new Map(),
+  }
   cells.set(turn, created)
   return created
 }
@@ -438,6 +456,10 @@ export function foldSessionUsage(
       // count a second call.
       const turn = turnCell(turns, position.turn)
       turn.buckets = subtractBuckets(turn.buckets, previous.buckets)
+      const previousRoute = turn.modelBuckets.get(routeKey(previous.route))
+      if (previousRoute !== undefined) {
+        previousRoute.buckets = subtractBuckets(previousRoute.buckets, previous.buckets)
+      }
       const model = modelCell(models, previous.route)
       model.buckets = subtractBuckets(model.buckets, previous.buckets)
       model.samples -= 1
@@ -448,6 +470,11 @@ export function foldSessionUsage(
     const turn = turnCell(turns, position.turn)
     turn.buckets = addBuckets(turn.buckets, buckets)
     turn.steps.add(position.step)
+    const routeCellKey = routeKey(sample.route)
+    const routeCell = turn.modelBuckets.get(routeCellKey)
+      ?? { route: sample.route, buckets: emptyBuckets() }
+    routeCell.buckets = addBuckets(routeCell.buckets, buckets)
+    turn.modelBuckets.set(routeCellKey, routeCell)
     const model = modelCell(models, sample.route)
     model.buckets = addBuckets(model.buckets, buckets)
     model.samples += 1
@@ -465,6 +492,24 @@ export function foldSessionUsage(
         steps: cell.steps.size,
         ...toTotals(cell.buckets),
         ...(cell.routes.size === 0 ? {} : { models: [...cell.routes].sort() }),
+        ...(cell.modelBuckets.size <= 1
+          ? {}
+          : {
+            byModel: [...cell.modelBuckets.values()]
+              .filter((entry) => !isEmptyBuckets(entry.buckets))
+              .map((entry) => ({
+                provider: entry.route?.provider ?? null,
+                model: entry.route?.model ?? null,
+                ...toTotals(entry.buckets),
+              }))
+              // Attributed routes first, largest first; the unattributed row last,
+              // matching the session-level byModel ordering.
+              .sort((left, right) => {
+                if ((left.model === null) !== (right.model === null)) return left.model === null ? 1 : -1
+                if (right.totalTokens !== left.totalTokens) return right.totalTokens - left.totalTokens
+                return `${left.provider}\u0000${left.model}`.localeCompare(`${right.provider}\u0000${right.model}`)
+              }),
+          }),
         ...(startedAt === undefined || endedAt === undefined
           ? {}
           : { durationMs: Math.max(0, endedAt - startedAt) }),

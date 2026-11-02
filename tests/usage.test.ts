@@ -86,6 +86,23 @@ describe('foldSessionUsage', () => {
     expect(first.samples).toBe(1)
   })
 
+  it('splits a multi-route turn into per-model tokens', () => {
+    const folded = foldSessionUsage([
+      // One turn, two steps, two different routes: the row's total is the same but a
+      // reader asking "how much went to the expensive model" needs the split.
+      settlement(1, 1, 1, usage(100, 0, 10), { provider: 'deepseek', model: 'cheap' }),
+      settlement(2, 1, 2, usage(20, 0, 2), { provider: 'deepseek', model: 'expensive' }),
+      // A single-route turn carries no byModel: the row already says everything.
+      settlement(3, 2, 1, usage(7, 0, 1), { provider: 'deepseek', model: 'cheap' }),
+    ])
+    expect(folded.byTurn[0]?.byModel).toEqual([
+      { provider: 'deepseek', model: 'cheap', uncachedInputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 10, totalTokens: 110 },
+      { provider: 'deepseek', model: 'expensive', uncachedInputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 2, totalTokens: 22 },
+    ])
+    expect(folded.byTurn[0]?.totalTokens).toBe(132)
+    expect(folded.byTurn[1]?.byModel).toBeUndefined()
+  })
+
   it('names the routes that charged each turn', () => {
     const folded = foldSessionUsage([
       settlement(1, 1, 1, usage(10, 0, 1), { provider: 'deepseek', model: 'cheap' }),
