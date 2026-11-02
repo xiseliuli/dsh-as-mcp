@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.22.0
+
+- `shell_list` gained a `running` filter (`true` only live jobs, `false` only
+  settled ones). Settled jobs stay in the list until a new start prunes them, so a
+  caller polling one long-lived session had to filter the page itself.
+- Verified live first: the 16-job cap refuses a 17th start with an explicit
+  message instead of silently evicting a running job, and a job whose output
+  exceeds the 128 KiB buffer reports `truncated`/`lossy` plus the spill paths
+  rather than losing bytes silently.
+
 ## 0.21.4
 
 - Steer and queue semantics verified live: a `mode: "steer"` message sent into a

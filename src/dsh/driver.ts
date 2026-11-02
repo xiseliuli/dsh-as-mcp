@@ -3106,9 +3106,16 @@ export class DshDriver {
     return this.summarizeShellJob(job)
   }
 
-  /** Background jobs, newest first. */
-  listShellJobs(): ShellJobSummary[] {
+  /**
+   * Background jobs, newest first.
+   *
+   * `running` filters by state: a long-lived session accumulates finished jobs,
+   * and a caller that only wants the live ones should not have to filter the page
+   * itself. Absent means every job this driver still holds.
+   */
+  listShellJobs(options: { running?: boolean } = {}): ShellJobSummary[] {
     return [...this.shellJobs.values()]
+      .filter((job) => options.running === undefined || (job.handle.status === 'running') === options.running)
       .sort((left, right) => right.startedAt - left.startedAt)
       .map((job) => this.summarizeShellJob(job))
   }

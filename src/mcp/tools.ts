@@ -1109,10 +1109,17 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         description:
           'Every background job this endpoint knows: id, command, status, timestamps, exit code, and how many '
           + 'output bytes are waiting for a read.',
-        inputSchema: z.object({}),
+        inputSchema: z.object({
+          running: z
+            .boolean()
+            .optional()
+            .describe('Only jobs that are currently running (true) or only settled ones (false).'),
+        }),
         annotations: { readOnlyHint: true, openWorldHint: true },
       },
-      guard('shell_list', log, async () => ok({ jobs: driver.listShellJobs() })),
+      guard('shell_list', log, async (args) => ok({
+        jobs: driver.listShellJobs(args.running === undefined ? {} : { running: args.running }),
+      })),
     )
   }
 

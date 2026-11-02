@@ -627,6 +627,19 @@ describe('shell service shapes and background jobs', () => {
     expect(driver.listShellJobs()[0]?.status).toBe('killed')
   })
 
+  it('filters the job list by running state', async () => {
+    const { shell, processes } = shellShape('execute')
+    const driver = driverWith({ shell })
+    const finished = await driver.startShellJob({ command: 'true' })
+    const running = await driver.startShellJob({ command: 'sleep 100' })
+    ;(processes[0] as FakeProcess).settle(0)
+
+    expect(driver.listShellJobs({ running: true }).map((job) => job.jobId)).toEqual([running.jobId])
+    expect(driver.listShellJobs({ running: false }).map((job) => job.jobId)).toEqual([finished.jobId])
+    // Absent means everything.
+    expect(driver.listShellJobs()).toHaveLength(2)
+  })
+
   it('refuses an unknown job id with a pointer to shell_list', async () => {
     const { shell } = shellShape('execute')
     const driver = driverWith({ shell })

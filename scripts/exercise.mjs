@@ -858,6 +858,13 @@ try {
       'shell_list includes the job',
       `${(listed.jobs ?? []).length} jobs`,
     )
+    // Settled jobs accumulate; a caller that wants the live ones can filter.
+    const onlyRunning = await must('shell_list', { running: true })
+    check(
+      !(onlyRunning.jobs ?? []).some((entry) => entry.jobId === job.jobId),
+      'shell_list can filter to running jobs',
+      `${(onlyRunning.jobs ?? []).length} running`,
+    )
 
     const doomed = await must('shell_start', { command: 'sleep 30' })
     const stopped = await must('shell_kill', { jobId: doomed.jobId })

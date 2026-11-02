@@ -347,6 +347,22 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('forwards the shell_list running filter', async () => {
+    const seen: unknown[] = []
+    const own = await boot(stubDriver({
+      listShellJobs: (options: unknown) => {
+        seen.push(options)
+        return []
+      },
+    }), testConfig({ shell: true }))
+    try {
+      await callTool(own.url, 'shell_list', { running: true })
+      expect(seen).toEqual([{ running: true }])
+    } finally {
+      await own.stop()
+    }
+  })
+
   it('reports transcript truncation when the tail window hid messages', async () => {
     const own = await boot(stubDriver({
       readTranscript: async () => ({
