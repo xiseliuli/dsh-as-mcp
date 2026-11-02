@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.8
+
+- The `initialize` instructions now cover the surface added since they were written:
+  `toolAvailability` before planning a sequence, the inspection trio
+  (`includeToolCalls` / `session_tool_result` / `session_list origin`),
+  `session_search` and its opt-in index, and `session_queue`/`session_cancel` with the
+  `session.scope: "owned"` caveat. Instructions that stop at the first three tools
+  leave the rest undiscovered. The endpoint test now asserts the phrases.
+
 ## 0.37.7
 
 - `session_messages` now carries the admission `requestId` on user messages (the same

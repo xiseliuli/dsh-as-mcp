@@ -105,6 +105,13 @@ describe('MCP Streamable HTTP endpoint', () => {
     expect(instructions).toContain('dsh_info')
     expect(instructions).toContain('session_prompt')
     expect(instructions).toContain('session_usage')
+    // The later tools are how a caller discovers the inspection and queue surface;
+    // instructions that stop at the first three tools leave them undiscovered.
+    expect(instructions).toContain('toolAvailability')
+    expect(instructions).toContain('includeToolCalls')
+    expect(instructions).toContain('session_tool_result')
+    expect(instructions).toContain('session_queue')
+    expect(instructions).toContain('session_search')
     expect(instructions).toContain('token')
   })
 
