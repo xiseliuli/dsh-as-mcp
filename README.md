@@ -951,7 +951,7 @@ throwaway profile with that shape's `tools` block, installs the packaged tarball
 services are mounted (the socket answers before that), runs `tools/live-checks.mjs`, and prints the counts,
 cleaning up every profile and process. Use it instead of hand-measuring the table.
 
-`docs/LIVE-VERIFICATION.md` records which behaviours have been checked against a real harness,
+`docs/LIVE-VERIFICATION.md` also records the **flake discipline** learned from the rounds that produced these checks (a check must create the condition it relies on, or it measures the machine), and
 with the version that shipped each one and how to reproduce the check — including the list of
 things that are *not* verified here and why.
 

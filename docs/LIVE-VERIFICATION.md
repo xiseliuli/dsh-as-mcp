@@ -144,3 +144,20 @@ node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model  # progr
 
 Every check above is labelled in the scripts' output; a failure names the behaviour it was
 checking, so a regression shows up as a sentence, not just a non-zero exit code.
+
+## Flake discipline: a check must create the condition it relies on
+
+Three real failures in the 0.52.4x rounds were the *script* measuring the machine, not the
+plugin. Each was fixed by making the check produce the preconditions it asserts, and the
+pattern is worth keeping:
+
+| Symptom | Cause | Rule |
+| --- | --- | --- |
+| One full-shape run 144/1, three reruns green | the progress assertion demanded two notifications, but the sender is rate-limited to ~1/s and a fast turn legitimately emits one | assert the property that matters (the first notification arrived *during* the turn), and make multi-notification spread conditional |
+| A steer could miss its turn | a prompt of three fast `echo` commands could finish before the 1.5 s switch/steer delay | the prompt starts with `sleep N` so the turn is provably open when the second call lands |
+| A deadline check could measure the wrong thing | `sleep 5` under a 700 ms timeout is only ~4 s of separation from a natural finish | the command is much longer (`sleep 15`) than the guard window, so returning inside the window proves the deadline fired |
+| `shapes.mjs` reported sparse `harnessServices` | the HTTP socket answers before the harness services are mounted | poll `dsh_info` until the service set is complete before running checks |
+
+The wider point for maintainers: when a live check fails once and then passes repeatedly,
+suspect the check's assumptions before the plugin — and when you fix it, make the assumption
+explicit in a comment, because the next reader will otherwise "simplify" the sleep away.

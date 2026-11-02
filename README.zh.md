@@ -826,7 +826,7 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 等 harness 服务真正挂载（socket 会比服务先应答）、跑 `tools/live-checks.mjs`、打印计数，并清理所有
 profile 与进程。改表时用它，而不是手工测。
 
-`docs/LIVE-VERIFICATION.md` 记录哪些行为真正在真实 harness 上验证过、各自从哪个版本开始提供、如何复现，
+`docs/LIVE-VERIFICATION.md` 还记录了从这些轮次里总结的**抖动纪律**（检查必须自己制造它所依赖的前提，否则测到的是机器）；它同时记录哪些行为真正在真实 harness 上验证过、各自从哪个版本开始提供、如何复现，
 以及一份"**未在此验证**"的清单与原因。
 
 `tools/check-docs.mjs` 会校验：两个 README 的工具表与代码注册的工具集合一致；两个 README 的配置示例

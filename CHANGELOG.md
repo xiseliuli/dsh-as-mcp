@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.44
+
+- Wrote the **flake discipline** into `docs/LIVE-VERIFICATION.md`, with the four cases from the
+  0.52.4x rounds as the table: the progress check that demanded two rate-limited
+  notifications, the steer/switch that could miss a finished turn, the deadline check whose
+  command was too short to discriminate, and the shapes driver that read `harnessServices`
+  before the services mounted. Both READMEs point at the section.
+
 ## 0.52.43
 
 - The same self-inflicted-flake audit applied to the acceptance script: the symlink-loop
