@@ -943,6 +943,11 @@ build:
 | `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 59/59 (a disabled group's reason names its `tools.<group>` switch) |
 | `files`, `shell` only | 11 | live-checks 65/65 (session/usage/queue/search sections skip) |
 
+`node tools/shapes.mjs [--with-model]` reproduces that table in one command: for each shape it boots a
+throwaway profile with that shape's `tools` block, installs the packaged tarball, waits until the harness
+services are mounted (the socket answers before that), runs `tools/live-checks.mjs`, and prints the counts,
+cleaning up every profile and process. Use it instead of hand-measuring the table.
+
 `docs/LIVE-VERIFICATION.md` records which behaviours have been checked against a real harness,
 with the version that shipped each one and how to reproduce the check — including the list of
 things that are *not* verified here and why.

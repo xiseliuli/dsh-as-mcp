@@ -819,6 +819,10 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 | `workspace`、`session`、`agentTools`、`usage` | 18 | live-checks 59/59（被关闭的组会在原因里点名 `tools.<group>` 开关） |
 | 仅 `files`、`shell` | 11 | live-checks 65/65（会话/用量/队列/搜索段落跳过） |
 
+`node tools/shapes.mjs [--with-model]` 用一条命令复现上面的表：为每个形态建临时 profile、装入打包产物、
+等 harness 服务真正挂载（socket 会比服务先应答）、跑 `tools/live-checks.mjs`、打印计数，并清理所有
+profile 与进程。改表时用它，而不是手工测。
+
 `docs/LIVE-VERIFICATION.md` 记录哪些行为真正在真实 harness 上验证过、各自从哪个版本开始提供、如何复现，
 以及一份"**未在此验证**"的清单与原因。
 

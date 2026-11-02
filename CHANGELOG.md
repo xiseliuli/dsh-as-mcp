@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.36
+
+- `tools/shapes.mjs` turns the hand-measured deployment matrix into one command: per shape it
+  boots a throwaway profile with that shape's `tools` block, installs the packaged tarball,
+  waits until the harness services are mounted, runs `live-checks`, prints the counts, and
+  cleans up. Verified end to end — it reproduces the table exactly (143/84/59/65) with
+  `--with-model`.
+- Writing it exposed a real startup ordering fact: the HTTP socket answers **before** the
+  harness services are mounted, so a check run at first response sees
+  `harnessServices.sessionController: false`. The driver now polls `dsh_info` until the
+  controller is visible (fixed a spurious failure that the hand-walkthrough never hit because
+  it waited ~18 s). Both READMEs point at the script.
+
 ## 0.52.35
 
 - Re-measured every row of the deployment-shape matrix on the current build instead of
