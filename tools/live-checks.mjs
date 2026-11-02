@@ -1357,6 +1357,17 @@ async function subagentCheck() {
   )
 
   if (child !== undefined) {
+    // Documented claim: a prompt reply's `session` block is that session's own turns,
+    // never the folded children — the report is where subagent money first appears.
+    const replyTokens = prompted.session?.usage?.totals?.totalTokens
+    const selfRow = (report.sessions ?? []).find((row) => row.origin === 'self')
+    check(
+      typeof replyTokens === 'number' && (report.totals?.totalTokens ?? 0) > replyTokens &&
+        selfRow?.usage?.totals?.totalTokens === replyTokens,
+      "the prompt reply's session snapshot excludes the subagent, the report includes it",
+      `reply ${replyTokens ?? '?'} < report ${report.totals?.totalTokens ?? '?'}`,
+    )
+
     // Route inheritance, verified live before it was documented: a child spawned by a
     // session created on a non-default route spent on that same route.
     const routesOf = (row) => (row?.usage?.byModel ?? [])

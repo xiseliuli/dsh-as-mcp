@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.10
+
+- The subagent live check now proves the documented split between two views: a prompt
+  reply's `session` block excludes the subagent's tokens while `session_usage` includes
+  them as a row. The check asserts the reply total equals the self row and is strictly
+  smaller than the report total, so "the tool exists because the reply cannot see the
+  child" is evidence rather than prose.
+
 ## 0.52.9
 
 - Fixed a drift the new in-test docs check caught (and that a `2>/dev/null | tail -1`
