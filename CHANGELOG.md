@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.32
+
+- Verified the whole check suite against a **minimal** deployment (only `files` and
+  `shell` groups on): 11 tools advertised, 11 available, 17 unavailable with reasons, all
+  four disabled groups named, and the session/usage/queue/search sections degraded to
+  explicit skips — 65/65 checks, 0 failed. Both READMEs now say the script can verify a
+  narrowed deployment instead of only a fully-enabled one.
+
 ## 0.52.31
 
 - The availability contract now checks the disabled-group path: on a profile with
