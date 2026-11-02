@@ -274,6 +274,57 @@ async function shellChecks() {
   }
 }
 
+// --- file paging contracts -------------------------------------------------
+
+/**
+ * `file_read`'s paging promise: a byte-capped read reports `truncated` and
+ * `nextOffset`, the next window continues exactly, and a window that starts inside a
+ * multi-byte character decodes it as U+FFFD instead of failing or shifting the rest.
+ */
+async function filePagingChecks() {
+  section('file paging contracts')
+  if (!has('file_read') || !has('file_write')) {
+    skip('file paging contracts', 'needs file_read and file_write')
+    return
+  }
+  const path = join('/tmp', `dsh-as-mcp-live-paging-${process.pid}.txt`)
+  const head = 'a'.repeat(5_000)
+  const euro = '€'
+  const tail = 'b'.repeat(5_000)
+  try {
+    await callTool('file_write', { path, content: head + euro + tail })
+
+    const first = await callTool('file_read', { path, maxBytes: 5_000 })
+    check(
+      first.truncated === true && first.bytes === 5_000 && first.nextOffset === 5_000 &&
+        first.text === head,
+      'a byte-capped read reports truncated, bytes and nextOffset',
+      `${first.bytes} bytes, next ${first.nextOffset}`,
+    )
+
+    const second = await callTool('file_read', { path, offset: first.nextOffset, maxBytes: 6_000 })
+    check(
+      second.truncated === false && second.offset === 5_000 &&
+        second.text === euro + tail && first.text + second.text === head + euro + tail,
+      'the next window continues exactly and completes the file',
+      `${second.bytes} bytes, truncated ${second.truncated}`,
+    )
+
+    // 5000 bytes of 'a' then a 3-byte euro: offset 5001 leaves the euro's last two
+    // bytes orphaned, which decode as two replacement characters. The point is that
+    // the remainder after them is still aligned with the file.
+    const split = await callTool('file_read', { path, offset: 5_001, maxBytes: 100 })
+    const replacements = /^\uFFFD*/.exec(split.text)?.[0].length ?? 0
+    check(
+      replacements === 2 && split.text.slice(replacements) === tail.slice(0, split.text.length - replacements),
+      'a window starting inside a multi-byte character decodes U+FFFD per orphaned byte and keeps the rest aligned',
+      `${replacements} replacement char(s), then "${split.text.slice(replacements, replacements + 4)}"`,
+    )
+  } finally {
+    rmSync(path, { force: true })
+  }
+}
+
 // --- prompt input validation -----------------------------------------------
 
 /**
@@ -1181,6 +1232,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await filePagingChecks()
   await promptInputChecks()
   await sessionCreateErrorChecks()
   await forkRenameChecks()

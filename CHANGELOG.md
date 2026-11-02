@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.38.3
+
+- `file_read`'s description now says precisely what a mid-character window does: each
+  orphaned byte decodes as one U+FFFD (a 3-byte character started one byte early yields
+  two), and the rest stays aligned — the old wording implied a single replacement
+  character. Found by the new live paging check, which also asserts that a capped read
+  reports `truncated`/`bytes`/`nextOffset` and that the next window completes the file
+  byte-for-byte text.
+
 ## 0.38.2
 
 - `tools/live-checks.mjs` gained a prompt-input section: an empty prompt is refused
