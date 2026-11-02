@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.29.1
+
+- Verified the other two `session_queue` actions against a live harness and
+  documented their semantics: `edit` keeps the queued message id (a caller can
+  keep using the id it listed), and `steer` really reaches the running turn — the
+  steered text appears as a user message in the transcript and the assistant's
+  reply followed it (`STEERED-ACCEPTED`), with the running turn's earlier work
+  intact. No runtime change.
+
 ## 0.29.0
 
 - **`session_queue`** (27th tool): edit, withdraw or steer one *pending* queued

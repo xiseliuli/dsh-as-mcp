@@ -210,7 +210,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `session_list` | 存活会话摘要，按最近更新排序；`includeTitle` 附加每个会话的最新标题（每会话一次日志读取），`cwd`/`running` 会在 limit 生效前过滤。回复带 `total`（截断前匹配数）以及 limit 有隐藏时的 `truncated`。 |
 | `session_prompt` | 给 DSH 会话下发一个任务；默认等待本轮结束，返回回复、agent 调过的工具调用，以及本轮的 token 用量和该会话的累计量。`toolCalls` 控制每次调用的回显量：`summary`（默认）只给名称/id/参数字节数，`full` 附带参数（受 `maxArgumentChars` 限制），`none` 只留计数。可用 `images` 附带截图（png/jpeg/webp/gif，最多 4 张）。带 `idempotencyKey` 时可安全重试：重复调用会返回已有轮次，而不是把任务再发一遍。客户端带 `progressToken` 时，等待期间最多每秒一次 `notifications/progress`。`maxReplyChars` 可选地限制 agent 最终回复长度（被截断时带 `replyTruncated` 和原始 `replyChars`），`turn.models` 列出实际作答的 `provider/model`。客户端对该调用发出 `notifications/cancelled` 时，会中止对应轮次，等待以 `turn.aborted: true` 收尾——这条通知由端点自己路由，因为所用 SDK 版本只确认、不处理它。用量快照只有在轮次仍在运行时才带 `partial: true`；取消后已结算的轮次给出的是最终数字。 |
 | `session_messages` | 读取会话的用户/助手对话记录；`sinceSeq`/`role` 让它成为增量轮询，`maxCharsPerMessage` 限制每条消息长度（被截断的消息带 `truncated` 与原始 `chars`），每条消息还带队列操作要用的 `id`，`beforeSeq` 可向前翻页：传入你手上最老的 seq，返回更早窗口的尾部，因此长于窗口的完整记录也能读完。回复带 `total`（过滤器匹配到的消息数）以及在 limit 窗口隐藏了更早消息时的 `truncated`。 |
-| `session_queue` | 只传 `sessionId` 时列出**待执行队列**（排队消息还没有对话事件，所以 `session_messages` 看不到它）；带 `messageId` + `action` 时修改其中一条：`remove`（不再执行）、`edit`（替换文本）、`steer`（插入正在运行的轮次）。`session_cancel` 停的是当前轮次，这个工具改的是它后面排队的活。 |
+| `session_queue` | 只传 `sessionId` 时列出**待执行队列**（排队消息还没有对话事件，所以 `session_messages` 看不到它）；带 `messageId` + `action` 时修改其中一条：`remove`（不再执行）、`edit`（替换文本，消息 id 保持不变，无需重新列队）、`steer`（插入正在运行的轮次——它会作为用户消息出现在对话记录里，该轮次会据此行动）。`session_cancel` 停的是当前轮次，这个工具改的是它后面排队的活。 |
 | `session_cancel` | 让 agent 停下当前这一轮。 |
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。 |
 | `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。 |
