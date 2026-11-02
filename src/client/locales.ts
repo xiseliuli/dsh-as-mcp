@@ -84,13 +84,11 @@ export const zh: Record<string, string> = {
   'field.approval.policy.hint': '默认只对本插件创建的会话生效，不影响 DSH 里的其他会话。',
   'field.approval.policy.inherit': '继承 DSH 权限设置',
   'field.approval.policy.allow': '自动批准本插件创建的会话',
-  'field.approval.policy.allow.hint': '危险：这些会话不再询问，会直接执行需要授权的操作。',
 
   'field.auth.token': '令牌',
   'field.auth.token.hint': '留空表示继承配置层；配置层也为空时使用 DSH 生成的令牌文件。',
   'field.auth.token.set': '已设置',
   'field.auth.token.unset': '未设置（使用生成的令牌）',
-  'field.auth.token.replace': '替换令牌',
   'field.auth.token.clear': '清除',
   'field.auth.token.placeholder': '粘贴一个令牌以固定它',
 
@@ -110,7 +108,6 @@ export const zh: Record<string, string> = {
   'client.tokenUnknown': '未知（宿主没有提供）',
   'client.tokenUnknownHint': '拿不到当前令牌，复制出的配置里仍是占位符；可以直接读取这个文件：',
   'client.toolsLabel': '已启用的工具组：',
-  'client.statusLabel': '状态：',
   'client.listening': '监听中',
   'client.notListening': '未监听',
   'client.mounted': '已挂载到 Web 服务器',
@@ -194,13 +191,11 @@ export const en: Record<string, string> = {
   'field.approval.policy.hint': 'Either way this only affects sessions this plugin created, never the rest of DSH.',
   'field.approval.policy.inherit': 'Inherit DSH permissions',
   'field.approval.policy.allow': 'Auto-approve this plugin’s sessions',
-  'field.approval.policy.allow.hint': 'Dangerous: those sessions stop asking and will perform operations that need authorization.',
 
   'field.auth.token': 'Token',
   'field.auth.token.hint': 'Empty inherits the composition value; if that is empty too, the generated token file is used.',
   'field.auth.token.set': 'Set',
   'field.auth.token.unset': 'Not set (using the generated token)',
-  'field.auth.token.replace': 'Replace token',
   'field.auth.token.clear': 'Clear',
   'field.auth.token.placeholder': 'Paste a token to pin it',
 
@@ -220,7 +215,6 @@ export const en: Record<string, string> = {
   'client.tokenUnknown': 'unknown (the host did not report one)',
   'client.tokenUnknownHint': 'The copied configuration still carries the placeholder. Read the token from:',
   'client.toolsLabel': 'Enabled tool groups: ',
-  'client.statusLabel': 'Status: ',
   'client.listening': 'listening',
   'client.notListening': 'not listening',
   'client.mounted': 'mounted on the web server',

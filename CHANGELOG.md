@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.9
+
+- `tools/check-docs.mjs` now checks the settings panel's localization: the zh and
+  en dictionaries must have the same key set, every key the panel references must
+  exist in both, and unreferenced ("dead") keys are listed. Two parsing bugs were
+  found and fixed while writing it: the zh scan swallowed the en block, which hid a
+  missing zh key, and runtime-composed keys (`client.tokenSource.${source}`,
+  `state.*`) were not counted as referenced.
+- Three genuinely dead keys were removed from both dictionaries
+  (`field.approval.policy.allow.hint`, `field.auth.token.replace`,
+  `client.statusLabel`). Negative-tested: deleting a zh key or misspelling a field
+  label each make the check exit 1.
+
 ## 0.30.8
 
 - `tools/check-docs.mjs` now checks release claims: changelog headings must be

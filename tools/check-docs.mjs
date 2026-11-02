@@ -193,6 +193,70 @@ for (const required of ['lib', 'bin', 'cordis.patch.yml', 'README.md', 'README.z
   if (!files.includes(required)) problems.push(`package.json files is missing "${required}"`)
 }
 
+// --- settings panel localization ------------------------------------------
+
+const localesSource = read('src/client/locales.ts')
+const dictionaryOf = (name) => {
+  const start = localesSource.indexOf(`export const ${name}`)
+  if (start === -1) {
+    problems.push(`src/client/locales.ts: no ${name} dictionary`)
+    return new Set()
+  }
+  // One dictionary per `export const`; slicing to the next export keeps the zh
+  // scan from swallowing the en block (which made a missing zh key invisible).
+  const next = localesSource.indexOf('export const ', start + 1)
+  const rest = localesSource.slice(start, next === -1 ? undefined : next)
+  const block = rest.indexOf('{')
+  const end = rest.lastIndexOf('}')
+  const text = rest.slice(block, end)
+  return new Set(
+    [...text.matchAll(/(?:^|\n)\s*'?([A-Za-z][A-Za-z0-9_.]*)'?\s*:/g)].map((match) => match[1]),
+  )
+}
+const zhKeys = dictionaryOf('zh')
+const enKeys = dictionaryOf('en')
+if (zhKeys.size === 0 || enKeys.size === 0) {
+  problems.push('src/client/locales.ts: could not read both dictionaries')
+} else {
+  for (const key of zhKeys) {
+    if (!enKeys.has(key)) problems.push(`locales: "${key}" is translated only to Chinese`)
+  }
+  for (const key of enKeys) {
+    if (!zhKeys.has(key)) problems.push(`locales: "${key}" is translated only to English`)
+  }
+}
+
+const clientSources = [
+  'src/client/fields.ts',
+  'src/client/section.tsx',
+  'src/client/index.tsx',
+  'src/client/snippet.ts',
+  'src/client/contract.ts',
+].map((path) => ({ path, source: existsSync(path) ? read(path) : '' }))
+const referenced = new Set()
+const templatePrefixes = new Set()
+for (const { source } of clientSources) {
+  for (const match of source.matchAll(/'((?:nav|intro|group|field|client|state)(?:\.[A-Za-z0-9_]+)+)'/g)) {
+    referenced.add(match[1])
+  }
+  // A few keys are composed at runtime, e.g. t(`client.tokenSource.${source}`):
+  // treat every dictionary key under that prefix as referenced.
+  for (const match of source.matchAll(/`([A-Za-z0-9_.]+)\.\$\{/g)) templatePrefixes.add(match[1])
+}
+for (const key of zhKeys) {
+  for (const prefix of templatePrefixes) {
+    if (key === prefix || key.startsWith(`${prefix}.`)) referenced.add(key)
+  }
+}
+if (referenced.size === 0) problems.push('could not read any localized key references from src/client')
+const unusual = [...referenced].filter((key) => key.startsWith('field.') || key.startsWith('client.') || key.startsWith('group.'))
+for (const key of unusual) {
+  if (!zhKeys.has(key)) problems.push(`settings panel uses "${key}", which the dictionaries do not define`)
+}
+const dead = [...zhKeys].filter((key) => !referenced.has(key) && !['nav', 'intro'].includes(key))
+if (dead.length > 0) notes.push(`unreferenced dictionary keys: ${dead.join(', ')}`)
+notes.push(`localization: ${zhKeys.size} key(s) in each dictionary, ${referenced.size} referenced`)
+
 // --- changelog shape and cross-document version claims --------------------
 
 if (headings.length > 1) {

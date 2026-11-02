@@ -811,7 +811,8 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 与 `normalizeConfig` 接受的键一致；设置面板字段路径与这些键一致（配置里有、面板里没有的项会静默消失；
 面板里有、配置不接受的项写了也没用）；`package.json` 版本与 CHANGELOG 最新标题一致；发布 `files` 列表
 与实际文件一致（且不含维护者专用目录）；README 引用的 `docs/*.md` 与脚本路径都存在；`docs/LIVE-VERIFICATION.md` 里引用的每个版本号都在 CHANGELOG
-中有对应条目（引用一个从未发布的版本同样是漂移）。它是
+中有对应条目（引用一个从未发布的版本同样是漂移）；设置面板用到的本地化键在**中英两份字典里都存在且键集相同**，
+并列出未被引用的死键。它是
 `tools/release.sh` 的一步，也可以单独运行。
 
 `tools/release.sh` 把发布检查清单变成可执行脚本：两端 typecheck、测试、两个 bundle、打包、断言包里没有
