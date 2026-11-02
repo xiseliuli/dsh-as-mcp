@@ -574,6 +574,50 @@ async function listingImageChecks() {
       'a real PNG comes back as metadata plus an MCP image block',
       `${meta.mimeType ?? '?'}, ${block?.data?.length ?? 0} base64 chars`,
     )
+    // Detection is by magic bytes, so the other three supported formats need only a
+    // header to be classified (the harness hands back the bytes; it need not decode).
+    const gif = join('/tmp', `dsh-as-mcp-live-gif-${process.pid}.gif`)
+    const webp = join('/tmp', `dsh-as-mcp-live-webp-${process.pid}.webp`)
+    const bmp = join('/tmp', `dsh-as-mcp-live-bmp-${process.pid}.bmp`)
+    try {
+      writeFileSync(gif, Buffer.from('GIF89a\u0001\u0000\u0001\u0000\u0000\u0000\u0000;', 'latin1'))
+      writeFileSync(webp, Buffer.from('RIFF\u001a\u0000\u0000\u0000WEBPVP8 \u0000\u0000\u0000\u0000', 'latin1'))
+      writeFileSync(bmp, Buffer.from('BM\u0000\u0000\u0000\u0000', 'latin1'))
+      for (const [path, mime] of [[gif, 'image/gif'], [webp, 'image/webp']]) {
+        const outcome = await attemptTool('file_read_image', { path })
+        check(
+          outcome.ok === true && outcome.payload?.mimeType === mime,
+          `a ${mime.split('/')[1].toUpperCase()} header is detected as ${mime}`,
+          outcome.ok ? String(outcome.payload?.mimeType) : outcome.error?.slice(0, 50),
+        )
+      }
+      // BMP is readable, but a *prompt* cannot carry it — the two lists differ on
+      // purpose (a model attachment has its own accepted formats).
+      const bmpRead = await attemptTool('file_read_image', { path: bmp })
+      check(
+        bmpRead.ok === true && bmpRead.payload?.mimeType === 'image/bmp',
+        'a BMP header is detected as image/bmp (readable, unlike a prompt attachment)',
+        bmpRead.ok ? String(bmpRead.payload?.mimeType) : bmpRead.error?.slice(0, 50),
+      )
+      if (has('session_create') && has('session_prompt')) {
+        const session = await callTool('session_create', { cwd: process.cwd() })
+        const attached = await attemptTool('session_prompt', {
+          sessionId: session.sessionId,
+          prompt: 'look at this',
+          images: [{ path: bmp }],
+          wait: false,
+        })
+        check(
+          attached.ok === false && /cannot carry/.test(attached.error ?? '') &&
+            /png, jpeg, webp, gif/i.test(attached.error ?? ''),
+          'a BMP attached to a prompt is refused with the accepted formats named',
+          attached.error?.slice(0, 90),
+        )
+      }
+    } finally {
+      for (const path of [gif, webp, bmp]) rmSync(path, { force: true })
+    }
+
     const notImage = await attemptTool('file_read_image', { path: text })
     check(
       notImage.ok === false && /not an image/.test(notImage.error ?? ''),

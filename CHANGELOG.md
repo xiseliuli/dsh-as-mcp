@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.26
+
+- `file_read_image` format coverage: the live check classifies a **GIF**, **WEBP** and
+  **BMP** header as their MIME types, alongside the existing PNG/text/missing/over-cap
+  cases. The first version assumed BMP was unsupported and failed against the running
+  plugin — it reads BMP fine; what refuses BMP is a *prompt attachment*, whose format list
+  is deliberately narrower. Both sides are now checked: `file_read_image` accepts it, and
+  `session_prompt { images: [bmp] }` refuses it with the accepted formats named (that call
+  spends no turn). Detection is by magic bytes, so a header is enough. A second script
+  mistake was found and fixed in the same round: the prompt-refusal assertion tried to
+  assert that the error did *not* mention bmp (it names the path, which contains "bmp");
+  it now asserts the harness wording — "cannot carry (supported: png, jpeg, webp, gif)".
+
 ## 0.52.25
 
 - `idempotencyKey` now has cross-client evidence: the acceptance run covers one client's
