@@ -32,7 +32,7 @@
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -272,6 +272,57 @@ async function shellChecks() {
     )
     await callTool('shell_kill', { jobId: loud.jobId }).catch(() => {})
   }
+}
+
+// --- prompt input validation -----------------------------------------------
+
+/**
+ * A prompt that cannot be sent must be refused as a whole and say which input was
+ * bad — and it must not be half-admitted. No model turn is involved: every case here
+ * fails before the harness sees a message.
+ */
+async function promptInputChecks() {
+  section('prompt input validation')
+  if (!has('session_prompt') || !has('session_create') || !has('session_messages')) {
+    skip('prompt input validation', 'needs session_prompt/session_create/session_messages')
+    return
+  }
+  const session = await callTool('session_create', { cwd: process.cwd() })
+  const before = (await callTool('session_messages', { sessionId: session.sessionId, limit: 10 })).messages ?? []
+
+  const empty = await attemptTool('session_prompt', { sessionId: session.sessionId, prompt: '   ' })
+  check(
+    empty.ok === false && /non-empty text or at least one image/.test(empty.error ?? ''),
+    'an empty prompt is refused with the supported shapes',
+    empty.error?.slice(0, 60),
+  )
+
+  const textFile = join('/tmp', `dsh-as-mcp-live-not-image-${process.pid}.txt`)
+  writeFileSync(textFile, 'plain text, not an image')
+  try {
+    const notImage = await attemptTool('session_prompt', {
+      sessionId: session.sessionId,
+      prompt: 'look at this',
+      images: [{ path: textFile }],
+    })
+    check(
+      notImage.ok === false && notImage.error?.includes(textFile) && /not an image/.test(notImage.error ?? ''),
+      'a non-image attachment is refused by name',
+      notImage.error?.slice(0, 70),
+    )
+  } finally {
+    rmSync(textFile, { force: true })
+  }
+
+  const five = await attemptTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'too many images',
+    images: Array.from({ length: 5 }, () => ({ path: '/tmp/none.png' })),
+  })
+  check(five.ok === false, 'more images than the cap is refused before any file is read', five.error?.slice(0, 60))
+
+  const after = (await callTool('session_messages', { sessionId: session.sessionId, limit: 10 })).messages ?? []
+  check(after.length === before.length, 'a refused prompt was never admitted', `${after.length} message(s)`)
 }
 
 // --- session creation errors -----------------------------------------------
@@ -1130,6 +1181,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await promptInputChecks()
   await sessionCreateErrorChecks()
   await forkRenameChecks()
   await toolBridgeChecks()

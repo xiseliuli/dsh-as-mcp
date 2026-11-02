@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.38.2
+
+- `tools/live-checks.mjs` gained a prompt-input section: an empty prompt is refused
+  with the accepted shapes, a non-image attachment is refused by name, more images
+  than the cap is refused before any file is read, and a refused prompt is never
+  half-admitted (the transcript does not grow). No model turn is spent.
+
 ## 0.38.1
 
 - **Fixed silent model-selection handling in `session_create`.** Asking for only
