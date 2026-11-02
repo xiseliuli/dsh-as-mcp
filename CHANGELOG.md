@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.14
+
+- `tools/live-checks.mjs` checks the `dsh_tool_list`/`dsh_tool_call` promises: the
+  list is real for a session (15 agent tools here), an unlisted name is refused with
+  the `agentTools.allow` hint, a listed tool with empty arguments fails with the
+  tool's own validation message rather than a transport error, and a 30 KB `bash`
+  result comes back capped at `maxResultChars` with `truncated`, `resultBytes` and no
+  `value`.
+
 ## 0.37.13
 
 - `tools/live-checks.mjs` checks the workspace promises: the same path registers once

@@ -274,6 +274,84 @@ async function shellChecks() {
   }
 }
 
+// --- agent tool bridge -----------------------------------------------------
+
+/**
+ * `dsh_tool_list`/`dsh_tool_call` run the instance's own agent tools without a model
+ * turn. The promises worth asserting: the list is real, an unlisted name is refused
+ * with the setting that would allow it, a tool's own argument error reaches the
+ * caller, and a large result is capped with its size reported instead of flooding
+ * the conversation.
+ */
+async function toolBridgeChecks() {
+  section('agent tool bridge')
+  if (!has('dsh_tool_list') || !has('dsh_tool_call') || !has('session_create')) {
+    skip('agent tool bridge', 'needs dsh_tool_list/dsh_tool_call/session_create')
+    return
+  }
+  const session = await callTool('session_create', { cwd: process.cwd() })
+  const listed = await callTool('dsh_tool_list', { sessionId: session.sessionId })
+  const tools = listed.tools ?? []
+  check(
+    tools.length > 0 && tools.every((tool) => typeof tool.name === 'string' && tool.name !== ''),
+    'dsh_tool_list reports the agent tools for a session',
+    `${tools.length} tool(s)`,
+  )
+  const names = new Set(tools.map((tool) => tool.name))
+
+  const unknown = await attemptTool('dsh_tool_call', {
+    name: 'definitely_not_a_tool',
+    args: {},
+    sessionId: session.sessionId,
+  })
+  check(
+    unknown.ok === false &&
+      /not exposed by this endpoint/.test(unknown.error ?? '') &&
+      /agentTools\.allow/.test(unknown.error ?? ''),
+    'an unlisted agent tool is refused with the setting that would allow it',
+    unknown.error?.slice(0, 60),
+  )
+
+  // A listed tool given no arguments must fail with its own validation message, not
+  // a transport error: that message is what tells a caller how to fix the call.
+  const first = tools.find((tool) => typeof tool.name === 'string')
+  if (first !== undefined) {
+    const invalid = await attemptTool('dsh_tool_call', {
+      name: first.name,
+      args: {},
+      sessionId: session.sessionId,
+    })
+    const rejected = invalid.ok ? invalid.payload?.ok === false : true
+    check(
+      rejected,
+      `"${first.name}" with empty arguments is rejected by the tool, not the transport`,
+      (invalid.ok ? invalid.payload?.error : invalid.error)?.slice(0, 60),
+    )
+  }
+
+  if (names.has('bash')) {
+    const big = await attemptTool('dsh_tool_call', {
+      name: 'bash',
+      // bash requires `description` first in its schema; `command` runs 30 KB.
+      args: {
+        description: 'emit 30000 bytes for the result cap check',
+        command: `node -e "process.stdout.write('y'.repeat(30000))"`,
+      },
+      sessionId: session.sessionId,
+      maxResultChars: 200,
+    })
+    const body = big.ok ? big.payload : undefined
+    check(
+      body?.ok === true && body.truncated === true && body.resultBytes >= 30000 &&
+        typeof body.text === 'string' && body.text.length <= 200 && body.value === undefined,
+      'a large agent-tool result is capped, with its original size reported',
+      `${body?.resultBytes ?? '?'} bytes, text ${body?.text?.length ?? '?'} chars`,
+    )
+  } else {
+    skip('large agent-tool result cap', 'this composition lists no bash tool')
+  }
+}
+
 // --- workspace contracts ---------------------------------------------------
 
 /**
@@ -960,6 +1038,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await toolBridgeChecks()
   await workspaceChecks()
   await fileEditChecks()
   await concurrencyChecks()
