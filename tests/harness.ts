@@ -37,6 +37,7 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
     createSession: async () => ({ sessionId: 'session-1' }),
     listSessions: async () => ({ sessions: [], total: 0 }),
     searchSessions: async () => ({ items: [], hasMore: false }),
+    probeSessionSearch: async () => ({ available: true, matches: 0 }),
     renameSession: async ({ sessionId, title }) => ({ sessionId, title, seq: 1 }),
     setSessionModel: async ({ sessionId, provider, model }) => ({ sessionId, provider, model }),
     forkSession: async ({ sessionId }) => ({

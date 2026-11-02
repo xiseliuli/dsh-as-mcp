@@ -510,6 +510,22 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('reports the search probe only when asked', async () => {
+    const own = await boot(stubDriver({
+      probeSessionSearch: async () => ({ available: true, matches: 0 }),
+    }))
+    try {
+      const plain = JSON.parse((await callTool(own.url, 'dsh_info', {})).text) as { search?: unknown }
+      expect(plain.search).toBeUndefined()
+      const probed = JSON.parse((await callTool(own.url, 'dsh_info', { probeSearch: true })).text) as {
+        search?: { available: boolean; matches: number }
+      }
+      expect(probed.search).toEqual({ available: true, matches: 0 })
+    } finally {
+      await own.stop()
+    }
+  })
+
   it('forwards session_search query and limit', async () => {
     const seen: unknown[] = []
     const own = await boot(stubDriver({

@@ -1775,6 +1775,28 @@ export class DshDriver {
   }
 
   /**
+   * Whether session search actually works in this deployment, not merely whether
+   * the controller exposes it.
+   *
+   * `sessionController.search` can exist while the session-query index is
+   * configured with `openAt: "never"`, which turns the capability off without
+   * removing the method. A probe settles it: a random token matches nothing, so a
+   * success means the index opened and answered. It is opt-in at the tool level
+   * because the first search may open (and reconcile) the index.
+   */
+  async probeSessionSearch(): Promise<{ available: boolean; matches?: number; reason?: string }> {
+    try {
+      const result = await this.searchSessions({
+        query: `dshasmcpprobe${randomUUID().replace(/-/g, '')}`,
+        limit: 1,
+      })
+      return { available: true, matches: result.items.length }
+    } catch (error) {
+      return { available: false, reason: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
    * Branch one live session into a child at an exact event boundary.
    *
    * The child inherits the source's event prefix, so the conversation it continues

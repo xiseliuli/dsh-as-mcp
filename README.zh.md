@@ -179,7 +179,9 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 
 **先调 `dsh_info`**。它会返回端点、插件版本与运行时长、token 的来源、哪些工具组开着，以及——这点很
 关键——当前 profile 实际提供了哪些 harness 服务、token 用量能不能读、有没有价格来源；这样客户端能区分
-「这个 profile 没有 shell」和「这条命令执行失败了」。
+「这个 profile 没有 shell」和「这条命令执行失败了」。`includeModels: true` 会向每个 provider 路由询问
+可用模型（选对 model id 的可靠方式）；`probeSearch: true` 会顺带验证会话搜索**是否真的可用**（控制器
+可能暴露了 search，但 session-query 索引被配置关闭），代价是首次探测会打开该索引。
 
 它还会带 `catalog`：`session_create` 真正接受的选择——`providers`（已注册适配器的路由）、`agentPresets`
 及其 `defaultAgentPreset`、生效的 `sandboxMode`、`permissionPresets` 名单，以及 `sessionCount`。传
@@ -196,7 +198,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 
 | 工具 | 作用 |
 | --- | --- |
-| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用，以及可接受的 provider、agent preset 与 sandbox 模式的 `catalog`。 |
+| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用，以及可接受的 provider、agent preset 与 sandbox 模式的 `catalog`；`probeSearch` 可验证搜索是否真的可用。 |
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、会话数、目录是否还在。 |
 | `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话。 |

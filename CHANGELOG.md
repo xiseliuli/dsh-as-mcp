@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.27.0
+
+- `dsh_info { probeSearch: true }` answers "does session search really work here?"
+  instead of only "does the controller expose search": it runs one random-token
+  search (which matches nothing) so a disabled index is reported as
+  `search.available: false` with the enabling instruction. Opt-in because the
+  first search may open and reconcile the index.
+- `tools/live-checks.mjs` uses that probe and asserts `session_search` agrees with
+  it, for both enabled and disabled deployments.
+
 ## 0.26.0
 
 - `session_search` hits now carry context: `cwd`, `updatedAt` and `running` from

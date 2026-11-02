@@ -58,6 +58,7 @@ export type McpDriver = Pick<
   | 'setSessionModel'
   | 'listSessions'
   | 'searchSessions'
+  | 'probeSessionSearch'
   | 'promptSession'
   | 'cancelSession'
   | 'readTranscript'
@@ -224,6 +225,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             'Also list each provider route\'s advertised models. Defaults to false because some adapters '
             + 'answer with remote discovery; each provider is time-boxed.',
           ),
+        probeSearch: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also check whether session search really works here (not just whether the controller exposes '
+            + 'it): the session-query index may be configured with openAt "never". Opt-in because the first '
+            + 'search may open and reconcile that index.',
+          ),
       }),
       outputSchema: outputSchema({
         endpoint: z.string().optional(),
@@ -239,6 +248,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         config: z.looseObject({}).optional(),
         health: z.looseObject({}).optional(),
         usage: z.looseObject({}).optional(),
+        search: z.looseObject({}).optional(),
         notes: z.array(z.string()).optional(),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -250,6 +260,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       const catalog = await driver.describeCatalog({
         ...(args.includeModels === undefined ? {} : { includeModels: args.includeModels }),
       })
+      // Only when asked: opening the index on a cold profile is real work, and a
+      // caller that never searches should not pay for it on every dsh_info.
+      const search = args.probeSearch === true ? await driver.probeSessionSearch() : undefined
       return ok({
         endpoint: info.url,
         version: VERSION,
@@ -301,6 +314,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         // Usage is worth its own block rather than a line in the service map:
         // the numbers a caller bills against come with caveats (what is counted,
         // whether money is available) that a boolean cannot carry.
+        ...(search === undefined ? {} : { search }),
         usage: {
           reported: enabled.usage,
           tool: enabled.usage ? 'session_usage' : null,

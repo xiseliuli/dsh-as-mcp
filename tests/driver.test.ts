@@ -283,6 +283,28 @@ describe('DshDriver.searchSessions', () => {
       .rejects.toThrow(/must not be empty/)
   })
 
+  it('probes whether search really works instead of trusting the method', async () => {
+    const available = searchable({ items: [], hasMore: false })
+    await expect(available.probeSessionSearch()).resolves.toEqual({ available: true, matches: 0 })
+
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', {
+      create: async () => ({ sessionId: 's' }),
+      list: async () => ({ items: [] }),
+      prompt: async () => ({ accepted: true }),
+      cancel: () => ({ accepted: true }),
+      inspect: async () => ({ events: [] }),
+      search: async () => {
+        throw new Error('session search is disabled: openAt "never"')
+      },
+    } as never)
+    const disabled = new DshDriver(ctx, () => testConfig())
+    const probe = await disabled.probeSessionSearch()
+    expect(probe.available).toBe(false)
+    expect(probe.reason).toMatch(/openAt "never"/)
+  })
+
   it('turns the disabled-index failure into operator guidance', async () => {
     const ctx = new Context()
     contexts.push(ctx)

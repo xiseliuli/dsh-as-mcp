@@ -225,20 +225,28 @@ async function listChecks() {
     `${sliced.bytes ?? '?'}/${sliced.size ?? '?'} bytes, next ${sliced.nextOffset ?? '?'}`,
   )
 
-  // Search is opt-in in shipped compositions, so both answers are legitimate: the
-  // match list (a fresh token appears nowhere, so it must be empty) or the
-  // disabled-index explanation naming the configuration to change.
+  // Search is opt-in in shipped compositions, so both answers are legitimate. The
+  // probe in dsh_info is the honest answer to "does search work here"; the tool
+  // call must agree with it.
+  const info = await callTool('dsh_info', { probeSearch: true })
+  const searchState = info.search
+  check(
+    typeof searchState?.available === 'boolean' &&
+      (searchState.available ? searchState.matches === 0 : /openAt/.test(searchState.reason ?? '')),
+    'dsh_info { probeSearch: true } reports whether search really works',
+    searchState?.available === true ? 'available' : (searchState?.reason ?? 'no probe').slice(0, 60),
+  )
   const freshToken = randomUUID().replace(/-/g, '')
   const search = await attemptTool('session_search', { query: freshToken })
-  if (search.ok) {
+  if (searchState?.available === true) {
     check(
-      (search.payload?.items ?? []).length === 0 && typeof search.payload?.hasMore === 'boolean',
+      search.ok && (search.payload?.items ?? []).length === 0 && typeof search.payload?.hasMore === 'boolean',
       'session_search answers a token that appears nowhere with no matches',
       `${(search.payload?.items ?? []).length} match(es)`,
     )
   } else {
     check(
-      /openAt/.test(search.error ?? '') && /first-search|startup/.test(search.error ?? ''),
+      !search.ok && /openAt/.test(search.error ?? '') && /first-search|startup/.test(search.error ?? ''),
       'a disabled session-search index reports how to enable it',
       (search.error ?? '').slice(0, 60),
     )
