@@ -82,7 +82,7 @@ function fakeSessions(initial: DshSessionEvent[] = []): {
       seq += 1
       return { accepted: true }
     },
-    cancel: (request: { sessionId: string }) => {
+    cancel: async (request: { sessionId: string }) => {
       if (request.sessionId !== 'session-1') throw new Error(`session "${request.sessionId}" not found`)
       return { accepted: true }
     },
@@ -230,7 +230,7 @@ describe('DshDriver.updateQueue', () => {
       create: async () => ({ sessionId: 's' }),
       list: async () => ({ items: [] }),
       prompt: async () => ({ accepted: true }),
-      cancel: () => ({ accepted: true }),
+      cancel: async () => ({ accepted: true }),
       inspect: async () => ({ events: [] }),
       ...(updateQueue === undefined ? {} : { updateQueue }),
     } as never)
@@ -360,6 +360,38 @@ describe('session.scope: owned', () => {
     }
   })
 
+  it('lets a subagent session below an owned session be read, and refuses the rest', async () => {
+    const sessions = fakeSessions([
+      userMessage('req-1', 'parent said hi', 0),
+      userMessage('req-2', 'child said hi', 1),
+      userMessage('req-3', 'stranger said hi', 2),
+    ])
+    sessions.controller.list = async () => ({
+      items: [
+        { sessionId: 'session-1', cwd: '/tmp', running: false, blank: false, updatedAt: 3 },
+        { sessionId: 'session-child', cwd: '/tmp', running: false, blank: false, updatedAt: 2, parentSessionId: 'session-1', origin: 'subagent' },
+        { sessionId: 'session-stranger', cwd: '/tmp', running: false, blank: false, updatedAt: 1 },
+      ],
+    })
+    const driver = scoped(sessions, 'owned')
+    await driver.createSession({ cwd: '/tmp' })
+    // The subagent session is part of the owned tree: its transcript is the cost
+    // of the owned session, so reading it is allowed.
+    await expect(driver.readTranscript('session-child', 10)).resolves.toBeDefined()
+    await expect(driver.sessionUsage({ sessionId: 'session-child', limit: 5 }))
+      .resolves.toMatchObject({ scope: 'session' })
+    // A session outside the tree is still refused by every by-id entry point.
+    await expect(driver.readTranscript('session-stranger', 10))
+      .rejects.toThrow(/session\.scope is "owned"/)
+    await expect(driver.promptSession({
+      sessionId: 'session-stranger', prompt: 'x', mode: 'queue', wait: false,
+    })).rejects.toThrow(/session\.scope is "owned"/)
+    // Listing shows the whole tree, not just the directly-created session.
+    const listed = await driver.listSessions(10)
+    expect(listed.sessions.map((entry) => entry.sessionId).sort()).toEqual(['session-1', 'session-child'])
+    expect(listed.total).toBe(2)
+  })
+
   it('keeps the historical reach under scope all', async () => {
     const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
     const driver = scoped(sessions, 'all')
@@ -428,7 +460,7 @@ describe('DshDriver.searchSessions', () => {
         return { items: summaries }
       },
       prompt: async () => ({ accepted: true }),
-      cancel: () => ({ accepted: true }),
+      cancel: async () => ({ accepted: true }),
       inspect: async () => ({ events: [] }),
       search: async (request: { query: string }) => {
         if (request.query.trim() === '') throw new Error('empty query reached the harness')
@@ -486,7 +518,7 @@ describe('DshDriver.searchSessions', () => {
       create: async () => ({ sessionId: 's' }),
       list: async () => ({ items: [] }),
       prompt: async () => ({ accepted: true }),
-      cancel: () => ({ accepted: true }),
+      cancel: async () => ({ accepted: true }),
       inspect: async () => ({ events: [] }),
       search: async () => {
         throw new Error('session search is disabled: openAt "never"')
@@ -505,7 +537,7 @@ describe('DshDriver.searchSessions', () => {
       create: async () => ({ sessionId: 's' }),
       list: async () => ({ items: [] }),
       prompt: async () => ({ accepted: true }),
-      cancel: () => ({ accepted: true }),
+      cancel: async () => ({ accepted: true }),
       inspect: async () => ({ events: [] }),
       search: async () => {
         throw new Error('SessionQueryError: session search is disabled: this deployment configures the session-query index with openAt "never"')
@@ -525,7 +557,7 @@ describe('DshDriver.searchSessions', () => {
       create: async () => ({ sessionId: 's' }),
       list: async () => ({ items: [] }),
       prompt: async () => ({ accepted: true }),
-      cancel: () => ({ accepted: true }),
+      cancel: async () => ({ accepted: true }),
       inspect: async () => ({ events: [] }),
     } as never)
     const driver = new DshDriver(ctx, () => testConfig())

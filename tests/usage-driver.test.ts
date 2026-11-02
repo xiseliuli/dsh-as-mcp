@@ -803,16 +803,27 @@ describe('DshDriver.sessionUsage', () => {
     expect((none.notes ?? []).some((note) => /No session this DSH knows ran in/.test(note))).toBe(true)
   })
 
-  it('leaves foreign sessions out of aggregate totals under session.scope owned, and says so', async () => {
-    const harness = treeHarness()
+  it('keeps the owned tree — created sessions and their subagents — and excludes the rest', async () => {
+    const harness = fakeHarness({
+      logs: { 'session-1': FIRST_TURN, 'session-child': CHILD_USAGE, 'session-user': FIRST_TURN },
+      summaries: [
+        summary('session-1', { updatedAt: 3, cwd: '/tmp/project' }),
+        summary('session-child', { updatedAt: 2, cwd: '/tmp/project', parentSessionId: 'session-1', origin: 'subagent' }),
+        summary('session-user', { updatedAt: 1, cwd: '/tmp/project' }),
+      ],
+    })
     const { driver } = makeDriver(harness, { session: { scope: 'owned' } })
-    // Only a session this endpoint creates is visible under `owned`.
+    // Only a session this endpoint creates is visible under `owned`; the subagent
+    // session below it is part of the tree.
     await driver.createSession({ cwd: '/tmp' })
     const report = await driver.sessionUsage({ all: true, limit: 10 })
-    expect(report.sessions.map((row) => row.sessionId)).toEqual(['session-1'])
+    expect(report.sessions.map((row) => row.sessionId)).toEqual(['session-1', 'session-child'])
     expect((report.notes ?? []).some((note) => /session\.scope is "owned"/.test(note))).toBe(true)
-    // An explicit foreign id is refused rather than silently omitted.
+    // A subagent of an owned session may be read by id: it is that session's cost.
     await expect(driver.sessionUsage({ sessionId: 'session-child', limit: 5 }))
+      .resolves.toMatchObject({ scope: 'session' })
+    // A session outside the tree is refused rather than silently omitted.
+    await expect(driver.sessionUsage({ sessionId: 'session-user', limit: 5 }))
       .rejects.toThrow(/session\.scope is "owned"/)
   })
 

@@ -48,7 +48,7 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
       inheritedEventCount: 1,
     }),
     promptSession: async () => ({ accepted: true }),
-    cancelSession: () => ({ accepted: true }),
+    cancelSession: async () => ({ accepted: true }),
     readTranscript: async () => ({ messages: [], total: 0 }),
     readImage: async ({ path }) => ({
       path,

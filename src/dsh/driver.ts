@@ -657,25 +657,56 @@ export class DshDriver {
   }
 
   /**
-   * Whether the current `session.scope` lets this endpoint touch a session.
+   * The owned session tree: the ids this endpoint created plus every subagent
+   * session below one of them.
    *
-   * `all` keeps the historical instance-wide reach; `owned` is the containment
-   * option, and it is checked at every entry point that names a session rather
-   * than once at the transport, so a later tool cannot quietly bypass it.
+   * A subagent session is created by the harness on behalf of an owned session, so
+   * under `session.scope: "owned"` it belongs to the tree even though the endpoint
+   * never called `create` for it. Without this, a session's own bill would exclude
+   * the work its subagents did — the exact under-report the usage contract exists
+   * to prevent.
+   *
+   * @param summaries - One session listing; `undefined` means the listing failed.
+   * @returns Every visible id, or `undefined` when the scope is `all`.
    */
-  private sessionVisible(sessionId: string): boolean {
-    if (this.config.session.scope === 'all') return true
+  private ownedTree(summaries: readonly DshSessionSummary[] | undefined): Set<string> | undefined {
     this.ensureOwnershipLoaded()
-    return this.ownedSessions.has(sessionId)
+    if (this.config.session.scope === 'all') return undefined
+    const visible = new Set(this.ownedSessions)
+    if (summaries === undefined) return visible
+    // One pass is not enough: a grandchild's parent is added by this same loop, so
+    // iterate until the set stops growing. Depth is small, but the loop is cheap
+    // and avoids an arbitrary nesting limit.
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const summary of summaries) {
+        if (summary.parentSessionId === undefined) continue
+        if (!visible.has(summary.parentSessionId) || visible.has(summary.sessionId)) continue
+        visible.add(summary.sessionId)
+        grew = true
+      }
+    }
+    return visible
   }
 
   /** Refuse a session the current scope does not cover, naming the setting. */
-  private assertSessionVisible(sessionId: string, action: string): void {
-    if (this.sessionVisible(sessionId)) return
+  private async assertSessionVisible(sessionId: string, action: string): Promise<void> {
+    if (this.config.session.scope === 'all') return
+    this.ensureOwnershipLoaded()
+    if (this.ownedSessions.has(sessionId)) return
+    // Not directly ours: it may still be a subagent session of one that is, and
+    // reading that is part of reading the owned tree's cost.
+    try {
+      const visible = this.ownedTree(await this.sessionSummaries())
+      if (visible?.has(sessionId) === true) return
+    } catch {
+      // A listing failure must fail closed below, not open.
+    }
     throw new Error(
       `session ${sessionId} was not created by this endpoint, and session.scope is "owned": ${action} `
-        + 'is limited to sessions this endpoint created or forked. Set session.scope: "all" to allow it, '
-        + 'or create the session through this endpoint.',
+        + 'is limited to sessions this endpoint created or forked (and their subagent sessions). Set '
+        + 'session.scope: "all" to allow it, or create the session through this endpoint.',
     )
   }
 
@@ -1259,7 +1290,7 @@ export class DshDriver {
     model: string
     reasoningEffort?: string
   }> {
-    this.assertSessionVisible(request.sessionId, 'session_set_model')
+    await this.assertSessionVisible(request.sessionId, 'session_set_model')
     const controller = this.requireSessionController()
     try {
       const selected = await controller.selectModel({
@@ -1414,8 +1445,9 @@ export class DshDriver {
     // The filter runs before the limit so "the first 20 of my sessions" means what
     // it says; a limit applied first would return whatever happened to be recent.
     const cwd = options.cwd === undefined ? undefined : await this.canonicalFilterPath(options.cwd)
+    const allowed = this.ownedTree(listed.items)
     const filtered = listed.items.filter((item) => {
-      if (!this.sessionVisible(item.sessionId)) return false
+      if (allowed !== undefined && !allowed.has(item.sessionId)) return false
       if (options.running !== undefined && item.running !== options.running) return false
       if (cwd !== undefined && item.cwd !== cwd) return false
       return true
@@ -1522,7 +1554,7 @@ export class DshDriver {
     /** Why the usage read failed, when it did. */
     reason?: string
   }> {
-    this.assertSessionVisible(request.sessionId, 'session_prompt')
+    await this.assertSessionVisible(request.sessionId, 'session_prompt')
     return await this.enqueueTurn(request.sessionId, async () => {
       const controller = this.requireSessionController()
       // The harness records this id as `source.rpcId` on the committed user
@@ -1750,8 +1782,8 @@ export class DshDriver {
   }
 
   /** Ask the live agent to cancel its current turn. */
-  cancelSession(sessionId: string): { accepted: true } {
-    this.assertSessionVisible(sessionId, 'session_cancel')
+  async cancelSession(sessionId: string): Promise<{ accepted: true }> {
+    await this.assertSessionVisible(sessionId, 'session_cancel')
     return this.requireSessionController().cancel({ sessionId })
   }
 
@@ -1768,7 +1800,7 @@ export class DshDriver {
     queued: { id: string; text: string; source?: string; images: number }[]
     note?: string
   }> {
-    this.assertSessionVisible(sessionId, 'session_queue')
+    await this.assertSessionVisible(sessionId, 'session_queue')
     const query = this.sessionQuery()
     if (query === undefined || typeof query.observeSession !== 'function') {
       return {
@@ -1826,7 +1858,7 @@ export class DshDriver {
     action: 'remove' | 'edit' | 'steer'
     content?: string
   }): Promise<{ accepted: true; action: 'remove' | 'edit' | 'steer' }> {
-    this.assertSessionVisible(request.sessionId, 'session_queue')
+    await this.assertSessionVisible(request.sessionId, 'session_queue')
     if (request.action === 'edit' && (request.content ?? '').trim() === '') {
       throw new Error('editing a queued message needs non-empty content')
     }
@@ -1925,7 +1957,8 @@ export class DshDriver {
     const byId = new Map((summaries ?? []).map((summary) => [summary.sessionId, summary]))
     // `session.scope: "owned"` filters matches rather than failing the search: the
     // caller still learns what it may see, and `hidden` says matches were removed.
-    const visible = items.filter((item) => this.sessionVisible(item.sessionId))
+    const allowed = this.ownedTree(summaries)
+    const visible = items.filter((item) => allowed === undefined || allowed.has(item.sessionId))
     const hidden = items.length - visible.length
     return {
       items: visible.map((item) => {
@@ -1996,7 +2029,7 @@ export class DshDriver {
     approvalPolicy?: 'never'
     approvalPolicyError?: string
   }> {
-    this.assertSessionVisible(request.sessionId, 'session_fork')
+    await this.assertSessionVisible(request.sessionId, 'session_fork')
     const controller = this.requireSessionController()
     const fork = (controller as { fork?: (request: { sessionId: string; atSeq?: number }) => Promise<{ sessionId: string }> }).fork
     if (typeof fork !== 'function') {
@@ -2056,7 +2089,7 @@ export class DshDriver {
     title: string
     seq: number
   }> {
-    this.assertSessionVisible(request.sessionId, 'session_rename')
+    await this.assertSessionVisible(request.sessionId, 'session_rename')
     const controller = this.requireSessionController()
     const rename = (controller as {
       rename?: (input: { sessionId: string; title: string }) => Promise<{ title: string; seq: number }>
@@ -2097,7 +2130,7 @@ export class DshDriver {
       maxCharsPerMessage?: number
     } = {},
   ): Promise<{ messages: TranscriptMessage[]; total: number }> {
-    this.assertSessionVisible(sessionId, 'session_messages')
+    await this.assertSessionVisible(sessionId, 'session_messages')
     const events = await this.readEvents(sessionId)
     const messages: TranscriptMessage[] = []
     for (const event of events) {
@@ -2318,6 +2351,9 @@ export class DshDriver {
       summariesError = error instanceof Error ? error.message : String(error)
     }
     const childrenOf = summaries === undefined ? undefined : this.subagentIndex(summaries)
+    // The visible set is resolved once per call: owned sessions plus their
+    // subagent descendants. `undefined` means scope all.
+    const allowed = this.ownedTree(summaries)
 
     /** Append a row once; the last rows beyond the cap set `truncatedRows`. */
     const addRow = async (
@@ -2325,7 +2361,7 @@ export class DshDriver {
       origin: 'self' | 'subagent',
       parentSessionId?: string,
     ): Promise<void> => {
-      if (!this.sessionVisible(sessionId)) {
+      if (allowed !== undefined && !allowed.has(sessionId)) {
         hiddenSessions += 1
         return
       }
@@ -2344,7 +2380,7 @@ export class DshDriver {
       scope = 'sessionIds'
       // Duplicates would double-count a row's tokens in the totals, and a caller
       // assembling ids from logs routinely repeats one.
-      for (const id of request.sessionIds) this.assertSessionVisible(id, 'session_usage')
+      for (const id of request.sessionIds) await this.assertSessionVisible(id, 'session_usage')
       const ids = [...new Set(request.sessionIds)]
       if (ids.length > MAX_USAGE_ROWS) {
         truncatedRows = true
@@ -2408,7 +2444,7 @@ export class DshDriver {
       }
     } else if (request.sessionId !== undefined) {
       scope = 'session'
-      this.assertSessionVisible(request.sessionId, 'session_usage')
+      await this.assertSessionVisible(request.sessionId, 'session_usage')
       await addRow(request.sessionId, 'self')
       // Children are enumerated even when they are excluded, so the report can
       // say that they exist and were left out instead of silently reporting a

@@ -644,7 +644,9 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 
 `session.scope` 是把 token 交给"不应接触你自己对话"的一方时用的收窄选项：设为 `owned` 后，所有涉及
 会话内容的工具（prompt、cancel、list、messages、fork、rename、model、queue、search）都只作用于本端点
-创建或 fork 的会话，越界会明确报出该设置。默认 `all` 保持历史上的实例级触达。它位于 token 边界之内，
+创建或 fork 的会话**及其 subagent 会话**，越界会明确报出该设置。纳入 subagent 是因为它们是 harness
+自己派生出的、属于该会话的后代：把它们排除掉，会让本端点创建的会话在账单与列表里悄悄漏掉它引发的
+工作。默认 `all` 保持历史上的实例级触达。它位于 token 边界之内，
 不能替代 token：文件、shell、agent 工具仍由各自的工具开关与部署的沙箱策略约束。
 
 归属是**持久化**的：创建与 fork 出的会话 id 记录在 `$DSH_HOME/dsh-as-mcp/owned.json`（0600，

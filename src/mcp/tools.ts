@@ -804,7 +804,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         inputSchema: z.object({ sessionId: z.string() }),
         annotations: { openWorldHint: false },
       },
-      guard('session_cancel', log, async (args) => ok(driver.cancelSession(args.sessionId))),
+      guard('session_cancel', log, async (args) => ok(await driver.cancelSession(args.sessionId))),
     )
   }
 

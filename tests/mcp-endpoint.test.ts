@@ -200,7 +200,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       promptSession: () => new Promise((resolve) => {
         release = () => resolve({ accepted: true })
       }),
-      cancelSession: (sessionId: string) => {
+      cancelSession: async (sessionId: string) => {
         cancelled.push(sessionId)
         release?.()
         return { accepted: true }
@@ -244,7 +244,7 @@ describe('MCP Streamable HTTP endpoint', () => {
   it('ignores a cancellation for a request it does not know', async () => {
     const cancelled: string[] = []
     const own = await boot(stubDriver({
-      cancelSession: (sessionId: string) => {
+      cancelSession: async (sessionId: string) => {
         cancelled.push(sessionId)
         return { accepted: true }
       },

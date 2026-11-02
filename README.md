@@ -725,8 +725,10 @@ key named, because a silently ignored typo means your override is not being appl
 
 `session.scope` is the containment option for a token you hand to a party that should not reach
 your own conversations: `owned` restricts every content-bearing session tool (prompt, cancel, list,
-transcript, fork, rename, model, queue, search) to sessions this endpoint created or forked — a
-refusal names the setting. `all` (the default) keeps the historical instance-wide reach. It is
+transcript, fork, rename, model, queue, search) to sessions this endpoint created or forked **and
+their subagent sessions** — a refusal names the setting. Subagents are included because they are the
+harness's own descendants of an owned session: excluding them would make an owned session's bill and
+listing quietly omit work it caused. `all` (the default) keeps the historical instance-wide reach. It is
 inside the token boundary, not a replacement for it: file, shell and agent-tool access are governed
 by their own tool groups and the deployment's sandbox policy.
 

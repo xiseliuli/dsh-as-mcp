@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.2
+
+- `session.scope: "owned"` now treats **subagent sessions below an owned session**
+  as part of the owned tree: listing, search, usage by id and transcript reads
+  accept a child whose ancestor this endpoint created, and still refuse anything
+  outside the tree. Subagents are the harness's own descendants of the session, so
+  excluding them made an owned session's bill and listing quietly omit work it
+  caused. The tree is resolved once per call from the session listing (no extra
+  reads per row), and a listing failure fails closed.
+- `cancelSession` became async (the visibility check may need the listing), so its
+  tool handler awaits it; a reply that used to be a bare `{accepted:true}` is
+  unchanged.
+
 ## 0.30.1
 
 - `session.scope: "owned"` now remembers what it created: created and forked
