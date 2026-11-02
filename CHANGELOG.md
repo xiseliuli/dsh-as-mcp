@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.38.5
+
+- `tools/live-checks.mjs` checks the shell deadline and the job table: `shell_run`
+  returns at its deadline with `timedOut: true` (~706 ms for a 5 s command), a quick
+  command returns its output with `timedOut: false`, the 17th start evicts the oldest
+  *finished* job and succeeds, and once 16 jobs are *running* the next start is
+  refused with the "does not silently stop" explanation. Both README tables now state
+  the retention rule.
+
 ## 0.38.4
 
 - `tools/live-checks.mjs` covers the listing and image limits: a non-recursive listing

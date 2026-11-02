@@ -274,6 +274,74 @@ async function shellChecks() {
   }
 }
 
+// --- shell timeout and job cap ---------------------------------------------
+
+/**
+ * `shell_run`'s timeout is a dead process, not just an early return, and the
+ * background table keeps its documented bounds: the oldest *finished* job is evicted
+ * to make room, while starting one more than the cap of running jobs is refused
+ * rather than killing someone else's process.
+ */
+async function shellLimitsChecks() {
+  section('shell timeout and job cap')
+  if (!has('shell_run') || !has('shell_start')) {
+    skip('shell timeout and job cap', 'needs shell_run and shell_start')
+    return
+  }
+  const startedAt = Date.now()
+  const timedOut = await attemptTool('shell_run', { command: 'sleep 5', timeoutMs: 700 })
+  const elapsed = Date.now() - startedAt
+  check(
+    timedOut.ok === true ? timedOut.payload?.timedOut === true && elapsed < 3_500 : /timedOut|timeout/i.test(timedOut.error ?? ''),
+    'shell_run returns at its deadline with timedOut set',
+    `${elapsed} ms`,
+  )
+  const quick = await attemptTool('shell_run', { command: 'printf hello' })
+  check(
+    quick.ok === true && quick.payload?.stdout === 'hello' && quick.payload?.timedOut === false,
+    'a quick command returns its output and timedOut:false',
+    JSON.stringify(quick.payload?.stdout),
+  )
+
+  if (!has('shell_list') || !has('shell_kill')) {
+    skip('background job caps', 'needs shell_list and shell_kill')
+    return
+  }
+  // 16 finished jobs fill the table; the 17th start must evict the oldest finished
+  // one instead of refusing.
+  const finished = []
+  for (let index = 0; index < 16; index += 1) {
+    finished.push(await callTool('shell_start', { command: 'true' }))
+  }
+  const overflow = await callTool('shell_start', { command: 'sleep 5' })
+  const listed = await callTool('shell_list')
+  const jobs = listed.jobs ?? []
+  check(
+    jobs.length <= 16 && jobs.some((job) => job.jobId === overflow.jobId) &&
+      !jobs.some((job) => job.jobId === finished[0].jobId),
+    'the oldest finished job is evicted to make room, and the new job starts',
+    `${jobs.length} job(s)`,
+  )
+  await callTool('shell_kill', { jobId: overflow.jobId })
+
+  // With 16 *running* jobs, one more is refused instead of silently stopping one.
+  const running = []
+  try {
+    for (let index = 0; index < 16; index += 1) {
+      running.push(await callTool('shell_start', { command: 'sleep 15' }))
+    }
+    const refused = await attemptTool('shell_start', { command: 'sleep 15' })
+    check(
+      refused.ok === false && /16 background jobs are already running/.test(refused.error ?? '') &&
+        /does not silently stop/.test(refused.error ?? ''),
+      'a 17th running job is refused, not silently evicted',
+      refused.error?.slice(0, 60),
+    )
+  } finally {
+    await Promise.all(running.map((job) => callTool('shell_kill', { jobId: job.jobId }).catch(() => {})))
+  }
+}
+
 // --- listing and image limits ----------------------------------------------
 
 /**
@@ -1330,6 +1398,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await shellLimitsChecks()
   await listingImageChecks()
   await filePagingChecks()
   await promptInputChecks()
