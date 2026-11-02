@@ -1545,6 +1545,19 @@ async function modelSelectionCheck() {
       'the usage receipt agrees with each turn on its route',
       `turn ${firstTurn}: ${(rowFor(firstTurn)?.models ?? []).join(',')}; turn ${secondTurn}: ${(rowFor(secondTurn)?.models ?? []).join(',')}`,
     )
+
+    // Tokens are the number a caller bills; the reply's per-turn receipt and the
+    // session receipt must agree, and the session total must be their sum.
+    const replyTokens = reply.turn?.usage?.totalTokens
+    const switchedTokens = switched.turn?.usage?.totalTokens
+    const receiptTurns = (rowFor(firstTurn)?.totalTokens ?? 0) + (rowFor(secondTurn)?.totalTokens ?? 0)
+    check(
+      typeof replyTokens === 'number' && replyTokens === rowFor(firstTurn)?.totalTokens &&
+        typeof switchedTokens === 'number' && switchedTokens === rowFor(secondTurn)?.totalTokens &&
+        receiptTurns === receipt.sessions?.[0]?.usage?.totals?.totalTokens,
+      'the receipt and the replies agree on each turn\'s tokens, and the total is their sum',
+      `${replyTokens} + ${switchedTokens} = ${receiptTurns}`,
+    )
   }
 }
 

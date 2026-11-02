@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.5
+
+- `tools/live-checks.mjs --with-model` cross-checks the token numbers too: each prompt
+  reply's per-turn `turn.usage.totalTokens` must equal that turn's row in the
+  `session_usage` receipt, and the row sum must equal the receipt's session total. The
+  route cross-check said *which* model ran; this says the number being billed agrees
+  across both views.
+
 ## 0.51.4
 
 - `tools/live-checks.mjs --with-model` cross-checks two views of the same turns: the
