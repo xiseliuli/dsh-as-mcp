@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.28.0
+
+- `session_messages` gained `beforeSeq`: a transcript longer than the 500-message
+  window is now reachable by paging backwards. Pass the seq of the oldest message
+  you hold and the tail of the older window comes back, so repeated calls walk the
+  whole log without a server-side cursor. `total` keeps counting everything the
+  filters match, so a caller can tell how much further back it can go.
+
 ## 0.27.0
 
 - `dsh_info { probeSearch: true }` answers "does session search really work here?"

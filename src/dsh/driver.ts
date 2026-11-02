@@ -1915,6 +1915,12 @@ export class DshDriver {
     limit: number,
     options: {
       sinceSeq?: number
+      /**
+       * Page backwards: only messages with a smaller seq than this. The tail of
+       * that sub-window is returned, so a caller pages by passing the oldest seq
+       * it already has, without a server-side cursor.
+       */
+      beforeSeq?: number
       role?: 'user' | 'assistant'
       /** Per-message character cap; absent means full text (the historical default). */
       maxCharsPerMessage?: number
@@ -1929,6 +1935,7 @@ export class DshDriver {
       if (role === undefined) continue
       if (options.role !== undefined && options.role !== role) continue
       if (options.sinceSeq !== undefined && event.seq <= options.sinceSeq) continue
+      if (options.beforeSeq !== undefined && event.seq >= options.beforeSeq) continue
       const text = role === 'user'
         ? textOfBlocks((event.data as { content?: unknown } | undefined)?.content)
         : textOfBlocks((event.data as { message?: { content?: unknown } } | undefined)?.message?.content)

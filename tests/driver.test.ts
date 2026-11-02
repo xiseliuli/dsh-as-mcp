@@ -432,6 +432,27 @@ describe('bounded replies', () => {
     expect(none.total).toBe(0)
   })
 
+  it('pages backwards with beforeSeq so a long transcript is reachable', async () => {
+    const sessions = fakeSessions()
+    for (let index = 0; index < 5; index += 1) {
+      sessions.log.push(userMessage(`req-${index}`, `message ${index}`, index))
+    }
+    const { driver } = driverWith(sessions)
+
+    const newest = await driver.readTranscript('session-1', 2)
+    expect(newest.messages.map((message) => message.text)).toEqual(['message 3', 'message 4'])
+    // Page from the oldest seq already held; the tail of that window comes back.
+    const older = await driver.readTranscript('session-1', 2, { beforeSeq: newest.messages[0]?.seq })
+    expect(older.messages.map((message) => message.text)).toEqual(['message 1', 'message 2'])
+    expect(older.total).toBe(3)
+    const oldest = await driver.readTranscript('session-1', 2, { beforeSeq: older.messages[0]?.seq })
+    expect(oldest.messages.map((message) => message.text)).toEqual(['message 0'])
+    // A beforeSeq at or below the first event pages past the start.
+    const past = await driver.readTranscript('session-1', 2, { beforeSeq: 0 })
+    expect(past.messages).toEqual([])
+    expect(past.total).toBe(0)
+  })
+
   it('cuts the agent reply to maxReplyChars and says it did', async () => {
     const sessions = fakeSessions()
     const { driver } = driverWith(sessions)

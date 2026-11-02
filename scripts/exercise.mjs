@@ -986,6 +986,25 @@ try {
       cappedMessages.some((entry) => entry.truncated === true && entry.chars > entry.text.length),
       'a cut message reports truncated and its original length',
     )
+
+    // Backwards paging: without it a transcript longer than the 500-message
+    // window would be unreachable past the tail.
+    const tail = await must('session_messages', { sessionId, limit: 2 })
+    const tailMessages = tail.messages ?? []
+    if (tailMessages.length === 2) {
+      const before = tailMessages[0].seq
+      const older = await must('session_messages', { sessionId, limit: 2, beforeSeq: before })
+      const olderMessages = older.messages ?? []
+      check(
+        olderMessages.every((entry) => entry.seq < before) &&
+          olderMessages.length + 2 <= tail.total &&
+          older.total === tail.total - 2,
+        'session_messages pages backwards with beforeSeq',
+        `${olderMessages.length} older, ${older.total} in that window`,
+      )
+    } else {
+      check(true, 'beforeSeq paging skipped (transcript shorter than 3 messages)', `${tailMessages.length} messages`)
+    }
   }
 
   section('failure paths are legible')

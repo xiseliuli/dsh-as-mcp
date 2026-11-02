@@ -510,6 +510,23 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('forwards beforeSeq when paging a transcript backwards', async () => {
+    const seen: unknown[] = []
+    const own = await boot(stubDriver({
+      readTranscript: async (_sessionId, _limit, options) => {
+        seen.push(options)
+        return { messages: [], total: 0 }
+      },
+    }), testConfig({ session: true }))
+    try {
+      const { isError } = await callTool(own.url, 'session_messages', { sessionId: 's', beforeSeq: 7 })
+      expect(isError).toBe(false)
+      expect(seen).toEqual([{ beforeSeq: 7 }])
+    } finally {
+      await own.stop()
+    }
+  })
+
   it('reports the search probe only when asked', async () => {
     const own = await boot(stubDriver({
       probeSessionSearch: async () => ({ available: true, matches: 0 }),

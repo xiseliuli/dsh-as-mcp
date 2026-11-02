@@ -711,6 +711,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'Only messages with a larger seq than this. Poll incrementally: pass the seq of the last message '
               + 'you already have instead of re-reading the transcript.',
             ),
+          beforeSeq: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              'Page backwards: only messages with a smaller seq, newest of those first-of-the-window '
+              + 'last. To walk a long transcript, pass the seq of the oldest message you already have.',
+            ),
           role: z
             .enum(['user', 'assistant'])
             .optional()
@@ -734,6 +743,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       guard('session_messages', log, async (args) => {
         const transcript = await driver.readTranscript(args.sessionId, args.limit ?? 50, {
           ...(args.sinceSeq === undefined ? {} : { sinceSeq: args.sinceSeq }),
+          ...(args.beforeSeq === undefined ? {} : { beforeSeq: args.beforeSeq }),
           ...(args.role === undefined ? {} : { role: args.role }),
           ...(args.maxCharsPerMessage === undefined ? {} : { maxCharsPerMessage: args.maxCharsPerMessage }),
         })
