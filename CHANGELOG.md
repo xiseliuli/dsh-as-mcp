@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.29
+
+- The settings panel's token mask shows a four-character prefix only for tokens at least
+  **16 characters** long, the length below which the host already warns. The old threshold
+  was 9, so a 9–15 character token displayed four of its characters — nearly half of a
+  short token. Tests pin the boundary (15 masked fully, 16 shows `abcd••••••••`).
+
 ## 0.52.28
 
 - The `cwd` contract shared by the file tools now has live checks: a relative write is

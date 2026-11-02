@@ -36,18 +36,15 @@ export function clientSnippet(url: string, token: string): string {
 }
 
 /**
- * Mask a token for display.
- *
- * The first four characters survive when the token is long enough that they are
- * a small part of it — the same "fingerprint" idea as the host's own log line,
- * so an operator can tell which credential is in force without being handed it.
- * A short token renders a fixed-width mask instead, rather than revealing itself
- * through its own length.
+ * The host warns below 16 characters, so that is the line where a prefix is safe
+ * to show: four characters of a 16-character token are a quarter of it, and of a
+ * 9-character token they would be nearly half. A shorter token renders a
+ * fixed-width mask instead of revealing itself through its own length or prefix.
  *
  * @param token - the value to mask.
  */
 export function maskSecret(token: string): string {
-  const prefix = token.length > 8 ? token.slice(0, 4) : ''
+  const prefix = token.length >= 16 ? token.slice(0, 4) : ''
   return `${prefix}${'•'.repeat(8)}`
 }
 

@@ -202,13 +202,17 @@ describe('the copyable client snippet', () => {
     expect(JSON.parse(shown).mcpServers.dsh.url).toBe(JSON.parse(copied).mcpServers.dsh.url)
   })
 
-  it('masks a short token without revealing it through its own length', () => {
+  it('masks a short token without revealing it through its own length or prefix', () => {
     // A four-character token would otherwise be printed in full by a naive
     // "keep the first four" rule.
     expect(maskSecret('abc')).toBe('••••••••')
-    expect(maskSecret('abcdefghijklmnop')).toContain('abcd')
-    expect(maskSecret('abcdefghijklmnop')).not.toContain('efgh')
     expect(maskSecret('')).toBe('••••••••')
+    // The host warns below 16 characters; until then even the prefix is a large
+    // share of the secret, so none of it is shown.
+    expect(maskSecret('abcdefghi')).toBe('••••••••')
+    expect(maskSecret('abcdefghijklmno')).toBe('••••••••')
+    expect(maskSecret('abcdefghijklmnop')).toBe('abcd••••••••')
+    expect(maskSecret('abcdefghijklmnop')).not.toContain('efgh')
   })
 
   it('names a token source, and falls back to the host spelling for an unknown one', () => {
