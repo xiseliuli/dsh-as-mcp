@@ -623,6 +623,54 @@ async function subagentCheck() {
   }
 }
 
+// --- concurrent turns ------------------------------------------------------
+
+/**
+ * Two independent sessions running real turns at the same time.
+ *
+ * Serialization is per session: a harness that drives several tasks at once relies
+ * on one blocked turn not holding up another. This is the cheapest way to show that
+ * still holds, and it is not a benchmark — both turns only have to settle with their
+ * own replies.
+ */
+async function concurrentTurnsCheck() {
+  section('concurrent turns (real turns)')
+  const first = await callTool('session_create', { cwd: process.cwd() })
+  const second = await callTool('session_create', { cwd: process.cwd() })
+  const startedAt = Date.now()
+  const [a, b] = await Promise.all([
+    callTool('session_prompt', {
+      sessionId: first.sessionId,
+      prompt: 'Reply with exactly: CONCURRENT-A',
+      timeoutMs: 300_000,
+    }),
+    callTool('session_prompt', {
+      sessionId: second.sessionId,
+      prompt: 'Reply with exactly: CONCURRENT-B',
+      timeoutMs: 300_000,
+    }),
+  ])
+  const elapsed = Date.now() - startedAt
+  check(
+    /CONCURRENT-A/.test(a.turn?.reply ?? '') && /CONCURRENT-B/.test(b.turn?.reply ?? ''),
+    'two sessions answered their own prompts',
+    `${elapsed} ms for both`,
+  )
+  check(
+    a.turn?.aborted !== true && b.turn?.aborted !== true,
+    'neither turn was aborted by the other session',
+  )
+  // Each reply's usage belongs to its own session, which a mixed-up correlation
+  // would break even when the text looks right.
+  const firstMessages = await callTool('session_messages', { sessionId: first.sessionId, limit: 10 })
+  const secondMessages = await callTool('session_messages', { sessionId: second.sessionId, limit: 10 })
+  check(
+    (firstMessages.messages ?? []).every((message) => !String(message.text ?? '').includes('CONCURRENT-B')) &&
+      (secondMessages.messages ?? []).every((message) => !String(message.text ?? '').includes('CONCURRENT-A')),
+    'each transcript kept its own conversation',
+  )
+}
+
 // --- run -------------------------------------------------------------------
 
 process.stdout.write(`${bold('dsh-as-mcp live checks')}\n`)
@@ -667,6 +715,7 @@ try {
     } else {
       await progressCheck(sessionId)
       await cancellationCheck()
+      await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()
     }
   } else {

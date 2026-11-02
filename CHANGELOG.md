@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.3
+
+- `tools/live-checks.mjs --with-model` also runs two real turns in two independent
+  sessions at once, and asserts each answered its own prompt, neither was aborted by
+  the other, and each transcript kept its own conversation (a mixed-up correlation
+  would show up as the other session's marker in the transcript). Serialization is
+  per session, and a harness driving several tasks relies on that.
+
 ## 0.37.2
 
 - `tools/live-checks.mjs` gained a concurrency section: 20 parallel `dsh_info`
