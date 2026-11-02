@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.49
+
+- `http.port` is now bounded at 65535 in config validation. The old check only required a
+  non-negative integer, so `70000` loaded fine and failed later as a listen error where the
+  operator has less to go on. The error says the range, and the panel's own 0-65535 bounds
+  now mirror the host rule exactly.
+
 ## 0.52.48
 
 - The drift check now also compares each panel number's minimum with the host's

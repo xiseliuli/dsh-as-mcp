@@ -154,8 +154,11 @@ describe('config loading through Cordis', () => {
     expect(() => load('nope')).toThrow(/object/)
   })
 
-  it('rejects a negative port and a path without a leading slash', () => {
-    expect(() => load({ http: { port: -1 } })).toThrow(/non-negative integer/)
+  it('rejects a port outside 0-65535 and a path without a leading slash', () => {
+    expect(() => load({ http: { port: -1 } })).toThrow(/between 0 and 65535/)
+    // 70000 is an integer, so a bare "integer" check let it through to a listen
+    // failure later; the config is the place that can name the problem.
+    expect(() => load({ http: { port: 70_000 } })).toThrow(/between 0 and 65535/)
     expect(() => load({ http: { path: 'mcp' } })).toThrow(/must start with "\/"/)
   })
 })

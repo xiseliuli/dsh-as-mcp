@@ -338,8 +338,10 @@ export function normalizeConfig(input: unknown = {}): Config {
   const http = section(root, 'http', 'http', issues)
   rejectUnknown(http, ['enabled', 'host', 'port', 'path', 'mountOnWebServer'], 'http', issues)
   const port = num(http, 'port', DEFAULT_HTTP.port, 'http', issues)
-  if (port < 0 || !Number.isInteger(port)) {
-    issues.push(`http.port must be a non-negative integer, got ${port}`)
+  // A port above 65535 is not a port: without this check the config loads and the
+  // failure surfaces later as a listen error, where the operator has less to go on.
+  if (port < 0 || port > 65_535 || !Number.isInteger(port)) {
+    issues.push(`http.port must be an integer between 0 and 65535, got ${port}`)
   }
   const path = str(http, 'path', DEFAULT_HTTP.path, 'http', issues)
   if (!path.startsWith('/')) {
