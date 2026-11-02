@@ -3,6 +3,20 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.50.0
+
+- `file_read { sha256: true }` returns the SHA-256 of the **whole** file (not the
+  returned window) as the compare-and-swap value a later `file_write`/`file_edit` can
+  carry, so a read→decide→write cycle no longer needs a second call. The hash reads the
+  whole file, so it is opt-in and refuses a file above `limits.maxReadBytes`. Without
+  the flag nothing extra is read and the field is absent.
+- Tests cover the whole-file-vs-window hash (with the hash ceiling taken from the
+  configured limit, not the window), the absent field and the over-ceiling refusal; the
+  acceptance run compares the hash with the one `file_write` returned and uses it for a
+  CAS edit (162/162). The first live run returned no hash and caught the same class of
+  wiring slip as 0.46.0: the new argument had not been forwarded by the tool handler.
+  Both READMEs updated.
+
 ## 0.49.0
 
 - `file_write` and `file_edit` accept `expectedSha256` (compare-and-swap) and return the

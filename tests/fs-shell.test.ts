@@ -207,6 +207,36 @@ describe('readFile', () => {
     )
   })
 
+  it('hashes the whole file on request, not the returned window', async () => {
+    const { fs } = fakeFileSystem({ '/a.txt': 'whole file content' })
+    const wholeHash = createHash('sha256').update('whole file content', 'utf8').digest('hex')
+    // A windowed read still hashes the whole file: the hash is a compare-and-swap
+    // value for the next write, and a window hash would let a stale write through.
+    const result = await driverWith({ fs }).readFile({
+      path: '/a.txt',
+      maxBytes: 5,
+      sha256: true,
+      // The window is 5 bytes; the hash may read the whole file up to this ceiling,
+      // which is what the tool passes from limits.maxReadBytes.
+      sha256Limit: 100,
+    })
+    expect(result.text).toBe('whole')
+    expect(result.sha256).toBe(wholeHash)
+    // Without the flag the field is absent, so an ordinary read pays nothing.
+    const plain = await driverWith({ fs }).readFile({ path: '/a.txt', maxBytes: 5 })
+    expect(plain.sha256).toBeUndefined()
+  })
+
+  it('refuses to hash a file above the read ceiling', async () => {
+    const { fs } = fakeFileSystem({ '/big.txt': 'z'.repeat(50) })
+    await expect(driverWith({ fs }).readFile({
+      path: '/big.txt',
+      maxBytes: 10,
+      sha256: true,
+      sha256Limit: 20,
+    })).rejects.toThrow(/above the 20-byte read ceiling/)
+  })
+
   it('reports a missing file rather than an empty string', async () => {
     const { fs } = fakeFileSystem({})
     await expect(driverWith({ fs }).readFile({ path: '/nope', maxBytes: 10 })).rejects.toThrow(/ENOENT/)

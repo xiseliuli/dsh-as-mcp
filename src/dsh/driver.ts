@@ -3398,6 +3398,17 @@ export class DshDriver {
     maxBytes: number
     /** Byte offset to start at, for paging through a file larger than one call. */
     offset?: number
+    /**
+     * Also hash the whole file (SHA-256), so a read→edit→write cycle can carry the
+     * compare-and-swap value without a second call.
+     */
+    sha256?: boolean
+    /**
+     * Ceiling for the whole-file hash, when it differs from this call's window cap
+     * (the tool passes limits.maxReadBytes so a small window can still hash a file
+     * within the configured ceiling).
+     */
+    sha256Limit?: number
   }): Promise<{
     path: string
     text: string
@@ -3410,6 +3421,8 @@ export class DshDriver {
     nextOffset?: number
     /** File size when the seam reports it. */
     size?: number
+    /** SHA-256 of the whole file, when `sha256: true` was asked. */
+    sha256?: string
   }> {
     const fs = this.requireFileSystem()
     const target = await fs.resolve(request.path, {
@@ -3427,6 +3440,22 @@ export class DshDriver {
     const bytes = await fs.readByteRange(target, { offset, length: request.maxBytes + 1 })
     const truncated = bytes.byteLength > request.maxBytes
     const slice = truncated ? bytes.subarray(0, request.maxBytes) : bytes
+    // The hash is of the WHOLE file, not the returned window: the caller uses it as
+    // a compare-and-swap value for the next write, and a window hash would let a
+    // stale write through. Hashing therefore reads the whole file, which is why it
+    // is opt-in and refuses a file above the configured read ceiling.
+    let fileSha256: string | undefined
+    if (request.sha256 === true) {
+      const hashCeiling = request.sha256Limit ?? request.maxBytes
+      if (info?.size !== undefined && info.size > hashCeiling) {
+        throw new Error(
+          `cannot hash "${fs.processPath(target)}": it is ${info.size} bytes, above the `
+            + `${hashCeiling}-byte read ceiling. Raise limits.maxReadBytes or hash it with shell_run.`,
+        )
+      }
+      const whole = await fs.readText(target)
+      fileSha256 = sha256OfText(whole)
+    }
     return {
       path: fs.processPath(target),
       text: new TextDecoder('utf-8', { fatal: false }).decode(slice),
@@ -3435,6 +3464,7 @@ export class DshDriver {
       bytes: slice.byteLength,
       ...(truncated ? { nextOffset: offset + slice.byteLength } : {}),
       ...(info?.size === undefined ? {} : { size: info.size }),
+      ...(fileSha256 === undefined ? {} : { sha256: fileSha256 }),
     }
   }
 

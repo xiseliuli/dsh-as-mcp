@@ -880,6 +880,14 @@ try {
       'file_write reports the written content hash',
       `${String(casWrite.sha256).slice(0, 12)}…`,
     )
+    // Reading with sha256 gives the CAS value in one round trip.
+    const hashedRead = await must('file_read', { path, sha256: true })
+    check(
+      hashedRead.sha256 === casWrite.sha256,
+      'file_read { sha256: true } returns the whole-file compare-and-swap hash',
+      `${String(hashedRead.sha256).slice(0, 12)}…`,
+    )
+
     const staleWrite = await tool('file_write', {
       path,
       content: 'should not land\n',

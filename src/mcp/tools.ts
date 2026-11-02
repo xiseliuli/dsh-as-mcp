@@ -1083,6 +1083,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'Bytes to return for this call, capped by the limits.maxReadBytes setting. Defaults to that '
               + 'setting; a smaller value is what makes paging cheap.',
             ),
+          sha256: z
+            .boolean()
+            .optional()
+            .describe(
+              'Also return the SHA-256 of the whole file (not of the returned window), as the '
+              + 'expectedSha256 a later write/edit can carry. Reads the whole file, so it refuses one above '
+              + 'limits.maxReadBytes.',
+            ),
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
@@ -1095,6 +1103,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           // for less so paging costs less, never for more.
           maxBytes: args.maxBytes === undefined ? limit : Math.min(args.maxBytes, limit),
           ...(args.offset === undefined ? {} : { offset: args.offset }),
+          ...(args.sha256 === undefined ? {} : { sha256: args.sha256 }),
+          ...(args.sha256 === true ? { sha256Limit: limit } : {}),
         }))
       }),
     )
