@@ -1984,6 +1984,39 @@ async function steerCheck() {
     'the steered message is processed inside the running turn (no turn of its own)',
     `${turns.length} turn(s); steered ${steeredRow !== undefined ? 'yes' : 'no'}`,
   )
+
+  // The same fold-in through the prompt API: `session_prompt { mode: "steer" }`
+  // delivers into the running turn and its reply is that turn's answer.
+  const steerSession = await callTool('session_create', { cwd: process.cwd() })
+  await callTool('session_prompt', {
+    sessionId: steerSession.sessionId,
+    prompt: 'Run the bash command: sleep 8; echo WINDOW. Then reply exactly: WINDOW DONE.',
+    wait: false,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1_500))
+  const viaPrompt = await callTool('session_prompt', {
+    sessionId: steerSession.sessionId,
+    prompt: 'Reply with exactly: STEER-VIA-PROMPT',
+    mode: 'steer',
+    timeoutMs: 600_000,
+  })
+  check(
+    /STEER-VIA-PROMPT/.test(viaPrompt.turn?.reply ?? '') && viaPrompt.timedOut !== true &&
+      viaPrompt.turn?.aborted !== true,
+    'session_prompt { mode: "steer" } is answered inside the running turn',
+    String(viaPrompt.turn?.reply ?? '').slice(0, 50),
+  )
+  await callTool('session_prompt', {
+    sessionId: steerSession.sessionId,
+    prompt: 'Reply with exactly: AFTER-PROMPT-STEER',
+    timeoutMs: 600_000,
+  })
+  const promptUsage = await callTool('session_usage', { sessionId: steerSession.sessionId, includeTurns: true })
+  check(
+    (promptUsage.sessions?.[0]?.usage?.byTurn ?? []).length === 2,
+    'prompt steering did not create a turn of its own',
+    `${(promptUsage.sessions?.[0]?.usage?.byTurn ?? []).length} turn(s)`,
+  )
 }
 
 // --- mid-turn route switch -------------------------------------------------

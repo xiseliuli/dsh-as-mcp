@@ -938,13 +938,13 @@ build:
 
 | Tool groups enabled | Tools advertised | Last result |
 | --- | --- | --- |
-| all six | 28 | live-checks 143/143 with `--with-model`; acceptance run 163/163 |
-| `session`, `usage` only | 13 | live-checks 84/84 with `--with-model` (file/shell/workspace sections skip) |
+| all six | 28 | live-checks 145/145 with `--with-model`; acceptance run 163/163 |
+| `session`, `usage` only | 13 | live-checks 86/86 with `--with-model` (file/shell/workspace sections skip) |
 | `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 59/59 (a disabled group's reason names its `tools.<group>` switch) |
 | `files`, `shell` only | 11 | live-checks 65/65 (session/usage/queue/search sections skip) |
 
 The two turn-running rows are measured with `--with-model`; `tools/release.sh --shapes` without it
-exercises the cheap subset and reports 103/44/59/65 for the same four shapes.
+exercises the cheap subset and reports 104/46/59/65 for the same four shapes.
 
 `node tools/shapes.mjs [--with-model]` reproduces that table in one command: for each shape it boots a
 throwaway profile with that shape's `tools` block, installs the packaged tarball, waits until the harness

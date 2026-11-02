@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.39
+
+- `session_prompt { mode: "steer" }` now has live evidence, separate from the queue-steer
+  path: a steered prompt is answered inside the running turn (reply carries the marker,
+  no timeout, not aborted) and the session still records only two turns for two prompts
+  plus the steer — so steering does not buy a turn. Probed first, then encoded.
+  Re-measured shapes after the addition: all six 145, session+usage 86, narrow 59,
+  files+shell 65 (cheap subset 104/46/59/65). One shapes run reported 144/1 on the full
+  shape; an immediate rerun was 145/0 and the failing check could not be recovered from the
+  truncated output, so `tools/shapes.mjs` now prints the failing check names in its summary
+  — a recurrence will be identifiable instead of a bare count.
+
 ## 0.52.38
 
 - Fixed a false claim in the settings panel: when the host mounts no status route (or the

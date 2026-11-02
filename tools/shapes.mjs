@@ -247,18 +247,15 @@ try {
         child.on('exit', (code) => resolve({ code, text }))
       })
       const counts = parseCount(output.text)
+      const plainOutput = output.text.replace(/\x1b\[[0-9;]*m/g, '')
+      const failedLines = plainOutput.split('\n').filter((line) => line.includes('✗'))
       if (counts === undefined) {
         process.stdout.write(output.text.split('\n').slice(-4).join('\n'))
         results.push({ shape, passed: 0, failed: 1, detail: 'no summary line from live-checks' })
       } else {
-        results.push({ shape, ...counts })
+        results.push({ shape, ...counts, failedLines })
         process.stdout.write(`  ${counts.passed} passed, ${counts.failed} failed\n`)
-        if (counts.failed > 0) {
-          const plain = output.text.replace(/\x1b\[[0-9;]*m/g, '')
-          for (const line of plain.split('\n')) {
-            if (line.includes('✗')) process.stdout.write(`${line}\n`)
-          }
-        }
+        for (const line of failedLines) process.stdout.write(`${line}\n`)
       }
     } finally {
       server.kill('SIGTERM')
@@ -274,7 +271,8 @@ try {
     failed += result.failed
     process.stdout.write(
       `  ${result.shape.label.padEnd(42)} ${String(result.passed).padStart(4)} passed, ${result.failed} failed`
-        + `${result.detail === undefined ? '' : ` (${result.detail})`}\n`,
+        + `${result.detail === undefined ? '' : ` (${result.detail})`}\n`
+        + (result.failedLines ?? []).map((line) => `      ${line.trim()}\n`).join(''),
     )
   }
   process.stdout.write(failed === 0 ? 'all shapes passed\n' : 'SHAPE FAILURES\n')
