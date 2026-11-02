@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.14
+
+- Fixed an English/Chinese row-content drift: the zh `dsh_info` row documented
+  `probeSearch` (an option the schema really has, covered by tests and live checks) while
+  the en row did not. The en row now says what the option does. The drift check compares
+  the *set* of tool rows, not the content of a row, so this class of omission is not
+  machine-caught — noted here rather than silently fixed.
+
 ## 0.52.13
 
 - Verified the other half of the ownership contract: a **corrupt** `owned.json` fails
