@@ -274,6 +274,53 @@ async function shellChecks() {
   }
 }
 
+// --- session creation errors -----------------------------------------------
+
+/**
+ * The error quality a caller-created session depends on: rejecting half a route
+ * before a session exists, explaining an unroutable pair with the routes that do
+ * exist, requiring a directory, and surfacing a bad preset.
+ */
+async function sessionCreateErrorChecks() {
+  section('session creation errors')
+  if (!has('session_create')) {
+    skip('session creation errors', 'this endpoint advertises no session_create')
+    return
+  }
+  const partial = await attemptTool('session_create', { cwd: process.cwd(), provider: 'deepseek' })
+  check(
+    partial.ok === false && /provider and model together/.test(partial.error ?? ''),
+    'half a model route is refused before a session is created',
+    partial.error?.slice(0, 60),
+  )
+  const neither = await attemptTool('session_create', {})
+  check(
+    neither.ok === false && /provide either workspaceId or cwd/.test(neither.error ?? ''),
+    'a session without a workspace or directory is refused clearly',
+    neither.error?.slice(0, 60),
+  )
+
+  const unroutable = await attemptTool('session_create', {
+    cwd: process.cwd(),
+    provider: 'definitely-not-a-provider',
+    model: 'definitely-not-a-model',
+  })
+  const body = unroutable.ok ? unroutable.payload : undefined
+  check(
+    body?.sessionId !== undefined && /requested provider "definitely-not-a-provider"/.test(body?.modelSelectionError ?? '') &&
+      /dsh_info/.test(body?.modelSelectionError ?? ''),
+    'an unroutable pair still creates the session and explains the route problem',
+    body?.modelSelectionError?.slice(0, 60),
+  )
+
+  const badPreset = await attemptTool('session_create', { cwd: process.cwd(), agentPreset: 'no-such-preset' })
+  check(
+    badPreset.ok === false && /preset/i.test(badPreset.error ?? ''),
+    'an unknown agent preset is refused with a message that names it',
+    badPreset.error?.slice(0, 60),
+  )
+}
+
 // --- fork and rename contracts ---------------------------------------------
 
 /**
@@ -1083,6 +1130,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await sessionCreateErrorChecks()
   await forkRenameChecks()
   await toolBridgeChecks()
   await workspaceChecks()

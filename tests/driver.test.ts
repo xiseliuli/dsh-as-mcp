@@ -1484,6 +1484,37 @@ describe('DshDriver.createSession', () => {
     expect(created.cwd).toBe('/tmp/ws-1')
   })
 
+  it('refuses half a model route before creating the session', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    // The schema says provider and model are paired. Ignoring the half would leave
+    // the caller believing a route was selected, and creating first would leave a
+    // live session behind while the call reports failure.
+    await expect(driver.createSession({ cwd: '/tmp', provider: 'deepseek' }))
+      .rejects.toThrow(/provider and model together/)
+    await expect(driver.createSession({ cwd: '/tmp', model: 'deepseek-chat' }))
+      .rejects.toThrow(/provider and model together/)
+    expect(sessions.creates).toHaveLength(0)
+  })
+
+  it('uses a configured pair only when the caller named neither half', async () => {
+    const sessions = fakeSessions()
+    const base = testConfig()
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', sessions.controller)
+    ctx.provide('sessionQuery', sessions.query)
+    // Half a pair in the settings: the session is created, but the reply must say
+    // why no route was selected instead of hiding it in a log line.
+    const driver = new DshDriver(ctx, () => ({
+      ...base,
+      session: { ...base.session, provider: 'deepseek', model: '' },
+    }))
+    const created = await driver.createSession({ cwd: '/tmp' })
+    expect(sessions.creates).toHaveLength(1)
+    expect(created.modelSelectionError).toMatch(/without its counterpart/)
+  })
+
   it('resolves a relative cwd to an absolute one', async () => {
     // The session header requires an absolute path; forwarding a relative one
     // would be accepted here and rejected by the harness later. The directory is

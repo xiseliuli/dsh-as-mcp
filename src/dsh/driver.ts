@@ -1459,14 +1459,29 @@ export class DshDriver {
     }
 
     const agentPreset = optional(request.agentPreset) ?? optional(this.config.session.agentPreset)
+    // Validated before the session exists: a half route must not leave a live session
+    // behind while the caller is told the call failed.
+    const requestedProvider = optional(request.provider)
+    const requestedModel = optional(request.model)
+    if ((requestedProvider === undefined) !== (requestedModel === undefined)) {
+      throw new Error(
+        'session_create needs provider and model together: pass both to select a route, or neither to use the '
+          + `profile default. Received only ${requestedProvider === undefined
+            ? `model "${requestedModel ?? ''}"`
+            : `provider "${requestedProvider}"`}.`,
+      )
+    }
+
     const created = await controller.create({
       ...(workspaceId === undefined ? { cwd: cwd as string } : { workspaceId }),
       ...(agentPreset === undefined ? {} : { agentPreset }),
     })
     this.rememberOwnedSession(created.sessionId)
 
-    const provider = optional(request.provider) ?? optional(this.config.session.provider)
-    const model = optional(request.model) ?? optional(this.config.session.model)
+    // A request pair is used whole; otherwise the configured pair is. Never one from
+    // each source, which is how a request provider could end up with a config model.
+    const provider = requestedProvider ?? optional(this.config.session.provider)
+    const model = requestedModel ?? optional(this.config.session.model)
     let selected: string | undefined
     let modelSelectionError: string | undefined
     if (provider !== undefined && model !== undefined) {
@@ -1490,7 +1505,15 @@ export class DshDriver {
         )
       }
     } else if (provider !== undefined || model !== undefined) {
-      this.log.warn('[dsh-as-mcp] provider and model must be set together; ignoring partial selection')
+      // The profile itself sets half a pair. The session is created (the caller did
+      // not ask for a route), but the reply says why no route was selected instead of
+      // leaving it to a log line the caller cannot see.
+      modelSelectionError = [
+        `the profile settings name ${provider === undefined ? `a model ("${model}")` : `a provider ("${provider}")`}`,
+        'without its counterpart, so no route was selected',
+        'pass provider and model together to session_create, or set both in the session settings',
+      ].join('; ')
+      this.log.warn('[dsh-as-mcp] %s', modelSelectionError)
     }
 
     const approval = await this.applyApprovalPolicy(created.sessionId)

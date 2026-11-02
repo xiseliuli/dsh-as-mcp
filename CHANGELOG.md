@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.38.1
+
+- **Fixed silent model-selection handling in `session_create`.** Asking for only
+  `provider` or only `model` used to create a session on the default route and hide
+  the mistake in a log line (and could even pair a requested provider with a
+  configured model). The schema says the two are paired, so a half pair is now
+  refused *before* the session exists. A half pair in the *profile settings* still
+  creates the session but reports `modelSelectionError`, so the reply stops hiding the
+  reason. The tool description and both READMEs state the contract; driver tests
+  cover both cases, and live-checks assert the error quality (half pair, missing
+  directory, unroutable pair still creating the session with the route explanation,
+  unknown preset).
+
 ## 0.38.0
 
 - `session_fork`'s description (and both READMEs) now state the precondition the

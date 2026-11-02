@@ -413,7 +413,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         description:
           'Create a new DeepSeek Harness agent session bound to a workspace (or a bare directory) and return '
           + 'its session id. Pass that id to session_prompt to make the DSH agent do work. Sessions are visible '
-          + 'live in the DSH UI. Model selection falls back to this DSH instance\'s default route.',
+          + 'live in the DSH UI. Model selection falls back to this DSH instance\'s default route; provider and '
+          + 'model must be given together (a half pair is refused before the session is created), and an '
+          + 'unroutable pair still creates the session but says why in `modelSelectionError`.',
         inputSchema: z.object({
           workspaceId: z.string().optional().describe('Workspace id from workspace_list or workspace_create.'),
           cwd: z.string().optional().describe('Bare directory to bind the session to; use instead of workspaceId.'),
