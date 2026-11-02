@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.24.0
+
+- **MCP `notifications/cancelled` is now honored.** The SDK version in use
+  accepts the notification and does nothing with it, so a cancelled
+  `session_prompt` used to keep waiting until its turn ended. The endpoint now
+  reads the JSON body itself (passing it to the transport through `parsedBody`),
+  maps in-flight `session_prompt` request ids to their sessions, and cancels the
+  turn when the matching cancellation arrives — the waiting call settles as
+  aborted/partial.
+- Same layer answers an unparseable body with the JSON-RPC `-32700` parse error
+  and keeps the 64 MiB declared-body refusal.
+
 ## 0.23.2
 
 - Verified the settings panel's live-write chain end to end (the same path the

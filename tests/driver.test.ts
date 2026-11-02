@@ -100,12 +100,15 @@ function fakeSessions(initial: DshSessionEvent[] = []): {
 }
 
 /** Build a driver over a fake harness. */
-function driverWith(sessions: ReturnType<typeof fakeSessions>): { driver: DshDriver; ctx: Context } {
+function driverWith(
+  sessions: ReturnType<typeof fakeSessions>,
+  config: Partial<Parameters<typeof testConfig>[0]> = {},
+): { driver: DshDriver; ctx: Context } {
   const ctx = new Context()
   contexts.push(ctx)
   ctx.provide('sessionController', sessions.controller)
   ctx.provide('sessionQuery', sessions.query)
-  return { driver: new DshDriver(ctx, () => testConfig()), ctx }
+  return { driver: new DshDriver(ctx, () => testConfig(config)), ctx }
 }
 
 /** Scratch directories removed after each test. */
@@ -332,6 +335,29 @@ describe('bounded replies', () => {
     expect(result.turn?.reply).toHaveLength(100)
     expect(result.turn?.replyChars).toBe(500)
     expect(result.turn?.replyTruncated).toBe(true)
+    // A capped reply is still a settled turn: its usage is not partial.
+    expect(result.session?.usage?.partial).toBeUndefined()
+  })
+
+  it('marks the session usage partial when the wait is aborted', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions, { usage: true })
+    const controller = new AbortController()
+    const pending = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+      signal: controller.signal,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    controller.abort()
+    const result = await pending
+    expect(result.turn?.aborted).toBe(true)
+    // The snapshot was taken while the turn was still open, so its totals will
+    // grow; that fact must be visible on the reply's own usage block.
+    expect(result.session?.usage?.partial).toBe(true)
   })
 })
 

@@ -190,6 +190,86 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('cancels the turn behind a notifications/cancelled request', async () => {
+    // The SDK in use acknowledges notifications/cancelled and does nothing else
+    // with it, so the endpoint routes the notification itself: a cancelled
+    // session_prompt must stop its turn instead of letting it run to completion.
+    const cancelled: string[] = []
+    let release: (() => void) | undefined
+    const own = await boot(stubDriver({
+      promptSession: () => new Promise((resolve) => {
+        release = () => resolve({ accepted: true })
+      }),
+      cancelSession: (sessionId: string) => {
+        cancelled.push(sessionId)
+        release?.()
+        return { accepted: true }
+      },
+    }), testConfig({ session: true, usage: false }))
+    const headers = {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      authorization: `Bearer ${TOKEN}`,
+    }
+    try {
+      const pending = fetch(own.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 77,
+          method: 'tools/call',
+          params: { name: 'session_prompt', arguments: { sessionId: 'session-1', prompt: 'go' } },
+        }),
+      })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const notify = await fetch(own.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'notifications/cancelled',
+          params: { requestId: 77, reason: 'client changed its mind' },
+        }),
+      })
+      expect(notify.ok).toBe(true)
+      const response = await pending
+      expect(response.status).toBe(200)
+      expect(cancelled).toEqual(['session-1'])
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('ignores a cancellation for a request it does not know', async () => {
+    const cancelled: string[] = []
+    const own = await boot(stubDriver({
+      cancelSession: (sessionId: string) => {
+        cancelled.push(sessionId)
+        return { accepted: true }
+      },
+    }), testConfig({ session: true }))
+    try {
+      const response = await fetch(own.url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: `Bearer ${TOKEN}`,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'notifications/cancelled',
+          params: { requestId: 'nope' },
+        }),
+      })
+      expect(response.ok).toBe(true)
+      expect(cancelled).toEqual([])
+    } finally {
+      await own.stop()
+    }
+  })
+
   it('removes exactly the disabled group from tools/list', async () => {
     const groups: Record<string, string[]> = {
       workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],

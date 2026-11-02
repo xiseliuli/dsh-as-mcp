@@ -105,6 +105,85 @@ function deny(res: Parameters<NodeMcpRequestHandler>[1], status: number, body: s
 }
 
 /**
+ * Reply with a JSON document (used where the SDK's own error shape is expected).
+ */
+function denyJson(
+  res: Parameters<NodeMcpRequestHandler>[1],
+  status: number,
+  body: unknown,
+): void {
+  const payload = Buffer.from(JSON.stringify(body), 'utf8')
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(payload.byteLength),
+    'cache-control': 'no-store',
+  })
+  res.end(payload)
+}
+
+/**
+ * Read one request body, bounded.
+ *
+ * The authenticated guard reads the JSON itself instead of letting the transport
+ * do it, because two things live only in the body: a `notifications/cancelled`
+ * request id (the SDK version in use accepts the notification but does not abort
+ * the in-flight handler for it) and which in-flight request belongs to which
+ * session (what that cancellation has to stop). The parsed value is handed to the
+ * transport through its `parsedBody` escape hatch, so nothing is read twice.
+ */
+async function readJsonBody(
+  req: AsyncIterable<unknown>,
+  limit: number,
+): Promise<{ ok: true; value: unknown } | { ok: false; tooLarge: boolean }> {
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of req) {
+    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk as Buffer
+    total += buffer.byteLength
+    if (total > limit) return { ok: false, tooLarge: true }
+    chunks.push(buffer)
+  }
+  try {
+    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+  } catch {
+    return { ok: false, tooLarge: false }
+  }
+}
+
+/** JSON-RPC messages in a body, flattened (MCP does not batch, but be safe). */
+function messagesOf(body: unknown): Record<string, unknown>[] {
+  if (Array.isArray(body)) return body.filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null)
+  if (typeof body === 'object' && body !== null) return [body as Record<string, unknown>]
+  return []
+}
+
+/** Request ids named by `notifications/cancelled` messages in this body. */
+function cancelledRequestIds(body: unknown): string[] {
+  const ids: string[] = []
+  for (const message of messagesOf(body)) {
+    if (message.method !== 'notifications/cancelled') continue
+    const params = message.params as { requestId?: unknown } | undefined
+    const requestId = params?.requestId
+    if (typeof requestId === 'string' || typeof requestId === 'number') ids.push(String(requestId))
+  }
+  return ids
+}
+
+/** The `session_prompt` call in this body, if there is one: id and session. */
+function promptCallOf(body: unknown): { requestId: string; sessionId: string } | undefined {
+  for (const message of messagesOf(body)) {
+    if (message.method !== 'tools/call') continue
+    const params = message.params as { name?: unknown; arguments?: { sessionId?: unknown } } | undefined
+    if (params?.name !== 'session_prompt') continue
+    const sessionId = params.arguments?.sessionId
+    if (typeof sessionId !== 'string' || sessionId === '') continue
+    if (typeof message.id !== 'string' && typeof message.id !== 'number') continue
+    return { requestId: String(message.id), sessionId }
+  }
+  return undefined
+}
+
+/**
  * The host a client should dial: a wildcard bind advertises loopback, because
  * `0.0.0.0` (or `::`) is not an address a client can connect to, while the
  * endpoint it stands for is reachable on the loopback interface.
@@ -166,13 +245,74 @@ export function createRequestHandler(options: RequestHandlerOptions): RequestHan
     onerror: (error) => log.warn('[dsh-as-mcp] transport error:', error.message),
   })
 
+  /**
+   * In-flight `session_prompt` calls by JSON-RPC id, so a cancellation
+   * notification can stop the turn that call is waiting on.
+   *
+   * The SDK version in use acknowledges `notifications/cancelled` and does
+   * nothing else with it, so without this map a cancelled request would keep its
+   * turn running and its handler waiting until the turn ended.
+   */
+  const promptRequests = new Map<string, string>()
+
+  /** Stop the turn behind one cancelled request, without failing the handler. */
+  const cancelForNotification = (requestId: string): void => {
+    const sessionId = promptRequests.get(requestId)
+    if (sessionId === undefined) return
+    log.info(
+      '[dsh-as-mcp] cancellation for request %s: cancelling the turn in session %s',
+      requestId,
+      sessionId,
+    )
+    void Promise.resolve(deps.driver.cancelSession(sessionId)).catch((error: unknown) => {
+      log.warn(
+        '[dsh-as-mcp] cancellation could not stop the turn: %s',
+        error instanceof Error ? error.message : String(error),
+      )
+    })
+  }
+
   const guard: NodeMcpRequestHandler = async (req, res, parsedBody) => {
     const presented = presentedToken(req.headers.authorization, queryToken(req.url))
     if (!tokenMatches(getToken(), presented)) {
       deny(res, 401, 'unauthorized')
       return
     }
-    await node(req, res, parsedBody)
+
+    // The body is read here so a cancellation can be matched to its request; the
+    // parsed value goes to the transport through its `parsedBody` escape hatch.
+    let body = parsedBody
+    if (body === undefined && req.method === 'POST') {
+      if (declaresOversizedBody(req.headers)) {
+        deny(res, 413, 'request body too large')
+        // Drain rather than destroy so the client sees the 413 instead of a reset.
+        ;(req as { resume?: () => void }).resume?.()
+        return
+      }
+      const read = await readJsonBody(req, MAX_REQUEST_BYTES)
+      if (!read.ok) {
+        if (read.tooLarge) deny(res, 413, 'request body too large')
+        else {
+          denyJson(res, 400, {
+            jsonrpc: '2.0',
+            error: { code: -32700, message: 'Parse error: Invalid JSON' },
+            id: null,
+          })
+        }
+        return
+      }
+      body = read.value
+    }
+
+    for (const requestId of cancelledRequestIds(body)) cancelForNotification(requestId)
+
+    const prompt = promptCallOf(body)
+    if (prompt !== undefined) promptRequests.set(prompt.requestId, prompt.sessionId)
+    try {
+      await node(req, res, body)
+    } finally {
+      if (prompt !== undefined) promptRequests.delete(prompt.requestId)
+    }
   }
 
   return {
