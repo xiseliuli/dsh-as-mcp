@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.58
+
+- The drift check now compares five caps stated in README prose with the constants that
+  enforce them: image size (`MAX_IMAGE_BYTES`, 8 MiB), request body (`MAX_REQUEST_BYTES`,
+  64 MiB), prompt images (`MAX_PROMPT_IMAGES`, 4), background jobs (`MAX_SHELL_JOBS`, 16) and
+  remembered owned ids (`MAX_OWNED_SESSIONS`, 1000). Proven by editing "8 MiB" to "9 MiB" —
+  `DRIFT: README.md claims 9 for the MiB image cap, the code says 8` — then restoring. Both
+  READMEs list the check.
+
 ## 0.52.57
 
 - `docs/CAPABILITY-GAPS.md` opened by claiming "25 tools" for several releases while the code

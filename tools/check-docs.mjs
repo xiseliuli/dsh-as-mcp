@@ -221,6 +221,42 @@ for (const tool of schemaOptionsOf(toolsSource)) {
   }
 }
 
+// --- documented caps match the constants they describe ----------------------
+//
+// These numbers are stated in prose and enforced in code. A cap raised in one place and
+// not the other is a lie in documentation that no other check owns.
+
+const readmeText = read('README.md')
+const claimChecks = [
+  { file: 'src/dsh/driver.ts', name: 'MAX_IMAGE_BYTES', readme: /Capped at (\d+) MiB/, compute: (value) => value / (1024 * 1024), unit: 'MiB image cap' },
+  { file: 'src/mcp/http.ts', name: 'MAX_REQUEST_BYTES', readme: /over (\d+) MiB/, compute: (value) => value / (1024 * 1024), unit: 'MiB request-body cap' },
+  { file: 'src/dsh/driver.ts', name: 'MAX_PROMPT_IMAGES', readme: /at most (\d+);/, compute: (value) => value, unit: 'prompt images' },
+  { file: 'src/dsh/driver.ts', name: 'MAX_SHELL_JOBS', readme: /At most (\d+) jobs/, compute: (value) => value, unit: 'background jobs' },
+  { file: 'src/dsh/ownership.ts', name: 'MAX_OWNED_SESSIONS', readme: /newest (\d+) ids/, compute: (value) => value, unit: 'remembered owned ids' },
+]
+for (const spec of claimChecks) {
+  const source = read(spec.file)
+  const declaration = new RegExp(`const ${spec.name} = ([0-9_* ()]+)`).exec(source)
+  if (declaration === null) {
+    problems.push(`could not find ${spec.name} in ${spec.file}`)
+    continue
+  }
+  let value
+  try {
+    value = Number(new Function(`return ${declaration[1].replaceAll('_', '')}`)())
+  } catch {
+    problems.push(`could not evaluate ${spec.name} = ${declaration[1]}`)
+    continue
+  }
+  const expected = spec.compute(value)
+  const claimed = spec.readme.exec(readmeText)
+  if (claimed === null) {
+    problems.push(`README.md no longer states the ${spec.unit}`)
+  } else if (Number(claimed[1]) !== expected) {
+    problems.push(`README.md claims ${claimed[1]} for the ${spec.unit}, the code says ${expected}`)
+  }
+}
+
 // --- the tool count in docs/CAPABILITY-GAPS.md's opening line ----------------
 //
 // The appendix count is checked above; the sentence that introduces the page carried a
