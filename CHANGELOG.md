@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.77
+
+- `session_usage`'s `includeSubagents` is now asserted both ways: with it (the default), the
+  subagent is a row and the report total includes its spend; with an explicit
+  `includeSubagents: false`, no subagent row appears and the total is the session alone
+  (measured 55499 vs 36808 tokens). The option was exercised one way only, so "accepted but
+  ignored" would have passed.
+- The first version of this check assumed the default was `false` and failed live — the code and
+  both READMEs already said `true`. The assertion now disables the default explicitly; the
+  mistake is recorded here because a doc-vs-code disagreement is exactly what this check exists
+  to catch, even when the code was right and the check was wrong.
+
 ## 0.52.76
 
 - Documented a distinction found while probing what happens to a message queued behind a

@@ -1753,6 +1753,22 @@ async function subagentCheck() {
     'the report total is the sum of the rows (no silent exclusion)',
     `${report.totals?.totalTokens ?? '?'} tokens`,
   )
+  {
+    // The option has to change the answer: without it the report is the session alone.
+    // Asserting both directions is what makes `includeSubagents` a contract rather than
+    // a parameter that happens to be accepted.
+    const without = await callTool('session_usage', {
+      sessionId: session.sessionId,
+      limit: 20,
+      includeSubagents: false,
+    })
+    check(
+      (without.sessions ?? []).every((row) => row.origin !== 'subagent') &&
+        (without.totals?.totalTokens ?? 0) < (report.totals?.totalTokens ?? 0),
+      'includeSubagents: false leaves the subagent out of the report',
+      `${without.totals?.totalTokens ?? '?'} < ${report.totals?.totalTokens ?? '?'}`,
+    )
+  }
 
   if (child !== undefined) {
     // Documented claim: a prompt reply's `session` block is that session's own turns,

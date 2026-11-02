@@ -130,6 +130,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
   sleeping 1.5-3 seconds (0.52.74).
 
 | A cancelled turn actually stops, not just the wait | 0.52.75 | after the aborted `session_prompt` wait returned, `session_list { running: true }` no longer listed the session (polled up to 20 s). The wait ending and the turn stopping are different facts; live-checks asserts both |
+| `includeSubagents` has an observable effect both ways | 0.52.77 | with the flag (default `true`) the subagent is a row and the total includes it (55499 tokens); with `includeSubagents: false` no subagent row appears and the total is the session alone (36808). Running with `--with-model --with-subagent`: 174/174 |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:
