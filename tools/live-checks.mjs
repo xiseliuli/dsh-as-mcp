@@ -669,22 +669,48 @@ async function orchestrationCheck() {
     skip('queue checks in orchestration', 'this endpoint advertises no session_queue')
   }
 
+  // A second queued message stays queued: session_cancel stops the running turn,
+  // it does not throw away the work waiting behind it (the description says so).
+  await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: QUEUE-B',
+    wait: false,
+  })
+
   const cancelled = await callTool('session_cancel', { sessionId: session.sessionId })
   check(cancelled.accepted === true, 'the running turn can be cancelled')
 
+  let preserved = false
+  if (has('session_queue')) {
+    const afterCancel = await callTool('session_queue', { sessionId: session.sessionId })
+    const remaining = (afterCancel.queued ?? []).filter(
+      (entry) => String(entry.text ?? '').includes('QUEUE-B'),
+    )
+    preserved = remaining.length === 1
+    check(preserved, 'cancelling preserves the work queued behind the turn', `${remaining.length} left`)
+  }
+
   // The session must still work afterwards: this is the state corruption a
-  // cancel/queue combination would leave behind.
+  // cancel/queue combination would leave behind. The queued message runs first,
+  // so the marker for it appears before our prompt's reply.
   const after = await callTool('session_prompt', {
     sessionId: session.sessionId,
     prompt: 'Reply with exactly: STILL USABLE',
     timeoutMs: 300_000,
   })
   check(/STILL USABLE/.test(after.turn?.reply ?? ''), 'the session answers after the cancelled turn', after.turn?.reply)
-  const messages = await callTool('session_messages', { sessionId: session.sessionId, limit: 50 })
+  const messages = await callTool('session_messages', { sessionId: session.sessionId, limit: 100 })
+  const transcript = messages.messages ?? []
   check(
-    !(messages.messages ?? []).some((message) => String(message.text ?? '').includes('QUEUED-NEVER')),
+    !transcript.some((message) => String(message.text ?? '').includes('QUEUED-NEVER')),
     'the withdrawn message never ran',
   )
+  if (preserved) {
+    check(
+      transcript.some((message) => String(message.text ?? '').includes('QUEUE-B')),
+      'the preserved message did run after the cancellation',
+    )
+  }
 }
 
 // --- concurrent turns ------------------------------------------------------

@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.9
+
+- `tools/live-checks.mjs --with-model` now checks the claim `session_cancel` makes
+  ("queued work is preserved"): it queues a second message behind a long turn,
+  cancels, and asserts the message is still pending and then runs. The withdrawn
+  message from the same section must still never run.
+
 ## 0.37.8
 
 - The `initialize` instructions now cover the surface added since they were written:
