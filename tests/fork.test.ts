@@ -16,6 +16,7 @@ function driverWith(options: {
   inheritedEventCount?: number
   cwd?: string
   readError?: Error
+  events?: readonly { type: string; seq: number; time: number; data: unknown }[]
 }): { driver: DshDriver; forks: unknown[] } {
   const forks: unknown[] = []
   const controller = {
@@ -32,7 +33,7 @@ function driverWith(options: {
       return {
         session: { id: sessionId, ...(options.cwd === undefined ? {} : { cwd: options.cwd }) },
         inheritedEventCount: options.inheritedEventCount ?? 0,
-        events: [],
+        events: options.events ?? [],
       }
     },
   } as unknown as DshSessionQuery
@@ -65,6 +66,28 @@ describe('forkSession', () => {
     const { driver, forks } = driverWith({})
     await driver.forkSession({ sessionId: 'session-live' })
     expect(forks).toEqual([{ sessionId: 'session-live' }])
+  })
+
+  it('resolves a turn boundary to the last event of that turn', async () => {
+    const { driver, forks } = driverWith({
+      events: [
+        { type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } },
+        { type: 'assistant/message', seq: 2, time: 2, data: { turn: 1, step: 0, message: { content: [] } } },
+        { type: 'turn/end', seq: 3, time: 3, data: { turn: 1, reason: { kind: 'completed' } } },
+        { type: 'turn/start', seq: 4, time: 4, data: { turn: 2 } },
+        { type: 'assistant/message', seq: 5, time: 5, data: { turn: 2, step: 0, message: { content: [] } } },
+      ],
+    })
+    const child = await driver.forkSession({ sessionId: 'session-live', atTurn: 1 })
+    expect(forks).toEqual([{ sessionId: 'session-live', atSeq: 3 }])
+    expect(child.atTurn).toBe(1)
+    expect(child.atSeq).toBe(3)
+    // An unknown turn is a legible error that lists what the log does record.
+    await expect(driver.forkSession({ sessionId: 'session-live', atTurn: 9 }))
+      .rejects.toThrow(/turn 9 is not in session.*turns it records are: 1, 2/s)
+    // Two ways of naming one cut are refused instead of silently preferring one.
+    await expect(driver.forkSession({ sessionId: 'session-live', atSeq: 1, atTurn: 1 }))
+      .rejects.toThrow(/atSeq or atTurn, not both/)
   })
 
   it('keeps the fork when the child cut cannot be read', async () => {

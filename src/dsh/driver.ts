@@ -2203,15 +2203,44 @@ export class DshDriver {
   async forkSession(request: {
     sessionId: string
     atSeq?: number
+    /** Fork through the end of this turn instead of naming a raw event seq. */
+    atTurn?: number
   }): Promise<{
     sessionId: string
     parentSessionId: string
     inheritedEventCount: number
+    /** The event seq the fork actually cut at, when the caller named a turn. */
+    atSeq?: number
+    atTurn?: number
     cwd?: string
     approvalPolicy?: 'never'
     approvalPolicyError?: string
   }> {
     await this.assertSessionVisible(request.sessionId, 'session_fork')
+    if (request.atSeq !== undefined && request.atTurn !== undefined) {
+      throw new Error('pass atSeq or atTurn, not both: a turn boundary and a raw seq are two ways to say one cut')
+    }
+    let atSeq = request.atSeq
+    if (request.atTurn !== undefined) {
+      // A turn number is the unit a caller bills and reasons in, so let it name the
+      // cut: fork through the last event attributed to that turn.
+      const events = await this.readEvents(request.sessionId)
+      const turns = new Set<number>()
+      let boundary: number | undefined
+      for (const event of events) {
+        const turn = (event.data as { turn?: unknown } | undefined)?.turn
+        if (typeof turn !== 'number') continue
+        turns.add(turn)
+        if (turn === request.atTurn) boundary = event.seq
+      }
+      if (boundary === undefined) {
+        throw new Error(
+          `turn ${request.atTurn} is not in session ${request.sessionId}'s log; `
+            + `the turns it records are: ${turns.size === 0 ? 'none' : [...turns].sort((a, b) => a - b).join(', ')}.`,
+        )
+      }
+      atSeq = boundary
+    }
     const controller = this.requireSessionController()
     const fork = (controller as { fork?: (request: { sessionId: string; atSeq?: number }) => Promise<{ sessionId: string }> }).fork
     if (typeof fork !== 'function') {
@@ -2225,7 +2254,7 @@ export class DshDriver {
     // controller's fork persists the child, so it can be prompted like any other.
     const child = await fork.call(controller, {
       sessionId: request.sessionId,
-      ...(request.atSeq === undefined ? {} : { atSeq: request.atSeq }),
+      ...(atSeq === undefined ? {} : { atSeq }),
     })
     this.rememberOwnedSession(child.sessionId)
     // The child is driven by this endpoint too, so it gets the same policy ask.
@@ -2250,6 +2279,7 @@ export class DshDriver {
       sessionId: child.sessionId,
       parentSessionId: request.sessionId,
       inheritedEventCount,
+      ...(atSeq === undefined || request.atTurn === undefined ? {} : { atSeq, atTurn: request.atTurn }),
       ...(cwd === undefined ? {} : { cwd }),
       ...(approval.approvalPolicy === undefined ? {} : { approvalPolicy: approval.approvalPolicy }),
       ...(approval.approvalPolicyError === undefined ? {} : { approvalPolicyError: approval.approvalPolicyError }),

@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.48.0
+
+- `session_fork` accepts `atTurn`: cut the child at the end of that turn instead of a raw
+  event seq — the unit a caller bills and reasons in. The reply echoes the resolved
+  `atSeq` and the `atTurn`; an unknown turn lists the turns the log records, and passing
+  both `atSeq` and `atTurn` is refused rather than silently preferring one.
+- Fork tests cover the resolution, the unknown-turn error and the mutual exclusion; the
+  acceptance run forks at turn 1 and checks the child's inherited prefix. Both READMEs
+  updated.
+
 ## 0.47.0
 
 - `session_messages` accepts `fromTurn`/`toTurn`: read one phase of a long transcript

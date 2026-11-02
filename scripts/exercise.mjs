@@ -590,6 +590,26 @@ try {
     )
   }
 
+  section('fork at a turn boundary')
+  {
+    // A turn number is the unit the caller bills in; cut there instead of guessing a
+    // raw event seq. No model turn needed: the child is created and left idle.
+    const byTurn = await must('session_fork', { sessionId, atTurn: 1 })
+    check(
+      byTurn.parentSessionId === sessionId && byTurn.atTurn === 1 && typeof byTurn.atSeq === 'number' &&
+        (byTurn.inheritedEventCount ?? 0) > 0,
+      'session_fork can cut at a turn boundary',
+      `turn 1 → seq ${byTurn.atSeq}, ${byTurn.inheritedEventCount} event(s)`,
+    )
+    const unknownTurn = await tool('session_fork', { sessionId, atTurn: 999 })
+    check(
+      unknownTurn.ok === false && /turn 999 is not in session/.test(unknownTurn.error ?? '') &&
+        /turns it records are/.test(unknownTurn.error ?? ''),
+      'an unknown fork turn lists the turns the log records',
+      unknownTurn.error?.slice(0, 60),
+    )
+  }
+
   section('the DSH agent writes code')
   {
     const prompt = [

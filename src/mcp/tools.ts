@@ -534,12 +534,22 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'Inclusive event seq to fork through. Defaults to the source\'s current last event; use a '
               + 'smaller seq to branch from an earlier point in the conversation.',
             ),
+          atTurn: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              'Fork through the end of this turn instead of naming a raw seq — the unit a caller bills in. '
+              + 'Mutually exclusive with atSeq; an unknown turn lists the turns the log records.',
+            ),
         }),
         annotations: { openWorldHint: false },
       },
       guard('session_fork', log, async (args) => ok(await driver.forkSession({
         sessionId: args.sessionId,
         ...(args.atSeq === undefined ? {} : { atSeq: args.atSeq }),
+        ...(args.atTurn === undefined ? {} : { atTurn: args.atTurn }),
       }))),
     )
 
