@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.52
+
+- Live-verified `approval.policy`: with `allow`, `session_create` reports
+  `approvalPolicy: "never"` (the harness's unattended stance); with `inherit` the reply
+  carries no policy and the session keeps the default. `live-checks` now asserts that
+  relation against `dsh_info.config.approval`, so a run under either setting checks the
+  posture the caller is actually given. Both branches were run: a throwaway profile with
+  `allow` reports "approval.policy allow makes the session unattended — never" (104/104 the
+  cheap suite); the default `inherit` profile exercises the other branch. Re-measured shapes:
+  147/88 with `--with-model`, cheap subset 104/45/59/65; both READMEs updated.
+
 ## 0.52.51
 
 - Live-verified the new host validation: a profile with `http.host: ''` starts **no

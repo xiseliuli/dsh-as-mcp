@@ -1245,6 +1245,23 @@ async function listChecks() {
     // The harness requires a directory: there is no "some default workspace" form.
     const created = await callTool('session_create', { cwd: process.cwd() })
     sessionId = created.sessionId
+    // `approval.policy` is a security posture, so the reply must say which stance the
+    // session actually got: "allow" switches it to the harness's unattended mode, and a
+    // profile where that is impossible must explain rather than silently inherit.
+    const approvalInfo = await callTool('dsh_info')
+    if (approvalInfo.config?.approval === 'allow') {
+      check(
+        created.approvalPolicy === 'never' || typeof created.approvalPolicyError === 'string',
+        'approval.policy allow makes the session unattended, or says why it could not',
+        created.approvalPolicy ?? created.approvalPolicyError?.slice(0, 50),
+      )
+    } else {
+      check(
+        created.approvalPolicy === undefined,
+        'approval.policy inherit leaves the session on the harness default',
+        String(created.approvalPolicy),
+      )
+    }
     const unknownCwd = await callTool('session_list', { cwd: '/tmp/dsh-as-mcp-not-a-workspace', limit: 5 })
     check(
       (unknownCwd.sessions ?? []).length === 0 && unknownCwd.total === 0,
