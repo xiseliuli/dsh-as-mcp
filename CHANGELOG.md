@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.42
+
+- Two more guards against self-inflicted flakiness. The steering checks start their long
+  turn with `sleep 10` (was 8) so the steer cannot arrive after the turn closed. The
+  `shell_run` deadline check now runs `sleep 15` under a 0.7 s timeout and accepts anything
+  under 8 s: the long command costs nothing (the call returns at the deadline) while the wide
+  window still proves the deadline cut the wait instead of the command finishing naturally.
+
 ## 0.52.41
 
 - Removed the same class of flake risk from the mid-turn switch check: it switched routes

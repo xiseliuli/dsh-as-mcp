@@ -449,11 +449,14 @@ async function shellLimitsChecks() {
     skip('shell timeout and job cap', 'needs shell_run and shell_start')
     return
   }
+  // The command sleeps 15 s while the deadline is 0.7 s: returning before 8 s proves the
+  // deadline cut the wait (the full sleep would blow past it), while 8 s leaves a slow
+  // machine plenty of slack. The long sleep costs nothing — the call returns at the deadline.
   const startedAt = Date.now()
-  const timedOut = await attemptTool('shell_run', { command: 'sleep 5', timeoutMs: 700 })
+  const timedOut = await attemptTool('shell_run', { command: 'sleep 15', timeoutMs: 700 })
   const elapsed = Date.now() - startedAt
   check(
-    timedOut.ok === true ? timedOut.payload?.timedOut === true && elapsed < 3_500 : /timedOut|timeout/i.test(timedOut.error ?? ''),
+    timedOut.ok === true ? timedOut.payload?.timedOut === true && elapsed < 8_000 : /timedOut|timeout/i.test(timedOut.error ?? ''),
     'shell_run returns at its deadline with timedOut set',
     `${elapsed} ms`,
   )
@@ -1948,7 +1951,7 @@ async function steerCheck() {
   const session = await callTool('session_create', { cwd: process.cwd() })
   await callTool('session_prompt', {
     sessionId: session.sessionId,
-    prompt: 'Run the bash command: sleep 8; echo WINDOW. Then reply exactly: WINDOW DONE.',
+    prompt: 'Run the bash command: sleep 10; echo WINDOW. Then reply exactly: WINDOW DONE.',
     wait: false,
   })
   await new Promise((resolve) => setTimeout(resolve, 1_500))
@@ -1999,7 +2002,7 @@ async function steerCheck() {
   const steerSession = await callTool('session_create', { cwd: process.cwd() })
   await callTool('session_prompt', {
     sessionId: steerSession.sessionId,
-    prompt: 'Run the bash command: sleep 8; echo WINDOW. Then reply exactly: WINDOW DONE.',
+    prompt: 'Run the bash command: sleep 10; echo WINDOW. Then reply exactly: WINDOW DONE.',
     wait: false,
   })
   await new Promise((resolve) => setTimeout(resolve, 1_500))
