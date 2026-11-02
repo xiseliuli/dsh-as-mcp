@@ -784,6 +784,11 @@ describe('bounded replies', () => {
     expect(capped.text).toHaveLength(4)
     expect(capped.truncated).toBe(true)
     expect(capped.chars).toBe(12)
+    // The tail is available for a long result: a stack trace ends with the error.
+    const tail = await driver.readToolResult({ sessionId: 'session-1', callId: 'call-1', maxChars: 4, from: 'end' })
+    expect(tail.text).toBe('iled')
+    expect(tail.from).toBe('end')
+    expect(tail.truncated).toBe(true)
     // An unknown or not-yet-answered id is a legible error, not an empty result.
     await expect(driver.readToolResult({ sessionId: 'session-1', callId: 'call-404', maxChars: 100 }))
       .rejects.toThrow(/no recorded result for tool call "call-404"/)

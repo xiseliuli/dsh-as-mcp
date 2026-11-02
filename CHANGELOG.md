@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.1
+
+- `session_tool_result` gained `from: "end"`: when a result exceeds `maxChars` the
+  tail is kept instead of the head, which is where a stack trace or the closing error
+  lives. The reply echoes `from: "end"` so a caller can tell which end it holds.
+  Surrogate pairs are not split. Acceptance compares the tail with the full result's
+  last characters, and the driver test covers the cut.
+
 ## 0.37.0
 
 - `session_tool_result` can now address a result by `toolName` as well as `callId`:

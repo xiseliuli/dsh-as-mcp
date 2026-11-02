@@ -2303,12 +2303,16 @@ export class DshDriver {
      */
     toolName?: string
     maxChars: number
+    /** Which end to keep when the result is longer than `maxChars`; default `start`. */
+    from?: 'start' | 'end'
   }): Promise<{
     sessionId: string
     callId: string
     name?: string
     chars: number
     text: string
+    /** Echoed when the caller asked for the tail rather than the head. */
+    from?: 'end'
     truncated?: true
     error?: true
   }> {
@@ -2368,13 +2372,17 @@ export class DshDriver {
       )
     }
     const name = nameById.get(callId)
-    const capped = found.text.length > request.maxChars ? truncateText(found.text, request.maxChars) : found.text
+    const from = request.from ?? 'start'
+    const capped = found.text.length <= request.maxChars
+      ? found.text
+      : from === 'end' ? tailText(found.text, request.maxChars) : truncateText(found.text, request.maxChars)
     return {
       sessionId: request.sessionId,
       callId,
       ...(name === undefined ? {} : { name }),
       chars: found.chars,
       text: capped,
+      ...(request.from === 'end' ? { from: 'end' as const } : {}),
       ...(capped.length < found.text.length ? { truncated: true as const } : {}),
       ...(found.error ? { error: true as const } : {}),
     }
@@ -4216,6 +4224,19 @@ function shapeToolCalls(
 }
 
 /** Cut text to a character budget, leaving no partial surrogate pair. */
+/**
+ * The end of a string, at most `limit` UTF-16 units, without splitting a surrogate
+ * pair. Used when a caller asks for the tail of a long tool result (a stack trace
+ * ends with the error, not with the first line).
+ */
+function tailText(text: string, limit: number): string {
+  if (text.length <= limit) return text
+  let start = text.length - limit
+  const code = text.charCodeAt(start)
+  if (code >= 0xdc00 && code <= 0xdfff) start += 1
+  return text.slice(start)
+}
+
 function truncateText(text: string, limit: number): string {
   if (text.length <= limit) return text
   let cut = limit

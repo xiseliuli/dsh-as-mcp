@@ -838,6 +838,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .describe('Or: the most recent completed call of this tool name (the reply names the resolved call id).'),
           maxChars: z.number().int().positive().max(100_000).optional()
             .describe('Cap on the returned text. Defaults to 4000 characters.'),
+          from: z.enum(['start', 'end']).optional()
+            .describe(
+              'Which end to keep when the result is longer than maxChars. Defaults to start; end is useful '
+              + 'for a stack trace or error at the tail.',
+            ),
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
@@ -846,6 +851,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         ...(args.callId === undefined ? {} : { callId: args.callId }),
         ...(args.toolName === undefined ? {} : { toolName: args.toolName }),
         maxChars: args.maxChars ?? 4_000,
+        ...(args.from === undefined ? {} : { from: args.from }),
       }))),
     )
 

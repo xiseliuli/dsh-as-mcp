@@ -1019,6 +1019,15 @@ try {
         'session_tool_result returns the recorded result text',
         `${fetched.chars} chars`,
       )
+      const tail = await must('session_tool_result', {
+        sessionId, callId: withResult.id, maxChars: 40, from: 'end',
+      })
+      check(
+        tail.from === 'end' && tail.truncated === true &&
+          fetched.text.slice(-40) === tail.text,
+        'session_tool_result can return the tail of a long result',
+        `${tail.text.length} chars from the end`,
+      )
       const byName = await must('session_tool_result', {
         sessionId, toolName: withResult.name, maxChars: 200,
       })
