@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.34.0
+
+- `session_list` gained an `origin` filter (`root` | `subagent`), applied before the
+  limit so `total` stays honest. With the parentage fields this completes the tree
+  view: "which sessions did I start" and "which are my agents' children", without
+  reading transcripts.
+- Verified live with a real spawned subagent: `origin: "subagent"` returned only the
+  child, `origin: "root"` only the parent (live-checks --with-subagent).
+
 ## 0.33.0
 
 - `session_list` exposes parentage: a subagent session carries `parentSessionId` and

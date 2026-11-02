@@ -453,6 +453,13 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .boolean()
             .optional()
             .describe('Only sessions that are currently running (true) or idle (false).'),
+          origin: z
+            .enum(['root', 'subagent'])
+            .optional()
+            .describe(
+              'Only sessions this endpoint/DSH started (root), or only subagent sessions. Together with '
+              + 'parentSessionId on each row, this is a tree view.',
+            ),
         }),
         outputSchema: outputSchema({
           sessions: z.array(z.looseObject({})).optional(),
@@ -464,6 +471,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           ...(args.includeTitle === undefined ? {} : { includeTitle: args.includeTitle }),
           ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
           ...(args.running === undefined ? {} : { running: args.running }),
+          ...(args.origin === undefined ? {} : { origin: args.origin }),
         })
         // `truncated` is the question a caller actually has: did the limit hide
         // sessions that match? `total` is how many matched before the cut.

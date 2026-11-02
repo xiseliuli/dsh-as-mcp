@@ -446,6 +446,39 @@ describe('DshDriver.readQueue', () => {
 })
 
 describe('session_list parentage', () => {
+  it('filters to roots or subagents before the limit', async () => {
+    const sessions = fakeSessions()
+    sessions.controller.list = async () => ({
+      items: [
+        { sessionId: 'root-a', cwd: '/tmp', running: false, blank: false, updatedAt: 3 },
+        { sessionId: 'root-b', cwd: '/tmp', running: false, blank: false, updatedAt: 2 },
+        {
+          sessionId: 'child',
+          cwd: '/tmp',
+          running: false,
+          blank: false,
+          updatedAt: 1,
+          parentSessionId: 'root-a',
+          origin: 'subagent',
+        },
+      ],
+    })
+    const { driver } = driverWith(sessions)
+
+    const roots = await driver.listSessions(10, { origin: 'root' })
+    expect(roots.sessions.map((entry) => entry.sessionId)).toEqual(['root-a', 'root-b'])
+    expect(roots.total).toBe(2)
+
+    const children = await driver.listSessions(10, { origin: 'subagent' })
+    expect(children.sessions.map((entry) => entry.sessionId)).toEqual(['child'])
+    expect(children.total).toBe(1)
+
+    // The filter runs before the limit, so a cap of one is one *root*.
+    const capped = await driver.listSessions(1, { origin: 'root' })
+    expect(capped.sessions.map((entry) => entry.sessionId)).toEqual(['root-a'])
+    expect(capped.total).toBe(2)
+  })
+
   it('reports a subagent session parent and origin without extra reads', async () => {
     const sessions = fakeSessions()
     sessions.controller.list = async () => ({

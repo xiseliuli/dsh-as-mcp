@@ -1516,6 +1516,13 @@ export class DshDriver {
       cwd?: string
       /** Only sessions that are currently running (`true`) or idle (`false`). */
       running?: boolean
+      /**
+       * Only root sessions (`root`) or only subagent sessions (`subagent`).
+       *
+       * With `parentSessionId` on the rows this is the other half of a tree view:
+       * "which of these did I start" and "which are my agents' children".
+       */
+      origin?: 'root' | 'subagent'
     } = {},
   ): Promise<{ sessions: SessionInfo[]; total: number }> {
     const controller = this.requireSessionController()
@@ -1527,6 +1534,10 @@ export class DshDriver {
     const filtered = listed.items.filter((item) => {
       if (allowed !== undefined && !allowed.has(item.sessionId)) return false
       if (options.running !== undefined && item.running !== options.running) return false
+      if (options.origin !== undefined) {
+        const isSubagent = item.origin === 'subagent'
+        if (options.origin === 'subagent' ? !isSubagent : isSubagent) return false
+      }
       if (cwd !== undefined && item.cwd !== cwd) return false
       return true
     })

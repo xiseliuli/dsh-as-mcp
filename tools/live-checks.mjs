@@ -514,6 +514,22 @@ async function subagentCheck() {
       'a root session has no parent recorded',
       parentRow === undefined ? 'not listed' : 'root',
     )
+    const onlySubagents = await callTool('session_list', { limit: 20, origin: 'subagent' })
+    const subagentRows = onlySubagents.sessions ?? []
+    check(
+      subagentRows.some((entry) => entry.sessionId === child.sessionId) &&
+        subagentRows.every((entry) => entry.origin === 'subagent') &&
+        !subagentRows.some((entry) => entry.sessionId === session.sessionId),
+      'session_list { origin: "subagent" } returns only the children',
+      `${subagentRows.length} subagent(s)`,
+    )
+    const onlyRoots = await callTool('session_list', { limit: 20, origin: 'root' })
+    check(
+      (onlyRoots.sessions ?? []).some((entry) => entry.sessionId === session.sessionId) &&
+        !(onlyRoots.sessions ?? []).some((entry) => entry.sessionId === child.sessionId),
+      'session_list { origin: "root" } excludes the children',
+      `${(onlyRoots.sessions ?? []).length} root(s)`,
+    )
   }
 }
 
