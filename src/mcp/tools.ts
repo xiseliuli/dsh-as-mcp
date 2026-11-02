@@ -630,7 +630,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .describe(
               'Retry-safe key for this message (letters, digits, . _ : -). Repeating a call with the same key '
               + 'returns the existing turn instead of sending the prompt twice; reusing it with different '
-              + 'content is refused. Use one key per logical message when your own timeout may cause retries.',
+              + 'content is refused. A retry with the same key and wait:true waits for that turn, which is how '
+              + 'a caller awaits work it queued with wait:false. Use one key per logical message when your own '
+              + 'timeout may cause retries.',
             ),
           toolCalls: z
             .enum(['summary', 'full', 'none'])

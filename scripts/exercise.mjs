@@ -561,6 +561,30 @@ try {
       'reusing a key for different content is refused',
       mismatch.error?.slice(0, 80),
     )
+
+    // Queue with wait:false, then retry the same key without it: the retry awaits
+    // the queued turn rather than sending a second prompt.
+    const awaitKey = 'exercise-await-1'
+    await must('session_prompt', {
+      sessionId,
+      prompt: 'Reply with exactly: await marker',
+      idempotencyKey: awaitKey,
+      wait: false,
+      timeoutMs: 180_000,
+    })
+    const awaited = await must('session_prompt', {
+      sessionId,
+      prompt: 'Reply with exactly: await marker',
+      idempotencyKey: awaitKey,
+      timeoutMs: 240_000,
+    })
+    const awaitMessages = await must('session_messages', { sessionId, limit: 100, role: 'user' })
+    check(
+      awaited.replayed === true && /await marker/i.test(awaited.turn?.reply ?? '') &&
+        (awaitMessages.messages ?? []).filter((message) => String(message.text ?? '').includes('await marker')).length === 1,
+      'a queue-then-retry awaits the queued turn without re-sending it',
+      `${(awaitMessages.messages ?? []).filter((message) => String(message.text ?? '').includes('await marker')).length} prompt(s)`,
+    )
   }
 
   section('the DSH agent writes code')

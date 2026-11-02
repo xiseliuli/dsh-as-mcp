@@ -675,6 +675,22 @@ export class DshDriver {
   private readonly ownedSessions = new Set<string>()
   /** Per-session promise chain: one driver-initiated turn runs at a time. */
   private readonly turnQueues = new Map<string, Promise<unknown>>()
+  /**
+   * Idempotency keys this process admitted, with the content they admitted.
+   *
+   * The durable log is the normal place to find an earlier prompt, but a
+   * `wait: false` call returns as soon as `controller.prompt()` resolves, and the
+   * user message can be committed a moment later. A retry inside that window used
+   * to miss the log entry and ask the agent to do the work twice — observed as two
+   * user messages carrying the same `rpcId`. This ledger closes the window; the log
+   * remains the fallback for a retry after a restart.
+   */
+  private readonly admittedPrompts = new Map<string, {
+    readonly sessionId: string
+    readonly text: string
+    readonly images: number
+    readonly at: number
+  }>()
   /** Background shell jobs by id, in start order. */
   private readonly shellJobs = new Map<string, ShellJobState>()
   private shellJobSeq = 0
@@ -1670,9 +1686,15 @@ export class DshDriver {
       // it. The turn may be settled or still running; either way the caller gets
       // the same answer it would have gotten, and the agent is not asked twice.
       // Only a caller-supplied key can repeat, so the common path avoids the read.
-      const earlier = request.idempotencyKey === undefined
+      let earlier = request.idempotencyKey === undefined
         ? undefined
         : findOwnPrompt(await this.readEvents(request.sessionId), requestId)
+      if (earlier === undefined && request.idempotencyKey !== undefined) {
+        const admitted = this.admittedPrompts.get(requestId)
+        if (admitted !== undefined && admitted.sessionId === request.sessionId) {
+          earlier = { text: admitted.text, images: admitted.images }
+        }
+      }
       if (earlier !== undefined) {
         const text = content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n\n')
         const images = content.filter((part) => part.type === 'image').length
@@ -1700,6 +1722,20 @@ export class DshDriver {
         },
         request.signal ?? new AbortController().signal,
       )
+      if (request.idempotencyKey !== undefined) {
+        const text = content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n\n')
+        const images = content.filter((part) => part.type === 'image').length
+        this.admittedPrompts.set(requestId, { sessionId: request.sessionId, text, images, at: Date.now() })
+        // Bound the ledger: a long-lived process must not accumulate every key it
+        // has ever seen. The log still answers older retries.
+        if (this.admittedPrompts.size > 200) {
+          const cutoff = Date.now() - 24 * 60 * 60 * 1_000
+          for (const [key, entry] of this.admittedPrompts) {
+            if (entry.at < cutoff || this.admittedPrompts.size > 200) this.admittedPrompts.delete(key)
+            if (this.admittedPrompts.size <= 200) break
+          }
+        }
+      }
       return await this.finishPrompt(request, requestId, false)
     })
   }

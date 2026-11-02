@@ -721,6 +721,99 @@ describe('per-session serialization', () => {
   })
 })
 
+describe('awaiting a queued turn', () => {
+  it('replays a just-admitted prompt even before its log commit lands', async () => {
+    // The race: wait:false returns when controller.prompt() resolves, but the user
+    // message can be committed a moment later. A retry inside that window used to
+    // miss the log and ask the agent to do the work twice.
+    const sessions = fakeSessions()
+    const original = sessions.controller.prompt as (request: unknown) => Promise<{ accepted: true }>
+    let releaseCommit: (() => Promise<unknown>) | undefined
+    ;(sessions.controller as Record<string, unknown>).prompt = async (request: unknown) => {
+      if (releaseCommit === undefined) {
+        releaseCommit = async () => original(request)
+        return { accepted: true }
+      }
+      return original(request)
+    }
+    const { driver } = driverWith(sessions)
+
+    await driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: false,
+      idempotencyKey: 'race-1',
+    })
+    expect(sessions.prompts).toHaveLength(0)
+
+    const awaiting = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: true,
+      idempotencyKey: 'race-1',
+      timeoutMs: 5_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    // The retry must be waiting, not re-prompting, while the log catches up.
+    expect(sessions.prompts).toHaveLength(0)
+
+    await releaseCommit?.()
+    expect(sessions.prompts).toHaveLength(1)
+    const base = sessions.log.length + 10
+    sessions.log.push(event('turn/start', { turn: 1 }, base))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'race reply' }] },
+    }, base + 1))
+    sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, base + 2))
+
+    const result = await awaiting
+    expect(result.replayed).toBe(true)
+    expect(result.turn?.reply).toBe('race reply')
+  })
+
+  it('waits for a turn queued with wait:false when retried with the same key', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const queued = await driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: false,
+      idempotencyKey: 'await-1',
+    })
+    expect(queued.accepted).toBe(true)
+    expect(sessions.prompts).toHaveLength(1)
+
+    const awaiting = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'go',
+      mode: 'queue',
+      wait: true,
+      idempotencyKey: 'await-1',
+      timeoutMs: 5_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    // The retry must not send the prompt again; it is waiting on the queued turn.
+    expect(sessions.prompts).toHaveLength(1)
+
+    sessions.log.push(event('turn/start', { turn: 1 }, 2))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'awaited reply' }] },
+    }, 3))
+    sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 4))
+
+    const result = await awaiting
+    expect(result.replayed).toBe(true)
+    expect(result.turn?.reply).toBe('awaited reply')
+  })
+})
+
 describe('bounded replies', () => {
   it('cuts each transcript message to the requested cap and reports the original size', async () => {
     const sessions = fakeSessions()

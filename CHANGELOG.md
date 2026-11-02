@@ -3,6 +3,27 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.6
+
+- **Fixed a real duplicate-send race in idempotent retries.** `wait: false` returns
+  when `controller.prompt()` resolves, but the durable user message can be committed
+  a moment later; a retry inside that window did not find its own log entry and asked
+  the agent to do the work twice. The acceptance check for "queue then await" caught
+  it as two user messages carrying the same `rpcId`. The driver now keeps a small
+  in-memory ledger of admissions it made (bounded, 24 h / 200 keys) as a fallback
+  when the log has not caught up; the log remains the path for retries after a
+  restart. A regression test defers the commit and asserts the retry waits instead of
+  re-sending.
+
+## 0.37.5
+
+- Documented and verified the intended way to await queued work: queue a prompt with
+  `wait: false` plus an `idempotencyKey`, then call again with the same key and
+  `wait: true`. The retry replays the admission and *waits* for that turn instead of
+  sending a second prompt. The tool description and both READMEs now say so, a driver
+  test covers the pending-turn replay, and the acceptance run checks the reply and
+  that only one such user prompt exists in the transcript.
+
 ## 0.37.4
 
 - `tools/live-checks.mjs --with-model` gained an orchestration section: start a long
