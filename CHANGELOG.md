@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.7
+
+- Attempted the money reconciliation in a throwaway profile and recorded why it did not
+  run: the only `dsh-cost-meter` install on this machine is hoisted inside the desktop
+  profile, so copying its package directory leaves its dependencies behind and its import
+  dies with `Cannot find package 'acorn'`; the desktop profile itself runs an older build.
+  The verification matrix now names that concrete blocker and the exact way to close it
+  (install the price plugin from its registry into a throwaway profile) instead of the
+  vaguer "compare on a known row". No code change.
+
 ## 0.52.6
 
 - Documented what a `session_queue` row carries: id, text, image count, and the harness's
