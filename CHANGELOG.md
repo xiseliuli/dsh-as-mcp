@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.33
+
+- Verified the **session-only** deployment shape — the one a client that just wants to drive
+  an agent would run: `workspace/files/shell/agentTools` off, `session` and `usage` on.
+  `live-checks --with-model` reports 84/84 checks, 0 failed: routing, `reasoningEffort`,
+  usage receipts, transcript turn windows, progress/cancellation, orchestration, steering
+  and idempotency all run, while every file/shell/workspace section degrades to an explicit
+  skip. The matrix records it.
+
 ## 0.52.32
 
 - Verified the whole check suite against a **minimal** deployment (only `files` and
