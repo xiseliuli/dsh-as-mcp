@@ -3,6 +3,20 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.0
+
+- `file_list { sha256: true }` hashes each file's content for bulk change detection; a
+  file above `limits.maxReadBytes` (or one that cannot be read as text) carries
+  `sha256Unavailable` with the reason instead of a silent omission, so a partial picture
+  is never passed off as complete. Directories carry neither field. Off by default.
+- Test covers hashing, the unavailable reason, the directory case and the no-flag path.
+  The first live run hashed 0 files and caught the *third* instance of the same slip —
+  the schema gained the option but the handler did not forward it (after 0.46.0's turn
+  range and 0.50.0's read hash). `tools/check-docs.mjs` now has a systemic guard: it
+  parses every tool's `inputSchema` and its guard body and fails when an option never
+  reaches `args.<name>`, proven by injecting a synthetic dead key (DRIFT) and removing
+  it again. The re-run hashes 2 files and passes 163/163. Both READMEs updated.
+
 ## 0.50.0
 
 - `file_read { sha256: true }` returns the SHA-256 of the **whole** file (not the

@@ -37,6 +37,73 @@ const registered = [...new Set(
 )].sort()
 if (registered.length === 0) problems.push('could not read any registerTool() names from src/mcp/tools.ts')
 
+// --- every input-schema option reaches the driver --------------------------
+//
+// Shipped three times: a new option was added to `inputSchema` and the handler
+// never passed it on, so the call accepted the argument and ignored it (0.46.0's
+// turn range, 0.50.0's read hash, 0.51.0's listing hash). The schema is the
+// contract a caller reads; an option that does not reach `args.<name>` in the
+// handler body is dead. This parses each registerTool block and checks exactly
+// that, so the mistake fails the release instead of the acceptance run.
+
+/** The text between the first `{`/`(` after `from` and its match. */
+function balanced(source, from) {
+  let depth = 0
+  let started = false
+  for (let index = from; index < source.length; index += 1) {
+    const char = source[index]
+    if (char === '(' || char === '{' || char === '[') {
+      depth += 1
+      started = true
+    } else if (char === ')' || char === '}' || char === ']') {
+      depth -= 1
+      if (started && depth === 0) return { text: source.slice(from, index + 1), end: index }
+    }
+  }
+  return undefined
+}
+
+const toolBlocks = [...toolsSource.matchAll(/registerTool\(\s*'([a-z_]+)'/g)].map((match) => ({
+  name: match[1],
+  start: match.index,
+  end: toolsSource.indexOf('registerTool(', match.index + 1) === -1
+    ? toolsSource.length
+    : toolsSource.indexOf('registerTool(', match.index + 1),
+}))
+for (const block of toolBlocks) {
+  const text = toolsSource.slice(block.start, block.end)
+  const schemaAt = text.indexOf('inputSchema: z.object(')
+  if (schemaAt === -1) continue
+  const object = balanced(text, text.indexOf('{', schemaAt))
+  if (object === undefined) continue
+  // Top-level keys: the lines with the smallest indentation inside the object.
+  const keys = []
+  let keyIndent
+  for (const line of object.text.split('\n')) {
+    const match = /^(\s+)([A-Za-z][A-Za-z0-9]*):/.exec(line)
+    if (match === null) continue
+    const indent = match[1].length
+    if (keyIndent === undefined || indent < keyIndent) {
+      keyIndent = indent
+      keys.length = 0
+    }
+    if (indent === keyIndent) keys.push(match[2])
+  }
+  const guardAt = text.indexOf(`guard('${block.name}'`)
+  if (guardAt === -1) {
+    problems.push(`${block.name}: has an inputSchema but no guard() body to inspect`)
+    continue
+  }
+  const body = text.slice(guardAt)
+  for (const key of keys) {
+    if (!body.includes(`args.${key}`)) {
+      problems.push(
+        `${block.name}: inputSchema option "${key}" never reaches the driver (no args.${key} in its guard body)`,
+      )
+    }
+  }
+}
+
 // --- the tool tables in both READMEs --------------------------------------
 
 function tableRows(path, heading) {

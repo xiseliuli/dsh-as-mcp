@@ -937,7 +937,7 @@ field for an unknown key writes nothing), the `package.json` version against the
 heading, the shipped `files` list against what exists (and against maintainer-only directories), and
 every `docs/*.md` and script path the READMEs tell readers to use, that every version cited in
 `docs/LIVE-VERIFICATION.md` has a changelog entry (a cited release that never happened is drift too), and
-that the settings panel's localized keys exist in both dictionaries with the same key set. It runs inside `tools/release.sh`;
+that the settings panel's localized keys exist in both dictionaries with the same key set, and that **every input-schema option reaches the driver** (an option added to a tool schema but never passed on by its handler is accepted and silently ignored — a mistake this project shipped three times before the check existed). It runs inside `tools/release.sh`;
 run it alone after editing documentation or configuration.
 
 `tools/release.sh` is the release checklist as an executable: both typechecks, the test suite, the two

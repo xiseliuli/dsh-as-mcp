@@ -1206,6 +1206,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .positive()
             .optional()
             .describe('How deep a recursive walk goes; defaults to no explicit bound (the entry cap still applies).'),
+          sha256: z
+            .boolean()
+            .optional()
+            .describe(
+              'Also hash each file\'s content (SHA-256) for bulk change detection. Files above '
+              + 'limits.maxReadBytes carry sha256Unavailable with the reason instead of a hash, so a partial '
+              + 'picture is never passed off as complete.',
+            ),
         }),
         outputSchema: outputSchema({
           path: z.string().optional(),
@@ -1219,6 +1227,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
         ...(args.recursive === undefined ? {} : { recursive: args.recursive }),
         ...(args.maxDepth === undefined ? {} : { maxDepth: args.maxDepth }),
+        ...(args.sha256 === undefined ? {} : { sha256: args.sha256 }),
+        ...(args.sha256 === true ? { sha256Limit: getConfig().limits.maxReadBytes } : {}),
       }))),
     )
 

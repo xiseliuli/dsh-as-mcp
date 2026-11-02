@@ -256,6 +256,33 @@ describe('listDirectory', () => {
   })
 })
 
+describe('listDirectory hashes', () => {
+  it('hashes files on request and says why a hash is missing', async () => {
+    const { fs } = fakeFileSystem({ '/project/a.txt': 'alpha', '/project/big.txt': 'b'.repeat(40) })
+    // `fakeFileSystem` lists directory entries from the same map the tests build.
+    ;(fs.listDir as unknown as (target: DshFsTarget) => Promise<unknown[]>) = async () => [
+      { name: 'a.txt', type: 'file', size: 5, target: targetFor('/project/a.txt') },
+      { name: 'big.txt', type: 'file', size: 40, target: targetFor('/project/big.txt') },
+      { name: 'sub', type: 'directory', target: targetFor('/project/sub') },
+    ]
+    const listed = await driverWith({ fs }).listDirectory({
+      path: '/project',
+      sha256: true,
+      sha256Limit: 10,
+    })
+    const byName = new Map((listed.entries ?? []).map((entry) => [entry.name, entry]))
+    expect(byName.get('a.txt')?.sha256).toBe(createHash('sha256').update('alpha', 'utf8').digest('hex'))
+    expect(byName.get('big.txt')?.sha256).toBeUndefined()
+    expect(byName.get('big.txt')?.sha256Unavailable).toMatch(/above the 10-byte hash ceiling/)
+    // A directory has no content hash and no "unavailable" noise.
+    expect(byName.get('sub')?.sha256).toBeUndefined()
+    expect(byName.get('sub')?.sha256Unavailable).toBeUndefined()
+    // Without the flag, nothing is hashed.
+    const plain = await driverWith({ fs }).listDirectory({ path: '/project' })
+    expect((plain.entries ?? []).every((entry) => entry.sha256 === undefined)).toBe(true)
+  })
+})
+
 describe('readImage', () => {
   /** A 1x1 PNG (the bytes matter, not the picture). */
   const png = Buffer.from(

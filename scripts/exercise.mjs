@@ -880,6 +880,18 @@ try {
       'file_write reports the written content hash',
       `${String(casWrite.sha256).slice(0, 12)}…`,
     )
+    // A directory listing can hash its files for bulk change detection; the value
+    // must agree with the whole-file hash a read returns.
+    const hashedList = await must('file_list', { path: projectPath, sha256: true })
+    const listedFile = (hashedList.entries ?? []).find((entry) => entry.name === 'from-mcp.txt')
+    check(
+      typeof listedFile?.sha256 === 'string' && /^[0-9a-f]{64}$/.test(listedFile.sha256) &&
+        (hashedList.entries ?? []).filter((entry) => entry.type === 'file')
+          .every((entry) => typeof entry.sha256 === 'string' || typeof entry.sha256Unavailable === 'string'),
+      'file_list { sha256: true } hashes files for bulk change detection',
+      `${(hashedList.entries ?? []).filter((entry) => entry.sha256 !== undefined).length} hashed`,
+    )
+
     // Reading with sha256 gives the CAS value in one round trip.
     const hashedRead = await must('file_read', { path, sha256: true })
     check(

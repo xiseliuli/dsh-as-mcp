@@ -518,6 +518,10 @@ export interface DirectoryEntry {
   readonly path?: string
   /** Depth below the listed directory, 1 for a direct child; recursive listings only. */
   readonly depth?: number
+  /** SHA-256 of the file's content, when the caller asked for hashes. */
+  readonly sha256?: string
+  /** Why no hash could be produced (too large, unreadable); present only when asked. */
+  readonly sha256Unavailable?: string
 }
 
 /**
@@ -3745,6 +3749,9 @@ export class DshDriver {
     cwd?: string
     recursive?: boolean
     maxDepth?: number
+    /** Also hash each file's content (up to sha256Limit), for bulk change detection. */
+    sha256?: boolean
+    sha256Limit?: number
   }): Promise<{
     path: string
     entries: DirectoryEntry[]
@@ -3759,15 +3766,17 @@ export class DshDriver {
 
     if (request.recursive !== true) {
       const entries = await fs.listDir(target)
+      const listed = await Promise.all(entries.map(async (entry) => ({
+        name: entry.name,
+        type: entry.type,
+        ...(entry.size === undefined ? {} : { size: entry.size }),
+        ...(request.sha256 === true && entry.type === 'file'
+          ? await hashEntry(fs, entry.target, request.sha256Limit)
+          : {}),
+      })))
       return {
         path: root,
-        entries: entries
-          .map((entry) => ({
-            name: entry.name,
-            type: entry.type,
-            ...(entry.size === undefined ? {} : { size: entry.size }),
-          }))
-          .sort((left, right) => left.name.localeCompare(right.name)),
+        entries: listed.sort((left, right) => left.name.localeCompare(right.name)),
       }
     }
 
@@ -3807,6 +3816,9 @@ export class DshDriver {
           name: entry.name,
           type: entry.type,
           ...(entry.size === undefined ? {} : { size: entry.size }),
+          ...(request.sha256 === true && entry.type === 'file'
+            ? await hashEntry(fs, entry.target, request.sha256Limit)
+            : {}),
           path,
           depth,
         })
@@ -4463,6 +4475,29 @@ function findOwnPrompt(
 /** Lowercase hex SHA-256 of a UTF-8 string, for compare-and-swap file writes. */
 function sha256OfText(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+/**
+ * Content hash for one directory entry, or the reason it could not be produced.
+ *
+ * A listing that silently hashed only what it could read would look complete while
+ * hiding the files a change-detector most needs to see, so an unavailable hash says
+ * why instead of being omitted.
+ */
+async function hashEntry(
+  fs: DshFileSystem,
+  target: DshFsTarget,
+  limit: number | undefined,
+): Promise<{ sha256?: string; sha256Unavailable?: string }> {
+  const info = await fs.stat(target)
+  if (limit !== undefined && info?.size !== undefined && info.size > limit) {
+    return { sha256Unavailable: `above the ${limit}-byte hash ceiling` }
+  }
+  try {
+    return { sha256: sha256OfText(await fs.readText(target)) }
+  } catch (error) {
+    return { sha256Unavailable: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 /** Current UTF-8 text of a file, or `undefined` when it is not a readable file. */
