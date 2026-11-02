@@ -623,6 +623,70 @@ async function subagentCheck() {
   }
 }
 
+// --- orchestration ---------------------------------------------------------
+
+/**
+ * The queue/cancel/poll combination a real orchestrator uses on one session: start
+ * a long turn without waiting, queue work behind it, withdraw that queued work,
+ * cancel the running turn, then keep using the session. Each tool exists on its own;
+ * this checks they compose on one session without corrupting its state.
+ */
+async function orchestrationCheck() {
+  section('orchestration on one session (real turn)')
+  if (!has('session_prompt') || !has('session_cancel')) {
+    skip('orchestration checks', 'needs session_prompt and session_cancel')
+    return
+  }
+  const session = await callTool('session_create', { cwd: process.cwd() })
+  await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Run the bash command: sleep 20; echo LONG-DONE. Then reply exactly: LONG TURN.',
+    wait: false,
+  })
+
+  // A queued message must not start while the first turn is open.
+  await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: QUEUED-NEVER',
+    wait: false,
+  })
+
+  let queueListed = false
+  if (has('session_queue')) {
+    const queue = await callTool('session_queue', { sessionId: session.sessionId })
+    const rows = queue.queued ?? []
+    check(rows.length >= 1, 'the queued message is visible while the turn runs', `${rows.length} queued`)
+    queueListed = rows.length >= 1
+    if (queueListed) {
+      const removed = await callTool('session_queue', {
+        sessionId: session.sessionId,
+        messageId: rows[0].id,
+        action: 'remove',
+      })
+      check(removed.accepted === true, 'the queued message can be withdrawn')
+    }
+  } else {
+    skip('queue checks in orchestration', 'this endpoint advertises no session_queue')
+  }
+
+  const cancelled = await callTool('session_cancel', { sessionId: session.sessionId })
+  check(cancelled.accepted === true, 'the running turn can be cancelled')
+
+  // The session must still work afterwards: this is the state corruption a
+  // cancel/queue combination would leave behind.
+  const after = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: STILL USABLE',
+    timeoutMs: 300_000,
+  })
+  check(/STILL USABLE/.test(after.turn?.reply ?? ''), 'the session answers after the cancelled turn', after.turn?.reply)
+  const messages = await callTool('session_messages', { sessionId: session.sessionId, limit: 50 })
+  check(
+    !(messages.messages ?? []).some((message) => String(message.text ?? '').includes('QUEUED-NEVER')),
+    'the withdrawn message never ran',
+  )
+}
+
 // --- concurrent turns ------------------------------------------------------
 
 /**
@@ -715,6 +779,7 @@ try {
     } else {
       await progressCheck(sessionId)
       await cancellationCheck()
+      await orchestrationCheck()
       await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()
     }

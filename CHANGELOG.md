@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.4
+
+- `tools/live-checks.mjs --with-model` gained an orchestration section: start a long
+  turn with `wait: false`, queue work behind it, list and withdraw that queued
+  message, cancel the running turn, then prompt the session again. Each tool exists
+  on its own; this asserts they compose on one session without corrupting it (the
+  follow-up prompt answers, and the withdrawn message never ran).
+
 ## 0.37.3
 
 - `tools/live-checks.mjs --with-model` also runs two real turns in two independent
