@@ -1881,6 +1881,40 @@ async function modelSelectionCheck() {
         `costUsd ${rowCost?.costUsd ?? '?'} / estimate ${rowCost?.costEstimateUsd ?? '?'}`,
       )
     }
+    // `session_messages` has its own turn window; it must agree with the turn numbers
+    // the prompts reported rather than trusting the same parameter name as usage.
+    if (has('session_messages') && typeof firstTurn === 'number' && typeof secondTurn === 'number') {
+      const laterMessages = await callTool('session_messages', {
+        sessionId: session.sessionId,
+        fromTurn: secondTurn,
+        limit: 50,
+      })
+      const laterRows = laterMessages.messages ?? []
+      const laterTurned = laterRows.filter((message) => typeof message.turn === 'number')
+      check(
+        laterTurned.length > 0 && laterTurned.every((message) => message.turn >= secondTurn) &&
+          laterRows.some((message) => String(message.text ?? '').includes('SWITCH OK')),
+        'session_messages { fromTurn } starts at the later turn',
+        `${laterRows.length} message(s)`,
+      )
+      const earlierMessages = await callTool('session_messages', {
+        sessionId: session.sessionId,
+        toTurn: firstTurn,
+        limit: 50,
+      })
+      const earlierRows = earlierMessages.messages ?? []
+      check(
+        earlierRows.length > 0 &&
+          earlierRows.filter((message) => typeof message.turn === 'number')
+            .every((message) => message.turn <= firstTurn) &&
+          !earlierRows.some((message) => String(message.text ?? '').includes('SWITCH OK')),
+        'session_messages { toTurn } stops at the earlier turn',
+        `${earlierRows.length} message(s)`,
+      )
+    } else {
+      skip('session_messages turn window', 'needs session_messages and two completed turns')
+    }
+
     // Fork by turn boundary: the child's transcript must stop before the later turn.
     if (has('session_fork')) {
       const forked = await callTool('session_fork', { sessionId: session.sessionId, atTurn: firstTurn })

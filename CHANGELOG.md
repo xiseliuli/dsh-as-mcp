@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.21
+
+- The transcript's turn window now has live evidence: with the two turns
+  `--with-model` already runs, `session_messages { fromTurn }` returns only the later
+  turn (and its reply) while `toTurn` stops before it — the same parameter names as
+  `session_usage`, checked against the turn numbers the replies reported.
+
 ## 0.52.20
 
 - `session_set_model { reasoningEffort }` now has live evidence: the selection is applied
