@@ -344,6 +344,50 @@ async function infoCoherenceChecks() {
     'dsh_info carries its caveats as notes',
     `${info.notes?.length ?? 0} note(s)`,
   )
+
+  // The catalog is what session_create's arguments are chosen from, so its honesty
+  // matters: a value the caller cannot read must be named in catalog.unavailable,
+  // not silently missing.
+  const catalog = await callTool('dsh_info', { includeModels: true }).then((full) => full.catalog ?? {})
+  const providers = Array.isArray(catalog.providers) ? catalog.providers : []
+  const providerIds = new Set(providers.map((provider) => provider.id))
+  check(
+    providers.every((provider) => typeof provider.id === 'string' && typeof provider.name === 'string'),
+    'catalog.providers names every route session_create accepts',
+    `${providers.length} route(s)`,
+  )
+  if (catalog.providerModels !== undefined) {
+    check(
+      Array.isArray(catalog.providerModels) &&
+        catalog.providerModels.every((entry) => typeof entry.provider === 'string' &&
+          Array.isArray(entry.models) &&
+          entry.models.every((model) => typeof model.id === 'string' && typeof model.name === 'string')),
+      'catalog.providerModels is a per-route model list',
+      `${catalog.providerModels.length} route(s) with models`,
+    )
+    check(
+      catalog.providerModels.every((entry) => providerIds.has(entry.provider)),
+      'every model entry belongs to a named route',
+    )
+  } else {
+    check(
+      (catalog.unavailable ?? []).some((reason) => typeof reason === 'string' && reason.startsWith('providerModels')),
+      'a missing model catalog is named in catalog.unavailable',
+      `${(catalog.unavailable ?? []).length} unavailable entr(ies)`,
+    )
+  }
+  if (catalog.agentPresets !== undefined) {
+    const presets = catalog.agentPresets
+    // `name`/`description` are optional in the catalog (a registry may expose ids
+    // only); the id and the default pointing at a listed id are the contract.
+    check(
+      Array.isArray(presets) && presets.every((preset) => typeof preset.id === 'string' &&
+        (preset.name === undefined || typeof preset.name === 'string')) &&
+        (catalog.defaultAgentPreset === undefined || presets.some((preset) => preset.id === catalog.defaultAgentPreset)),
+      'agentPresets lists preset ids and the default names one of them',
+      `${presets.length} preset(s)`,
+    )
+  }
 }
 
 // --- shell timeout and job cap ---------------------------------------------

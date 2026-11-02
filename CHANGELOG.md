@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.2
+
+- `tools/live-checks.mjs` checks the catalog honesty in `dsh_info`: every route is a
+  named id, each per-route model list is well formed and belongs to a named route, a
+  catalogue that could not be read is named in `catalog.unavailable` instead of silently
+  missing, and the default agent preset (when present) names one of the listed presets.
+  That catalog is what `session_create`'s arguments are chosen from, so a silent hole
+  there sends callers guessing. The first run flagged the presets because this
+  profile's registry exposes ids only — the check now asserts the real contract (`id`
+  required, `name`/`description` optional) instead of an imagined one; 82/82 cheap
+  checks pass.
+
 ## 0.51.1
 
 - `tools/live-checks.mjs` exercises the compare-and-swap lost-update window for real:
