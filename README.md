@@ -708,6 +708,12 @@ key named, because a silently ignored typo means your override is not being appl
       policy: inherit        # inherit | allow
 ```
 
+`mountOnWebServer` is enough on its own: with `enabled: false` the endpoint is served
+**only** on DSH's web server at `<dsh host>:<dsh web port><path>`, with no second port. The
+plugin waits for that service to mount, then registers an exact route — `dsh_info` reports
+`mountedOnDshWebServer`, and `mountNote` while it is still waiting. A missing service is not an
+error: the plugin keeps loading and mounts the moment the web server appears.
+
 ## Settings panel
 
 Where the host mounts a settings service — DSH Desktop and `dsh web` both do — the plugin

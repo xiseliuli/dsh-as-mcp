@@ -121,6 +121,10 @@ export function apply(ctx: Context, config: unknown): void {
 
   let listener: EndpointHandle | undefined
   let unmountFromWebServer: (() => void) | undefined
+  /** Set while `mountOnWebServer` is configured but the service has not appeared. */
+  let waitingForWebServer = false
+  /** Why the endpoint is not mounted on the web server yet, for the panel and `dsh_info`. */
+  let mountNote: string | undefined
   let boundSignature = ''
   let listenError: string | null = null
   /** Set once the plugin is being torn down; every await in a reconcile re-checks it. */
@@ -173,6 +177,7 @@ export function apply(ctx: Context, config: unknown): void {
       listening: listener !== undefined,
       url,
       mountedOnWebServer: unmountFromWebServer !== undefined,
+      ...(mountNote === undefined ? {} : { mountNote }),
       error: listenError,
       tokenSource: credential.source,
       token: credential.token,
@@ -191,6 +196,7 @@ export function apply(ctx: Context, config: unknown): void {
       token: token.token,
       tokenSource: token.source,
       mountedOnWebServer: unmountFromWebServer !== undefined,
+      ...(mountNote === undefined ? {} : { mountNote }),
     }
   }
 
@@ -222,11 +228,14 @@ export function apply(ctx: Context, config: unknown): void {
    * teardown that sampled `listener` before an in-flight reconcile assigned it
    * leaked that listener past plugin unload.
    */
-  const reconcileNow = async (): Promise<void> => {
+  const reconcileNow = async (force = false): Promise<void> => {
     try {
       const current = getConfig()
       const signature = signatureOf(current)
-      if (signature === boundSignature) return
+      if (!force && signature === boundSignature) return
+      // Re-derived below: a forced reconcile exists to observe a service that was
+      // absent the last time around.
+      waitingForWebServer = false
 
       unmountFromWebServer?.()
       unmountFromWebServer = undefined
@@ -267,7 +276,14 @@ export function apply(ctx: Context, config: unknown): void {
         if (disposed) return
         const webServer = serviceOf<WebServerLike>(ctx, 'webServer')
         if (webServer === undefined) {
-          log.warn('[dsh-as-mcp] http.mountOnWebServer is set but this profile has no webServer service')
+          // Measured on a real install: the web server mounts *after* the plugins
+          // that use it, so sampling the service here once found nothing and the
+          // route silently never existed (`mountOnWebServer: true`, yet requests
+          // fell through to the SPA fallback). Wait for the service and retry.
+          // The same trap is documented at the status-route registration below.
+          waitingForWebServer = true
+          mountNote = 'waiting for the DSH web server service'
+          log.debug('[dsh-as-mcp] http.mountOnWebServer is set; waiting for the webServer service')
         } else {
           unmountFromWebServer = mountOnWebServer({
             webServer,
@@ -275,6 +291,7 @@ export function apply(ctx: Context, config: unknown): void {
             handler: requestHandler.handle,
             log,
           })
+          mountNote = undefined
         }
       }
 
@@ -298,15 +315,32 @@ export function apply(ctx: Context, config: unknown): void {
     }
   }
 
-  /** One reconcile at a time, in submission order. */
+  /**
+   * One reconcile at a time, in submission order.
+   *
+   * `force` exists for one caller: the web-server watch below, which must mount
+   * once the service appears even though the bind signature did not change.
+   */
   let reconcileTail: Promise<void> = Promise.resolve()
-  const reconcile = (): Promise<void> => {
-    const run = reconcileTail.then(() => reconcileNow())
+  const reconcile = (force = false): Promise<void> => {
+    const run = reconcileTail.then(() => reconcileNow(force))
     // `reconcileNow` records its own failures, so the queue never sits on a
     // rejection and the `void reconcile()` callers need no catch of their own.
     reconcileTail = run.then(() => undefined)
     return run
   }
+
+  // The web server service can arrive after this plugin (see the mount block), so
+  // wait for it rather than sampling. `internal/service` is Cordis's own
+  // notification that a service was provided or withdrawn.
+  ctx.effect(() => {
+    const off = eventsOf(ctx).on('internal/service', (serviceName: string) => {
+      if (serviceName !== 'webServer' || !waitingForWebServer) return
+      waitingForWebServer = false
+      void reconcile(true)
+    })
+    return () => off()
+  }, 'dsh-as-mcp web-server wait')
 
   ctx.effect(() => {
     const initial = effectiveToken()

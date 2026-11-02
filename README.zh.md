@@ -629,6 +629,11 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
       policy: inherit        # inherit | allow
 ```
 
+`mountOnWebServer` 可以单独使用：配合 `enabled: false`，端点只挂在 DSH 的 web server 上
+（`<dsh 主机>:<dsh web 端口><path>`），不再占第二个端口。插件会等待该服务挂载，然后注册精确路由——
+`dsh_info` 里看 `mountedOnDshWebServer`，等待期间还有 `mountNote`。服务暂时不存在不算错误：插件照常
+加载，web server 一出现就挂上去。
+
 ## 设置面板
 
 宿主挂载了 settings 服务时（DSH Desktop 与 `dsh web` 都有），插件会在设置面板里贡献一个

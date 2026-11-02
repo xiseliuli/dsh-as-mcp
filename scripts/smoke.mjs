@@ -187,7 +187,11 @@ async function main() {
   // and "the plugin is mounted but its listener never bound" look identical from
   // the outside, and they have entirely different fixes.
   const settingsNote = info.settingsRegistered === true ? 'registered' : 'absent'
-  step(info.listening !== false, 'endpoint status', `listening=${info.listening === true} settings=${settingsNote}`)
+  step(
+    info.listening !== false,
+    'endpoint status',
+    `listening=${info.listening === true} mounted=${info.mountedOnDshWebServer === true} settings=${settingsNote}`,
+  )
   if (info.listenError) {
     process.stdout.write(`${red('The listener failed to bind:')} ${info.listenError}\n`)
   }

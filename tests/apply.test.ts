@@ -618,6 +618,32 @@ describe('endpoint lifecycle', () => {
     }
   })
 
+  it('mounts once the web server service appears after the plugin', async () => {
+    // Measured on a real install: `mountOnWebServer: true` mounted nothing because
+    // the web server service mounts *after* the plugins that use it, and sampling
+    // it once at boot found undefined — requests then fell through to the SPA
+    // fallback with a 405. The plugin must wait for the service instead.
+    const port = await freePort()
+    const registered: { kind: string; path: string }[] = []
+    const { root } = await bootWithContext(() => pluginConfig({ port, mountOnWebServer: true }))
+
+    // Nothing yet: the service does not exist, and boot must not have failed.
+    expect(registered).toHaveLength(0)
+
+    root.provide('webServer', {
+      register: (route: { kind: string; path: string }) => {
+        registered.push(route)
+        return () => undefined
+      },
+    })
+
+    const deadline = Date.now() + 5_000
+    while (registered.length < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    expect(registered).toContainEqual(expect.objectContaining({ kind: 'exact', path: '/mcp' }))
+  })
+
   it('retries a reconcile that failed instead of recording it as applied', async () => {
     // The signature is a promise that "this config is what is running". Recording
     // it before the work meant a run that threw part-way — here, a web-server

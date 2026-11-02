@@ -273,7 +273,14 @@ section('surface')
     structured.map((entry) => `${entry.name}:${entry.outputSchema?.type ?? 'none'}`).join(', '),
   )
 
-  check(info.listening === true, 'endpoint reports itself listening', info.endpoint)
+  // Mount-only deployments (`enabled: false`, `mountOnWebServer: true`) report
+  // listening=false by design; what must be true is that the endpoint says where
+  // it actually lives.
+  check(
+    info.listening === true || info.mountedOnDshWebServer === true,
+    'endpoint reports where it is served',
+    `listening=${info.listening === true} mounted=${info.mountedOnDshWebServer === true}`,
+  )
 
   // Model discovery is opt-in and per-provider guarded; when it does answer, the
   // shape must be a list of {provider, models[]}.

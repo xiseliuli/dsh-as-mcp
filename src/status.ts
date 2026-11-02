@@ -24,6 +24,8 @@ export interface EndpointStatus {
   readonly url: string
   /** Whether the endpoint is also served through DSH's own web server. */
   readonly mountedOnWebServer: boolean
+  /** Why it is not mounted yet (`mountOnWebServer` set but the service absent), when that is the case. */
+  readonly mountNote?: string
   /** Why the last bind attempt failed, or `null`. */
   readonly error: string | null
   /** How the effective bearer token was obtained. */

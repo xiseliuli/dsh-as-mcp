@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.20.5
+
+- **Fixed `http.mountOnWebServer: true` mounting nothing on a real install.** The
+  route was never registered because the DSH web-server service mounts after the
+  plugins that use it and the code sampled it once at boot; requests fell through
+  to the SPA fallback and answered 405. The plugin now waits for the service
+  (`internal/service`) and mounts as soon as it appears. `dsh_info` reports
+  `mountNote` while it is still waiting.
+
 ## 0.20.4
 
 - `session_usage` now also carries `partial: true` on the report itself when any

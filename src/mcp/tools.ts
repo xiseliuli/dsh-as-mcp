@@ -17,6 +17,8 @@ export interface ConnectionInfo {
   readonly tokenSource: string
   /** Whether the endpoint is also reachable through DSH's own web server. */
   readonly mountedOnWebServer: boolean
+  /** Why it is not mounted yet, when `mountOnWebServer` is waiting for the service. */
+  readonly mountNote?: string
 }
 
 /**
@@ -259,6 +261,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         tokenSource: info.tokenSource,
         tokenFile: live.tokenFile,
         mountedOnDshWebServer: info.mountedOnWebServer,
+        ...(info.mountNote === undefined ? {} : { mountNote: info.mountNote }),
         listening: live.listening,
         listenError: live.error,
         settingsRegistered: live.settingsRegistered,
