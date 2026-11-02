@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.79
+
+- Two more options are asserted by effect: `session_list` folds titles only when `includeTitle` is
+  set (checked when the session has a generated title), and `session_usage { sinceSeq }` returns a
+  windowed fold — fewer turns and fewer tokens than the whole log — rather than ignoring the
+  parameter. Both reuse the turns the real-turn section already paid for. Measured: full
+  163/163, session-only 95/95 (the includeTitle check ran on a real generated title); README
+  tables and the matrix updated.
+
 ## 0.52.78
 
 - Two more options are asserted by their effect rather than their acceptance:

@@ -132,6 +132,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 | A cancelled turn actually stops, not just the wait | 0.52.75 | after the aborted `session_prompt` wait returned, `session_list { running: true }` no longer listed the session (polled up to 20 s). The wait ending and the turn stopping are different facts; live-checks asserts both |
 | `includeSubagents` has an observable effect both ways | 0.52.77 | with the flag (default `true`) the subagent is a row and the total includes it (55499 tokens); with `includeSubagents: false` no subagent row appears and the total is the session alone (36808). Running with `--with-model --with-subagent`: 174/174 |
 | The `running` filter and the `includeTurns`/`includeCost` switches change what is returned | 0.52.78 | a freshly created (idle) session appears under `session_list { running: false }` and not under `true`; `session_usage { includeTurns: false }` returns an empty `byTurn` and `{ includeCost: false }` reports `cost.available: false`. Both are by-effect assertions, not "the parameter was accepted" |
+| `includeTitle` and `sinceSeq` change what is returned | 0.52.79 | with a generated title present, `session_list { includeTitle: true }` carries it and the default row does not; `session_usage { sinceSeq }` starting after the first turn's last message returned fewer turns and fewer tokens than the whole log |
 ## Not verified here
 
 These are gaps in *evidence*, not known defects:

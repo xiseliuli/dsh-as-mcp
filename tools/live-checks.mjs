@@ -2621,6 +2621,44 @@ async function modelSelectionCheck() {
       `byTurn ${(bare.sessions?.[0]?.usage?.byTurn ?? []).length}, cost ${String(bare.sessions?.[0]?.cost?.available)}`,
     )
 
+    // `includeTitle` must decide whether the title is folded in, and a windowed fold must
+    // describe the window rather than the whole log.
+    if (has('session_list')) {
+      const titled = await callTool('session_list', { limit: 50, includeTitle: true })
+      const untitled = await callTool('session_list', { limit: 50 })
+      const withTitle = (titled.sessions ?? []).find((row) => row.sessionId === session.sessionId)
+      const withoutTitle = (untitled.sessions ?? []).find((row) => row.sessionId === session.sessionId)
+      if (typeof withTitle?.title === 'string' && withTitle.title !== '') {
+        check(
+          withoutTitle?.title === undefined,
+          'includeTitle decides whether the title is folded in',
+          withTitle.title.slice(0, 40),
+        )
+      } else {
+        skip('includeTitle check', 'the session has no generated title yet')
+      }
+    }
+    if (has('session_messages') && typeof firstTurn === 'number' && has('session_usage')) {
+      const upToFirst = await callTool('session_messages', { sessionId: session.sessionId, toTurn: firstTurn, limit: 100 })
+      const seqs = (upToFirst.messages ?? []).map((row) => row.seq).filter((seq) => typeof seq === 'number')
+      if (seqs.length > 0) {
+        const windowed = await callTool('session_usage', {
+          sessionId: session.sessionId,
+          sinceSeq: Math.max(...seqs) + 1,
+          includeTurns: true,
+        })
+        const windowedRow = windowed.sessions?.[0]?.usage
+        check(
+          (windowedRow?.byTurn ?? []).length < turns.length &&
+            (windowedRow?.totals?.totalTokens ?? 0) < (receipt.sessions?.[0]?.usage?.totals?.totalTokens ?? 0),
+          'sinceSeq folds a window, not the whole log',
+          `${(windowedRow?.byTurn ?? []).length} of ${turns.length} turn(s)`,
+        )
+      } else {
+        skip('sinceSeq check', 'the transcript has no seq numbers to window from')
+      }
+    }
+
     // DSH's own price plugin, when installed, is the only source of money: the info
     // block claims costAvailable, so the receipt must actually have it.
     if (info.usage?.costAvailable === true) {
