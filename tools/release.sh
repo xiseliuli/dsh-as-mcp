@@ -11,7 +11,8 @@
 # Usage:
 #   tools/release.sh                     # typecheck, tests, build, pack to /tmp
 #   tools/release.sh --live URL          # ...then run tools/live-checks.mjs there
-#   tools/release.sh --live URL --with-subagent
+#   tools/release.sh --live URL --with-model --with-subagent
+#   tools/release.sh --live URL --full-live   # same two flags in one word
 #   tools/release.sh --install           # ...then pack into ~/.dsh/packages and
 #                                        # install into the desktop profile, with a
 #                                        # rollback directory alongside
@@ -38,6 +39,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-subagent)
       LIVE_ARGS+=(--with-subagent)
+      shift
+      ;;
+    --with-model)
+      LIVE_ARGS+=(--with-model)
+      shift
+      ;;
+    --full-live)
+      LIVE_ARGS+=(--with-model --with-subagent)
       shift
       ;;
     --install)

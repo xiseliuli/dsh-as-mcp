@@ -946,7 +946,7 @@ run it alone after editing documentation or configuration.
 
 `tools/release.sh` is the release checklist as an executable: both typechecks, the test suite, the two
 bundles, the pack, an assertion that the package contains no maintainer-only directory, optional live
-checks (`--live URL [--with-subagent]`), an optional full acceptance run against a throwaway profile it
+checks (`--live URL [--with-model] [--with-subagent]`, or `--full-live` for both), an optional full acceptance run against a throwaway profile it
 boots and tears down (`--acceptance`), and optional install into the desktop profile with a rollback
 directory (`--install`). It refuses to reinstall the version already in that profile, because pnpm
 treats the same tarball path as already-installed.
@@ -964,7 +964,8 @@ failure.
 ```bash
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp                     # no LLM calls
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model        # spends real tokens
-node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-subagent     # also spawns a real subagent
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model         # also spends real turns
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model --with-subagent
 node tools/live-checks.mjs --url http://127.0.0.1:8790/mcp --old-endpoint      # older deployment: mismatches are skips
 ```
 

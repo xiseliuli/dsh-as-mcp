@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.51.10
+
+- `tools/release.sh` accepts `--with-model` and the `--full-live` shorthand for
+  `--with-model --with-subagent`. The documented desktop-closing command used to fail as
+  an unknown argument because only `--with-subagent` was parsed — the README and the
+  usage header now match what the script accepts.
+
 ## 0.51.9
 
 - Refined the subagent route semantics: inheritance happens **at spawn time**, not at

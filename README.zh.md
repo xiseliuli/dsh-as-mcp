@@ -818,7 +818,7 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 `tools/release.sh` 的一步，也可以单独运行。
 
 `tools/release.sh` 把发布检查清单变成可执行脚本：两端 typecheck、测试、两个 bundle、打包、断言包里没有
-维护者专用目录、可选 live 检查（`--live URL [--with-subagent]`）、可选的完整验收（`--acceptance`：自建临时 profile 跑完
+维护者专用目录、可选 live 检查（`--live URL [--with-model] [--with-subagent]`，或 `--full-live` 一次带上两者）、可选的完整验收（`--acceptance`：自建临时 profile 跑完
 再拆除）、以及可选安装进桌面 profile 并生成回滚目录（`--install`）。如果桌面 profile 已是同版本，它会拒绝重装——因为 pnpm 会把同一 tarball 路径当作
 "已安装"。
 
@@ -832,7 +832,8 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 ```bash
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp                     # 不调用模型
 node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model        # 会消耗真实 token
-node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-subagent     # 还会真的spawn一个 subagent
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model         # 还会消耗真实轮次
+node tools/live-checks.mjs --url http://127.0.0.1:8821/mcp --with-model --with-subagent
 node tools/live-checks.mjs --url http://127.0.0.1:8790/mcp --old-endpoint      # 旧部署：不满足当前契约的项记为跳过
 ```
 
