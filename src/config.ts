@@ -343,6 +343,16 @@ export function normalizeConfig(input: unknown = {}): Config {
   if (port < 0 || port > 65_535 || !Number.isInteger(port)) {
     issues.push(`http.port must be an integer between 0 and 65535, got ${port}`)
   }
+  const rawHost = str(http, 'host', DEFAULT_HTTP.host, 'http', issues)
+  const host = rawHost.trim()
+  // A host is what the listener binds to. Accepting an empty string or a URL here
+  // would either bind on every interface without the operator saying so, or fail at
+  // bind time; both are worse than naming the mistake while the config loads.
+  if (host === '') {
+    issues.push('http.host must not be empty: use 127.0.0.1 for loopback, or 0.0.0.0 to listen on every interface')
+  } else if (host.includes('://') || host.includes('/')) {
+    issues.push(`http.host must be a host or address, not a URL, got ${JSON.stringify(rawHost)}`)
+  }
   const path = str(http, 'path', DEFAULT_HTTP.path, 'http', issues)
   if (!path.startsWith('/')) {
     issues.push(`http.path must start with "/", got ${JSON.stringify(path)}`)
@@ -373,7 +383,7 @@ export function normalizeConfig(input: unknown = {}): Config {
   const config: Config = {
     http: {
       enabled: bool(http, 'enabled', fallback.http.enabled, 'http', issues),
-      host: str(http, 'host', fallback.http.host, 'http', issues),
+      host,
       port,
       path,
       mountOnWebServer: bool(http, 'mountOnWebServer', fallback.http.mountOnWebServer, 'http', issues),

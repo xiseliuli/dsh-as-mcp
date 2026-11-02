@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.50
+
+- `http.host` is now validated: an empty value is refused (it would have bound on every
+  interface while the operator said nothing, with only a log warning) and so is a URL pasted
+  into the field; surrounding whitespace is trimmed instead of reaching `listen()`. The panel
+  example and README already said `127.0.0.1`, this is the config agreeing.
+
 ## 0.52.49
 
 - `http.port` is now bounded at 65535 in config validation. The old check only required a

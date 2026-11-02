@@ -154,6 +154,12 @@ describe('config loading through Cordis', () => {
     expect(() => load('nope')).toThrow(/object/)
   })
 
+  it('rejects an empty host or a URL in the host field, and trims padding', () => {
+    expect(() => load({ http: { host: '' } })).toThrow(/must not be empty/)
+    expect(() => load({ http: { host: 'http://127.0.0.1' } })).toThrow(/not a URL/)
+    expect(load({ http: { host: ' 127.0.0.1 ' } }).http.host).toBe('127.0.0.1')
+  })
+
   it('rejects a port outside 0-65535 and a path without a leading slash', () => {
     expect(() => load({ http: { port: -1 } })).toThrow(/between 0 and 65535/)
     // 70000 is an integer, so a bare "integer" check let it through to a listen
