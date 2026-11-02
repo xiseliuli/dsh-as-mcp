@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.48
+
+- The drift check now also compares each panel number's minimum with the host's
+  `positiveInt` rule: a panel field for one of those keys must declare `min: 1`. Proven by
+  lowering `session.promptTimeoutMs` to `min: 0` —
+  `DRIFT: panel number "session.promptTimeoutMs" has min 0, but the host requires a positive
+  integer (min 1)` — then restoring. Two bugs in the new check were caught while proving it:
+  it first matched only single-line field specs (two of the four are multi-line) and it
+  referenced the parsed sources before their declarations; both fixed.
+- Both READMEs list the new check.
+
 ## 0.52.47
 
 - The drift check now compares each panel `select` against the exported enum the config

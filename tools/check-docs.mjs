@@ -144,6 +144,34 @@ for (const block of fieldsSource.matchAll(/kind: 'select',\s*path: \[([^\]]*)\](
   }
 }
 
+// --- panel number minimums match the positive-integer rule -------------------
+//
+// The four positive-integer settings are the ones a user can mistype most easily (a
+// `0` timeout looks plausible). The panel must not offer a value the host refuses, so
+// each key the config validates with `positiveInt(...)` must declare `min: 1` in the
+// panel. Parsing the validator calls keeps this in step when a new bounded number is
+// added.
+
+const panelNumbers = new Map()
+for (const match of fieldsSource.matchAll(/\{\s*kind: 'number',\s*path: \[([^\]]*)\]([^}]*)\}/g)) {
+  const path = [...match[1].matchAll(/'([^']*)'/g)].map((entry) => entry[1]).join('.')
+  const minimum = /min:\s*(-?\d+)/.exec(match[2])
+  panelNumbers.set(path, minimum === null ? undefined : Number(minimum[1]))
+}
+for (const match of enumConfigSource.matchAll(/positiveInt\(\s*(\w+)\s*,\s*'([^']+)'/g)) {
+  // The call names the section variable and the key; that pair is the config path.
+  const section = match[1]
+  const key = match[2]
+  const path = `${section}.${key}`
+  if (!panelNumbers.has(path)) {
+    problems.push(`config bounds ${path} with positiveInt but the panel has no number field for it`)
+    continue
+  }
+  if (panelNumbers.get(path) !== 1) {
+    problems.push(`panel number "${path}" has min ${String(panelNumbers.get(path))}, but the host requires a positive integer (min 1)`)
+  }
+}
+
 // --- option references are translated together -------------------------------
 //
 // A tool option documented in one README and not the other is how `probeSearch` drifted:
