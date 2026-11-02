@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.12
+
+- `tools/live-checks.mjs` checks the file-tool promises that are easiest to get wrong:
+  an ambiguous `oldText` is refused *and writes nothing*, `replaceAll` replaces every
+  occurrence, `createDirectories: false` fails before creating the parent, and a
+  relative path resolves against `cwd` for read as well as write. Cheap section, no
+  model turn.
+
 ## 0.37.11
 
 - **Fixed `shell_output.lossy`, which could never be true.** `drainShellJob` recorded a

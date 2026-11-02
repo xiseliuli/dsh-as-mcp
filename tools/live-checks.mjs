@@ -34,7 +34,7 @@ import { request as httpRequest } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 const argv = process.argv.slice(2)
 const flag = (name) => argv.includes(name)
@@ -271,6 +271,72 @@ async function shellChecks() {
       `${delivered} bytes in ${pages} page(s)`,
     )
     await callTool('shell_kill', { jobId: loud.jobId }).catch(() => {})
+  }
+}
+
+// --- file editing contracts ------------------------------------------------
+
+/**
+ * The promises in the file tool descriptions: an ambiguous `oldText` is refused and
+ * writes nothing, `replaceAll` replaces every occurrence, and `createDirectories:
+ * false` fails before creating anything. Each is cheap and directly falsifiable.
+ */
+async function fileEditChecks() {
+  section('file edit contracts')
+  if (!has('file_write') || !has('file_read') || !has('file_edit')) {
+    skip('file edit contracts', 'needs file_write, file_read and file_edit')
+    return
+  }
+  const path = join('/tmp', `dsh-as-mcp-live-edit-${process.pid}.txt`)
+  rmSync(path, { force: true })
+  await callTool('file_write', { path, content: 'alpha\nbeta\ngamma\n' })
+  try {
+    const written = await callTool('file_read', { path })
+    check(written.text === 'alpha\nbeta\ngamma\n', 'file_write round-trips through file_read')
+
+    const ambiguous = await attemptTool('file_edit', { path, oldText: 'a', newText: 'A' })
+    check(
+      ambiguous.ok === false && /occur|match|unique|ambiguous/i.test(ambiguous.error ?? ''),
+      'an ambiguous oldText is refused',
+      ambiguous.error?.slice(0, 70),
+    )
+    check(
+      (await callTool('file_read', { path })).text === 'alpha\nbeta\ngamma\n',
+      'the refused edit wrote nothing',
+    )
+
+    const replaced = await callTool('file_edit', { path, oldText: 'a', newText: 'A', replaceAll: true })
+    check(
+      typeof replaced.path === 'string' &&
+        (await callTool('file_read', { path })).text === 'AlphA\nbetA\ngAmmA\n',
+      'replaceAll replaces every occurrence',
+      (await callTool('file_read', { path })).text.slice(0, 20),
+    )
+
+    const missingParent = join('/tmp', `dsh-as-mcp-live-missing-${process.pid}`, 'file.txt')
+    rmSync(dirname(missingParent), { recursive: true, force: true })
+    const refused = await attemptTool('file_write', {
+      path: missingParent,
+      content: 'x',
+      createDirectories: false,
+    })
+    check(
+      refused.ok === false && /parent directory does not exist/.test(refused.error ?? '') &&
+        existsSync(missingParent) === false && existsSync(dirname(missingParent)) === false,
+      'createDirectories:false refuses before creating the parent',
+      refused.error?.slice(0, 70),
+    )
+
+    // Relative paths resolve against cwd for all three tools, not just write.
+    const relative = `dsh-as-mcp-live-rel-${process.pid}.txt`
+    await callTool('file_write', { path: relative, cwd: '/tmp', content: 'relative' })
+    check(
+      (await callTool('file_read', { path: relative, cwd: '/tmp' })).text === 'relative',
+      'a relative path resolves against cwd',
+    )
+    rmSync(join('/tmp', relative), { force: true })
+  } finally {
+    rmSync(path, { force: true })
   }
 }
 
@@ -827,6 +893,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await fileEditChecks()
   await concurrencyChecks()
   await availabilityCheck()
   const sessionId = await listChecks()
