@@ -2472,7 +2472,14 @@ export class DshDriver {
     const controller = new AbortController()
     const relay = (): void => controller.abort()
     request.signal?.addEventListener('abort', relay, { once: true })
-    const timer = setTimeout(() => controller.abort(), request.timeoutMs)
+    // `timedOut` distinguishes our deadline from a client cancellation: the
+    // harness reports both as "tool call aborted", which is not actionable on its
+    // own — the caller that passed timeoutMs needs to see that it fired.
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, request.timeoutMs)
     if (typeof timer === 'object' && 'unref' in timer) timer.unref()
 
     try {
@@ -2496,7 +2503,10 @@ export class DshDriver {
           text: truncated ? text.slice(0, limit) : text,
           resultBytes,
           ...(truncated ? { truncated: true as const } : {}),
-          error: truncateText(result.error.message, 2_000),
+          error: timedOut
+            ? `tool call aborted after ${request.timeoutMs}ms because timeoutMs elapsed; `
+              + 'the call may still be running in the session'
+            : truncateText(result.error.message, 2_000),
         }
       }
       return {
@@ -2507,6 +2517,13 @@ export class DshDriver {
         resultBytes,
         ...(truncated ? { truncated: true as const } : {}),
       }
+    } catch (error) {
+      if (!timedOut) throw error
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `tool call aborted after ${request.timeoutMs}ms because timeoutMs elapsed; `
+          + `the call may still be running in the session (${message})`,
+      )
     } finally {
       clearTimeout(timer)
       request.signal?.removeEventListener('abort', relay)

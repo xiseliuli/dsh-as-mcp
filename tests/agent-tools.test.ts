@@ -28,7 +28,13 @@ function schema(name: string, description = `${name} tool`) {
 }
 
 /** A `ctx.tools` double recording what it was asked to do. */
-function fakeTools(options: { visible?: string[]; fail?: boolean; text?: string } = {}) {
+function fakeTools(options: {
+  visible?: string[]
+  fail?: boolean
+  text?: string
+  /** How the double reacts to the call's abort signal. */
+  onAbort?: 'reject' | 'error-result'
+} = {}) {
   const calls: { name: string; args: unknown; agent: unknown; callId: string }[] = []
   const scopes: unknown[] = []
   const visible = options.visible ?? [
@@ -43,8 +49,30 @@ function fakeTools(options: { visible?: string[]; fail?: boolean; text?: string 
         scopes.push(scope)
         return visible.map((name) => schema(name))
       },
-      execute: async (exec: { name: string; arguments: unknown; agent?: unknown; callId: string }) => {
+      execute: async (exec: {
+        name: string
+        arguments: unknown
+        agent?: unknown
+        callId: string
+        signal?: AbortSignal
+      }) => {
         calls.push({ name: exec.name, args: exec.arguments, agent: exec.agent, callId: exec.callId })
+        if (options.onAbort !== undefined) {
+          return await new Promise((resolve, reject) => {
+            const onAbort = (): void => {
+              if (options.onAbort === 'reject') reject(new Error('this operation was aborted'))
+              else {
+                resolve({
+                  isError: true as const,
+                  error: { message: 'tool call aborted' },
+                  content: [{ type: 'text' as const, text: 'Error: tool call aborted' }],
+                })
+              }
+            }
+            if (exec.signal?.aborted === true) onAbort()
+            else exec.signal?.addEventListener('abort', onAbort, { once: true })
+          })
+        }
         if (options.fail === true) {
           return {
             isError: true as const,
@@ -162,6 +190,40 @@ describe('callAgentTool result size', () => {
     expect(result.text).toHaveLength(20_000)
     expect(result.resultBytes).toBe(25_000)
     expect(result.truncated).toBe(true)
+  })
+})
+
+describe('callAgentTool timeouts', () => {
+  it('says the timeoutMs deadline fired when the call rejects on abort', async () => {
+    const tools = fakeTools({ onAbort: 'reject' })
+    await expect(driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'bash',
+      sessionId: SESSION,
+      timeoutMs: 20,
+    })).rejects.toThrow(/aborted after 20ms because timeoutMs elapsed/)
+  })
+
+  it('replaces the harness "tool call aborted" with the same attribution', async () => {
+    // The live harness reports an aborted call as a result, not a rejection. Its
+    // message does not say which deadline fired, so it is replaced.
+    const tools = fakeTools({ onAbort: 'error-result' })
+    const result = await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'bash',
+      sessionId: SESSION,
+      timeoutMs: 20,
+    })
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/aborted after 20ms because timeoutMs elapsed/)
+  })
+
+  it('keeps the harness error when the call failed for its own reasons', async () => {
+    const tools = fakeTools({ fail: true })
+    const result = await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'read',
+      sessionId: SESSION,
+      timeoutMs: 5_000,
+    })
+    expect(result.error).toBe('refused: read is not allowed under this policy')
   })
 })
 

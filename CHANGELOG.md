@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.21.3
+
+- Timeout boundaries verified live: `shell_run` returns `timedOut: true` with
+  SIGTERM and leaves the shell usable; a `session_prompt` wait timeout returns
+  `timedOut`/`partial` while the turn keeps running, the session stays usable and
+  the final usage settles; `dsh_tool_call` with a small `timeoutMs` aborts the
+  call and the session stays usable.
+- An agent-tool abort now names the deadline: the harness reports both a client
+  cancellation and our timeout as "tool call aborted", so the reply says
+  "aborted after <N>ms because timeoutMs elapsed" instead.
+
 ## 0.21.2
 
 - Verified the plugin on a deliberately degraded profile (workspace and

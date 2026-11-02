@@ -1035,6 +1035,21 @@ try {
       cut.ok ? `${cut.payload?.text?.length ?? 0} chars of ${cut.payload?.resultBytes ?? '?'} bytes` : cut.error,
     )
 
+    // A timeout of our own is reported as ours: the harness calls any abort a
+    // "tool call aborted", which does not say that the timeoutMs deadline fired.
+    const timedTool = await tool('dsh_tool_call', {
+      name: 'bash',
+      args: { command: 'sleep 5; echo done', description: 'acceptance timeout probe' },
+      sessionId,
+      timeoutMs: 900,
+    })
+    check(
+      !timedTool.ok && /timeoutMs elapsed/.test(timedTool.error ?? '') &&
+        (!timedTool.payload || timedTool.payload.ok === false),
+      'a dsh_tool_call timeout names the deadline that fired',
+      (timedTool.error ?? '').slice(0, 60),
+    )
+
     // Refused on call even though the harness itself registers it.
     const escape = await tool('dsh_tool_call', { name: 'run_code', args: { code: 'return 1' }, sessionId })
     check(!escape.ok, 'run_code is refused on call, not merely hidden', (escape.error ?? '').slice(0, 60))
