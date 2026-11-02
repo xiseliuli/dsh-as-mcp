@@ -559,6 +559,8 @@ progress notifications (§6.3) — all cheap and none of them contentious.
   prompting it;
 - **`session_queue`** (0.29.0): edit/remove/steer one pending queued message by message id, so a
   caller that queued work with `wait: false` can retract it before it spends a turn;
+- **`session_tool_result`** (0.36.0): fetch one recorded tool result by call id — the text, original length
+  and error flag — so debugging a failed call does not mean re-reading the transcript;
 - **`session_messages { includeToolCalls }`** (0.32.0): the transcript text alone does not say what the agent
   did; the call list (name, call id, argument length) makes polling a session actionable;
 - **`dsh_info.toolAvailability`** (0.31.0): the per-tool dependency map is code, so a caller can see
@@ -591,7 +593,7 @@ author chose specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 (27 as of plugin 0.29.0) |
+| MCP tools registered on 0.1.5-rc.1 | 12 (28 as of plugin 0.36.0) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |

@@ -51,6 +51,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 | `session_rename` sets a user title | 0.10.0 | title visible in `session_list` |
 | Same-session prompts serialize; different sessions run in parallel; cancelling one does not disturb the other | 0.13.0 | two 4-second tool steps in two sessions finished in 6.3 s total; one cancelled, the other completed |
 | `session_list` `cwd`/`running` filters, `total`/`truncated` honesty | 0.18.0 / 0.21.0 | filtered listings on a store of hundreds of sessions |
+| `session_messages` reports model tool calls with their result size/error, and `session_tool_result` fetches one recorded result by call id | 0.32.x / 0.36.0 | live: the acceptance run read a real bash call's result (115 chars) and matched it against the transcript's `resultChars` |
 | `session_messages` tail window, `total`, `truncated`, per-message cap, `beforeSeq` backwards paging | 0.21.1 / 0.17.0 / 0.28.0 | paged a real transcript: 2-message tail, then the 2 before it, `total` consistent |
 | `session_search` returns matches + `hasMore`, and hits carry `cwd`/`updatedAt`/`running` | 0.25.0, 0.26.0 | with the index enabled, a fresh marker token was found in the session that said it; absent tokens → 0; multiple terms ANDed |
 | `dsh_info { probeSearch: true }` reports whether search really works | 0.27.0 | stock profile → `available: false` + the `openAt` instruction; `openAt: first-search` → `available: true` |

@@ -39,7 +39,8 @@ const GROUP_TOOLS: Record<keyof ToolToggles, readonly string[]> = {
   workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
   session: [
     'session_create', 'session_search', 'session_list', 'session_prompt', 'session_messages',
-    'session_queue', 'session_cancel', 'session_fork', 'session_rename', 'session_set_model',
+    'session_tool_result', 'session_queue', 'session_cancel', 'session_fork', 'session_rename',
+    'session_set_model',
   ],
   files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
   shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -73,6 +74,7 @@ const REQUIRED_CAPABILITIES: Record<string, readonly string[]> = {
   session_list: ['sessionController'],
   session_prompt: ['sessionController'],
   session_messages: ['sessionController'],
+  session_tool_result: ['sessionController'],
   session_queue: ['sessionController', 'sessionQueue'],
   session_cancel: ['sessionController'],
   session_fork: ['sessionController', 'sessionFork'],

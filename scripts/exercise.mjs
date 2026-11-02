@@ -245,6 +245,7 @@ section('surface')
     'session_rename',
     'session_search',
     'session_set_model',
+    'session_tool_result',
     ...(usageReported ? ['session_usage'] : []),
     'shell_kill',
     'shell_list',
@@ -257,7 +258,7 @@ section('surface')
   ]
   check(
     JSON.stringify(names) === JSON.stringify(expected),
-    usageReported ? 'tools/list exposes all 27 tools' : 'tools/list exposes all 26 tools (usage reporting off)',
+    usageReported ? 'tools/list exposes all 28 tools' : 'tools/list exposes all 27 tools (usage reporting off)',
     `${names.length} tools`,
   )
   check(
@@ -1007,6 +1008,20 @@ try {
       'session_messages reports the model tool calls (and completed result sizes) when asked',
       `${calls.length} call(s), ${completed.length} with results`,
     )
+
+    // The call list reports sizes; one lookup fetches the text of a single result,
+    // which is what debugging a failure actually needs.
+    const withResult = calls.find((entry) => typeof entry.resultChars === 'number' && entry.resultChars > 0)
+    if (withResult?.id !== undefined) {
+      const fetched = await must('session_tool_result', { sessionId, callId: withResult.id, maxChars: 200 })
+      check(
+        typeof fetched.text === 'string' && fetched.chars === withResult.resultChars && fetched.text.length <= 200,
+        'session_tool_result returns the recorded result text',
+        `${fetched.chars} chars`,
+      )
+    } else {
+      check(true, 'session_tool_result skipped (no completed call with text)', '')
+    }
 
     // Backwards paging: without it a transcript longer than the 500-message
     // window would be unreachable past the tail.

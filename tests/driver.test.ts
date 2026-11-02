@@ -757,6 +757,38 @@ describe('bounded replies', () => {
     expect(none.total).toBe(0)
   })
 
+  it('reads one recorded tool result by call id, with its name and error flag', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'run it', 0)])
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{}' }] },
+    }, 1))
+    sessions.log.push(event('tool/result', {
+      turn: 1,
+      step: 0,
+      message: { role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: 'boom: failed' }], isError: true },
+    }, 2))
+    const { driver } = driverWith(sessions)
+
+    await expect(driver.readToolResult('session-1', 'call-1', 100)).resolves.toEqual({
+      sessionId: 'session-1',
+      callId: 'call-1',
+      name: 'bash',
+      chars: 12,
+      text: 'boom: failed',
+      error: true,
+    })
+    // The cap reports the original size.
+    const capped = await driver.readToolResult('session-1', 'call-1', 4)
+    expect(capped.text).toHaveLength(4)
+    expect(capped.truncated).toBe(true)
+    expect(capped.chars).toBe(12)
+    // An unknown or not-yet-answered id is a legible error, not an empty result.
+    await expect(driver.readToolResult('session-1', 'call-404', 100))
+      .rejects.toThrow(/no recorded result for tool call "call-404"/)
+  })
+
   it('reports the tool calls a model requested only when asked', async () => {
     const sessions = fakeSessions()
     sessions.log.push(userMessage('req-1', 'run it', 0))

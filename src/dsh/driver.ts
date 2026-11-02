@@ -2285,6 +2285,64 @@ export class DshDriver {
   }
 
   /**
+   * The recorded textual result of one tool call, by call id.
+   *
+   * `session_messages { includeToolCalls }` reports how large a result was and
+   * whether it failed; a caller debugging the failure wants the text itself, and
+   * re-reading the whole transcript to find it is the expensive way. The id comes
+   * from that transcript, so this is a targeted follow-up, not a second search.
+   */
+  async readToolResult(
+    sessionId: string,
+    callId: string,
+    maxChars: number,
+  ): Promise<{
+    sessionId: string
+    callId: string
+    name?: string
+    chars: number
+    text: string
+    truncated?: true
+    error?: true
+  }> {
+    await this.assertSessionVisible(sessionId, 'session_tool_result')
+    const events = await this.readEvents(sessionId)
+    // The call's name lives on the assistant message that requested it; the result
+    // only carries the id.
+    let name: string | undefined
+    let found: { chars: number; text: string; error: boolean } | undefined
+    for (const event of events) {
+      if (event.type === 'assistant/message') {
+        const blocks = (event.data as { message?: { content?: unknown } } | undefined)?.message?.content
+        const calls = toolCallsOfBlocks(blocks)
+        for (const call of calls) if (call.id === callId) name = call.name
+        continue
+      }
+      if (event.type !== 'tool/result') continue
+      const message = (event.data as { message?: Record<string, unknown> } | undefined)?.message
+      if (message?.['toolCallId'] !== callId) continue
+      const text = textOfBlocks(message['content'])
+      found = { chars: text.length, text, error: message['isError'] === true }
+    }
+    if (found === undefined) {
+      throw new Error(
+        `no recorded result for tool call "${callId}" in session ${sessionId}: the call id is unknown, or the `
+          + 'tool has not answered yet. Take the id from session_messages { includeToolCalls: true }.',
+      )
+    }
+    const capped = found.text.length > maxChars ? truncateText(found.text, maxChars) : found.text
+    return {
+      sessionId,
+      callId,
+      ...(name === undefined ? {} : { name }),
+      chars: found.chars,
+      text: capped,
+      ...(capped.length < found.text.length ? { truncated: true as const } : {}),
+      ...(found.error ? { error: true as const } : {}),
+    }
+  }
+
+  /**
    * The durable session log.
    *
    * `sessionQuery` is the purpose-built reader; `sessionController.inspect` is

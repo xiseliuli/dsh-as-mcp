@@ -275,7 +275,8 @@ describe('MCP Streamable HTTP endpoint', () => {
       workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
       session: [
         'session_create', 'session_list', 'session_search', 'session_fork', 'session_rename',
-        'session_set_model', 'session_prompt', 'session_messages', 'session_queue', 'session_cancel',
+        'session_set_model', 'session_prompt', 'session_messages', 'session_tool_result', 'session_queue',
+        'session_cancel',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -291,7 +292,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(27)
+      expect(all).toHaveLength(28)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {
@@ -541,6 +542,26 @@ describe('MCP Streamable HTTP endpoint', () => {
       expect(isError).toBe(false)
       expect(seen).toEqual([{ sessionId: 's', messageId: 'm', action: 'remove' }])
       expect(JSON.parse(text)).toEqual({ accepted: true, action: 'remove' })
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('forwards session_tool_result lookups', async () => {
+    const seen: unknown[] = []
+    const own = await boot(stubDriver({
+      readToolResult: async (sessionId, callId, maxChars) => {
+        seen.push({ sessionId, callId, maxChars })
+        return { sessionId, callId, chars: 2, text: 'ok' }
+      },
+    }), testConfig({ session: true }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_tool_result', {
+        sessionId: 's', callId: 'call-1', maxChars: 10,
+      })
+      expect(isError).toBe(false)
+      expect(seen).toEqual([{ sessionId: 's', callId: 'call-1', maxChars: 10 }])
+      expect(JSON.parse(text)).toEqual({ sessionId: 's', callId: 'call-1', chars: 2, text: 'ok' })
     } finally {
       await own.stop()
     }

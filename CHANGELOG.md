@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.36.0
+
+- **`session_tool_result`** (28th tool): read one recorded tool result by call id —
+  the text, its original length, whether the harness marked it an error, and a
+  `maxChars` cap. `includeToolCalls` already says how large a result was; this is the
+  targeted follow-up for debugging the failure itself, without re-reading a long
+  transcript. The call id comes from that transcript, so the lookup is bounded and
+  scoped to one call.
+- Availability map, both README tool tables, the capability audit and the acceptance
+  script's expected-tool list are updated; the exercise now fetches a real bash
+  result by id and checks its length against the transcript's `resultChars`.
+
 ## 0.35.0
 
 - `session_search` hits now carry `parentSessionId` and `origin: "subagent"` when the

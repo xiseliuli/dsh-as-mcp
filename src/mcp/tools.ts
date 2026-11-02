@@ -65,6 +65,7 @@ export type McpDriver = Pick<
   | 'promptSession'
   | 'cancelSession'
   | 'readTranscript'
+  | 'readToolResult'
   | 'readFile'
   | 'readImage'
   | 'writeFile'
@@ -817,6 +818,30 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           ...(args.content === undefined ? {} : { content: args.content }),
         }))
       }),
+    )
+
+    server.registerTool(
+      'session_tool_result',
+      {
+        title: 'Read one recorded tool result',
+        description:
+          'Return the recorded textual result of one tool call, addressed by the call id from '
+          + 'session_messages { includeToolCalls: true }. Use it to read what a tool actually returned (an '
+          + 'error message, a failing test) without re-reading the transcript; the call is capped by maxChars '
+          + 'and reports its original length and whether the harness marked it an error.',
+        inputSchema: z.object({
+          sessionId: z.string(),
+          callId: z.string().min(1).describe('Tool call id from session_messages { includeToolCalls: true }.'),
+          maxChars: z.number().int().positive().max(100_000).optional()
+            .describe('Cap on the returned text. Defaults to 4000 characters.'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('session_tool_result', log, async (args) => ok(await driver.readToolResult(
+        args.sessionId,
+        args.callId,
+        args.maxChars ?? 4_000,
+      ))),
     )
 
     server.registerTool(
