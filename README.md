@@ -933,7 +933,8 @@ README's configuration sample against the keys `normalizeConfig` accepts, the se
 paths against those same keys (a config key with no field silently disappears from the panel, and a
 field for an unknown key writes nothing), the `package.json` version against the newest changelog
 heading, the shipped `files` list against what exists (and against maintainer-only directories), and
-every `docs/*.md` and script path the READMEs tell readers to use. It runs inside `tools/release.sh`;
+every `docs/*.md` and script path the READMEs tell readers to use, and that every version cited in
+`docs/LIVE-VERIFICATION.md` has a changelog entry (a cited release that never happened is drift too). It runs inside `tools/release.sh`;
 run it alone after editing documentation or configuration.
 
 `tools/release.sh` is the release checklist as an executable: both typechecks, the test suite, the two

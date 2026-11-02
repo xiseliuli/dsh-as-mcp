@@ -24,7 +24,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 
 | Behaviour | Since | Evidence |
 | --- | --- | --- |
-| Streamable HTTP `initialize`, `tools/list`, `tools/call`; `GET` stream; `text/event-stream` responses | 0.1.0 | smoke + exercise on every release |
+| Streamable HTTP `initialize`, `tools/list`, `tools/call`; `GET` stream; `text/event-stream` responses | ≤0.2.0 (first documented release) | smoke + exercise on every release |
 | A missing or wrong bearer token is `401` with `WWW-Authenticate: Bearer realm="dsh-as-mcp"` | 0.20.6 | request without token → 401 + challenge header |
 | Malformed JSON is `400` and a JSON-RPC `-32700` body | 0.20.6 / 0.23.2 | delivered `{not json` |
 | Unknown method is `-32601` | 0.20.6 | delivered `no/such-method` |
@@ -38,7 +38,7 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 
 | Behaviour | Since | Evidence |
 | --- | --- | --- |
-| `session_create` / `prompt` with an agent reply, tool calls and per-turn + cumulative token usage | 0.1.0 | exercise: real agent wrote, read and ran code |
+| `session_create` / `prompt` with an agent reply, tool calls and per-turn + cumulative token usage | ≤0.2.0 (first documented release) | exercise: real agent wrote, read and ran code |
 | Usage is folded from the durable log and verified against the harness's own `tokenUsage` projection | 0.2.0 | same numbers from both on a real multi-step turn |
 | `session_usage` by session, by batch `sessionIds`, per workspace `cwd`, or all sessions | 0.7.0 / 0.18.0 | exercise + manual: batch and cwd totals matched the per-session rows |
 | `partial: true` only when a snapshot was taken mid-turn; a cancelled-and-settled turn reports final numbers | 0.20.4 | aborted prompt inspected mid-run vs after settle |

@@ -193,6 +193,45 @@ for (const required of ['lib', 'bin', 'cordis.patch.yml', 'README.md', 'README.z
   if (!files.includes(required)) problems.push(`package.json files is missing "${required}"`)
 }
 
+// --- changelog shape and cross-document version claims --------------------
+
+if (headings.length > 1) {
+  for (let index = 1; index < headings.length; index += 1) {
+    const previous = headings[index - 1]
+    const current = headings[index]
+    if (!(previous.localeCompare(current, undefined, { numeric: true }) > 0)) {
+      problems.push(`CHANGELOG.md: ${previous} is not newer than the entry after it (${current})`)
+      break
+    }
+  }
+  const duplicates = headings.filter((version, index) => headings.indexOf(version) !== index)
+  if (duplicates.length > 0) problems.push(`CHANGELOG.md: duplicate version headings: ${[...new Set(duplicates)].join(', ')}`)
+}
+// Live-verification rows cite the version that shipped each behaviour. A cited
+// version that has no changelog entry is either a typo or a behaviour described
+// against a release that never happened; both are worth failing on.
+const released = new Set([...headings, pkg.version])
+const verification = read('docs/LIVE-VERIFICATION.md')
+if (verification !== '') {
+  const cited = new Set(
+    [...verification.matchAll(/(?<![\w.-])(\d+\.\d+\.\d+)(?![\w.-])/g)].map((match) => match[1]),
+  )
+  for (const version of cited) {
+    if (!released.has(version)) problems.push(`docs/LIVE-VERIFICATION.md cites ${version}, which has no changelog entry`)
+  }
+  notes.push(`LIVE-VERIFICATION cites ${cited.size} version(s)`)
+}
+// The capability audit restates the tool count; restating it by hand is exactly
+// how "25 tools" survived three releases.
+const gaps = read('docs/CAPABILITY-GAPS.md')
+const countClaim = gaps.match(/12 \((\d+) as of plugin ([0-9.]+)\)/)
+if (countClaim !== null) {
+  if (Number(countClaim[1]) !== registered.length) {
+    problems.push(`docs/CAPABILITY-GAPS.md says ${countClaim[1]} tools, the code registers ${registered.length}`)
+  }
+  if (!released.has(countClaim[2])) problems.push(`docs/CAPABILITY-GAPS.md says "as of plugin ${countClaim[2]}", which has no changelog entry`)
+}
+
 // --- doc links resolve ----------------------------------------------------
 
 for (const path of ['README.md', 'README.zh.md']) {

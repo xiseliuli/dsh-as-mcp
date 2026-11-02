@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.8
+
+- `tools/check-docs.mjs` now checks release claims: changelog headings must be
+  unique and strictly newest-first, every version cited in
+  `docs/LIVE-VERIFICATION.md` must have a changelog entry, and the tool count
+  restated in `docs/CAPABILITY-GAPS.md` must equal what the code registers.
+- It found one real drift: the verification record cited `0.1.0`, which predates
+  the changelog (whose oldest entry is 0.2.0) — the two rows now read
+  "≤0.2.0 (first documented release)". Negative-tested with a bogus 9.9.9
+  citation: exit 1 naming it.
+
 ## 0.30.7
 
 - `tools/check-docs.mjs` now also checks configuration: each README's YAML sample
