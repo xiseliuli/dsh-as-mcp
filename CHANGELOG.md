@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.23.1
+
+- Verified live (not only in unit tests) that tool-group toggles work end to end:
+  with workspace/files/shell/agentTools/usage all off, `tools/list` advertises
+  exactly `dsh_info` plus the session group (9 tools), calling a disabled tool
+  answers JSON-RPC `-32602 Tool ... not found` rather than running and being
+  refused, `dsh_info` reports the toggles, and `session_prompt` replies omit the
+  `session`/`usage` blocks cleanly (`usageUnavailable` is not raised).
+- Added a test that disables each group in turn and asserts exactly that group's
+  tools leave `tools/list` while every other group stays.
+
 ## 0.23.0
 
 - `session_usage { cwd }` totals every session that ran in one workspace

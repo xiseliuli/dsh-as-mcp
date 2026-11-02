@@ -190,6 +190,54 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('removes exactly the disabled group from tools/list', async () => {
+    const groups: Record<string, string[]> = {
+      workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
+      session: [
+        'session_create', 'session_list', 'session_fork', 'session_rename',
+        'session_set_model', 'session_prompt', 'session_messages', 'session_cancel',
+      ],
+      files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
+      shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
+      agentTools: ['dsh_tool_list', 'dsh_tool_call'],
+      usage: ['session_usage'],
+    }
+    const allOn = {
+      workspace: true, session: true, files: true, shell: true, agentTools: true, usage: true,
+    }
+
+    const full = await boot(stubDriver(), testConfig(allOn))
+    try {
+      const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
+      const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
+      const all = (body.result?.tools ?? []).map((tool) => tool.name)
+      expect(all).toHaveLength(25)
+      expect(all).toContain('dsh_info')
+      for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
+    } finally {
+      await full.stop()
+    }
+
+    // A disabled group leaves the list entirely — a disabled tool is absent, not
+    // present-then-refused, and the other groups are untouched.
+    for (const group of Object.keys(groups)) {
+      const own = await boot(stubDriver(), testConfig({ ...allOn, [group]: false }))
+      try {
+        const response = await rpc(own.url, { jsonrpc: '2.0', id: 61, method: 'tools/list', params: {} })
+        const body = (await readJsonRpc(response, 61)) as { result?: { tools?: { name: string }[] } }
+        const names = (body.result?.tools ?? []).map((tool) => tool.name)
+        for (const name of groups[group] as string[]) expect(names).not.toContain(name)
+        for (const [other, otherNames] of Object.entries(groups)) {
+          if (other === group) continue
+          for (const name of otherNames) expect(names).toContain(name)
+        }
+        expect(names).toContain('dsh_info')
+      } finally {
+        await own.stop()
+      }
+    }
+  })
+
   it('releases the port when disposed, so a restart does not fail', async () => {
     const first = await boot(stubDriver())
     const port = new URL(first.url).port
