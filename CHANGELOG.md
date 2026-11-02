@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.74
+
+- The checks that must act while a turn is open (cancellation, steering into the running turn,
+  the mid-turn model switch) no longer sleep 1.5-3 seconds hoping the turn has started: they
+  poll the session listing's `running` filter (up to 20 seconds) and proceed the moment the turn
+  appears. Same flake discipline as the title check, applied to the remaining fixed waits.
+  The first attempt polled the wrong session variable in the prompt-steer block (the check then
+  saw 3 turns instead of 2); the assertion caught it immediately and the wait is now on
+  `steerSession`, with the full shape green at 158/158.
+
 ## 0.52.73
 
 - The title-visibility check no longer sleeps a fixed 4 seconds waiting for the harness to write

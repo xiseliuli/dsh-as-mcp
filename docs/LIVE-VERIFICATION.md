@@ -125,7 +125,9 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 - Poll for the condition, never sleep a fixed guess. The title-visibility check first waited 4
   seconds for the harness to write `session/title-llm-request`; it now polls the log for up to 20
   seconds and stops as soon as the event appears. A fixed sleep encodes this machine's speed and
-  flakes elsewhere (0.52.73).
+  flakes elsewhere (0.52.73). The same applies to the checks that must act *while* a turn is open:
+  cancellation, steering and the mid-turn switch poll `session_list { running: true }` instead of
+  sleeping 1.5-3 seconds (0.52.74).
 
 ## Not verified here
 

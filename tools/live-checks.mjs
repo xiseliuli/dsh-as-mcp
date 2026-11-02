@@ -197,6 +197,30 @@ async function callTool(name, args = {}) {
   return JSON.parse(text)
 }
 
+/**
+ * Wait until a session reports a running turn.
+ *
+ * Several checks must act *while* a turn is open (cancel it, steer into it, switch its
+ * model). A fixed sleep guesses how long the harness takes to start one; this polls the
+ * listing's `running` filter instead and returns as soon as the turn appears. It returns
+ * false when the session never shows up running — the caller proceeds, and its assertion
+ * reports what it actually observed instead of blaming a timeout.
+ */
+async function waitUntilRunning(sessionId, timeoutMs = 20_000) {
+  if (!has('session_list')) return false
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const listed = await callTool('session_list', { running: true, limit: 50 })
+      if ((listed.sessions ?? []).some((row) => row.sessionId === sessionId)) return true
+    } catch {
+      // the listing can be briefly unavailable; the next poll decides
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  return false
+}
+
 async function attemptTool(name, args = {}) {
   try {
     return { ok: true, payload: await callTool(name, args) }
@@ -1634,7 +1658,7 @@ async function cancellationCheck() {
       },
     }),
   })
-  await new Promise((resolve) => setTimeout(resolve, 3_000))
+  await waitUntilRunning(session.sessionId)
   const cancelledAt = Date.now()
   await fetch(endpoint, {
     method: 'POST',
@@ -2281,7 +2305,7 @@ async function steerCheck() {
     prompt: 'Run the bash command: sleep 10; echo WINDOW. Then reply exactly: WINDOW DONE.',
     wait: false,
   })
-  await new Promise((resolve) => setTimeout(resolve, 1_500))
+  await waitUntilRunning(session.sessionId)
   await callTool('session_prompt', {
     sessionId: session.sessionId,
     prompt: 'Reply with exactly: STEER-INLINE',
@@ -2332,7 +2356,7 @@ async function steerCheck() {
     prompt: 'Run the bash command: sleep 10; echo WINDOW. Then reply exactly: WINDOW DONE.',
     wait: false,
   })
-  await new Promise((resolve) => setTimeout(resolve, 1_500))
+  await waitUntilRunning(steerSession.sessionId)
   const viaPrompt = await callTool('session_prompt', {
     sessionId: steerSession.sessionId,
     prompt: 'Reply with exactly: STEER-VIA-PROMPT',
@@ -2397,8 +2421,8 @@ async function midTurnSwitchCheck() {
     + 'Then reply with exactly: MID DONE.'
   const key = `mid-turn-${Date.now()}`
   await callTool('session_prompt', { sessionId: session.sessionId, prompt, idempotencyKey: key, wait: false })
-  // Give the turn a moment to start on the first route, then switch mid-flight.
-  await new Promise((resolve) => setTimeout(resolve, 2_000))
+  // Wait for the turn to be running on the first route, then switch mid-flight.
+  await waitUntilRunning(session.sessionId)
   await callTool('session_set_model', {
     sessionId: session.sessionId,
     provider: second.provider,
