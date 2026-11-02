@@ -221,12 +221,19 @@ describe('locateTurn', () => {
 })
 
 describe('DshDriver.searchSessions', () => {
-  function searchable(result: { items: { sessionId: string; snippet: string }[]; hasMore: boolean }): DshDriver {
+  function searchable(
+    result: { items: { sessionId: string; snippet: string }[]; hasMore: boolean },
+    summaries: { sessionId: string; cwd?: string; updatedAt?: number; running?: boolean }[] = [],
+    listFails = false,
+  ): DshDriver {
     const ctx = new Context()
     contexts.push(ctx)
     ctx.provide('sessionController', {
       create: async () => ({ sessionId: 's' }),
-      list: async () => ({ items: [] }),
+      list: async () => {
+        if (listFails) throw new Error('session listing unavailable')
+        return { items: summaries }
+      },
       prompt: async () => ({ accepted: true }),
       cancel: () => ({ accepted: true }),
       inspect: async () => ({ events: [] }),
@@ -238,10 +245,25 @@ describe('DshDriver.searchSessions', () => {
     return new DshDriver(ctx, () => testConfig())
   }
 
-  it('passes the harness matches and hasMore through', async () => {
-    const driver = searchable({ items: [{ sessionId: 'a', snippet: '…needle…' }], hasMore: true })
-    await expect(driver.searchSessions({ query: 'needle' }))
-      .resolves.toEqual({ items: [{ sessionId: 'a', snippet: '…needle…' }], hasMore: true })
+  it('passes the harness matches and hasMore through, enriched from the listing', async () => {
+    const driver = searchable(
+      { items: [{ sessionId: 'a', snippet: '…needle…' }], hasMore: true },
+      [{ sessionId: 'a', cwd: '/tmp/project', updatedAt: 42, running: true }],
+    )
+    await expect(driver.searchSessions({ query: 'needle' })).resolves.toEqual({
+      items: [{ sessionId: 'a', snippet: '…needle…', cwd: '/tmp/project', updatedAt: 42, running: true }],
+      hasMore: true,
+    })
+  })
+
+  it('still returns the matches when the listing for context fails', async () => {
+    const driver = searchable(
+      { items: [{ sessionId: 'a', snippet: 'hit' }], hasMore: false },
+      [],
+      true,
+    )
+    await expect(driver.searchSessions({ query: 'hit' }))
+      .resolves.toEqual({ items: [{ sessionId: 'a', snippet: 'hit' }], hasMore: false })
   })
 
   it('applies a caller limit and reports that it cut', async () => {

@@ -456,8 +456,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       {
         title: 'Search session content',
         description:
-          'Search the message content of the sessions this DSH knows, returning each match as sessionId '
-          + 'plus a snippet. Use it to find the session that discussed a topic before prompting or reading '
+          'Search the message content of the sessions this DSH knows, returning each match as sessionId, '
+          + 'a snippet, and (when the session listing is readable) its workspace cwd, updatedAt and '
+          + 'running flag. Use it to find the session that discussed a topic before prompting or reading '
           + 'it. Results match tokens and phrases (FTS), not arbitrary substrings, and multiple terms must all match (AND). The harness bounds one '
           + 'search at 20 matches and reports hasMore; sessions are matched on messages, not titles. Search '
           + 'is opt-in: a profile whose session-query index is configured with openAt "never" fails with an '

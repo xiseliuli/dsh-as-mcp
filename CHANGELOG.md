@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.26.0
+
+- `session_search` hits now carry context: `cwd`, `updatedAt` and `running` from
+  one session listing, so a caller can tell which workspace a match came from and
+  how recent it is without a second call. A listing failure does not fail the
+  search — the matches are still returned, just without that context.
+
 ## 0.25.1
 
 - Added a **Deployment requirements** section to both READMEs: one table of what

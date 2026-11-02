@@ -1698,7 +1698,14 @@ export class DshDriver {
    * the harness does not offer one.
    */
   async searchSessions(request: { query: string; limit?: number }): Promise<{
-    items: readonly { sessionId: string; snippet: string }[]
+    items: readonly {
+      sessionId: string
+      snippet: string
+      /** The workspace the match ran in, when the session listing is readable. */
+      cwd?: string
+      updatedAt?: number
+      running?: boolean
+    }[]
     hasMore: boolean
   }> {
     const query = request.query.trim()
@@ -1740,8 +1747,29 @@ export class DshDriver {
     // A caller's own cap is applied on top of the harness bound; when it actually
     // cut something, `hasMore` says so even if the harness said false.
     const limit = request.limit === undefined ? undefined : Math.max(1, request.limit)
+    const items = limit === undefined ? result.items : result.items.slice(0, limit)
+
+    // A snippet alone does not tell a caller which workspace or how recent the
+    // match is, and one listing is enough to answer both. A listing failure is
+    // not a search failure: the matches are still valid without this context.
+    let summaries: readonly DshSessionSummary[] | undefined
+    try {
+      summaries = await this.sessionSummaries()
+    } catch {
+      summaries = undefined
+    }
+    const byId = new Map((summaries ?? []).map((summary) => [summary.sessionId, summary]))
     return {
-      items: limit === undefined ? result.items : result.items.slice(0, limit),
+      items: items.map((item) => {
+        const summary = byId.get(item.sessionId)
+        return {
+          sessionId: item.sessionId,
+          snippet: item.snippet,
+          ...(summary?.cwd === undefined ? {} : { cwd: summary.cwd }),
+          ...(summary?.updatedAt === undefined ? {} : { updatedAt: summary.updatedAt }),
+          ...(summary?.running === undefined ? {} : { running: summary.running }),
+        }
+      }),
       hasMore: limit !== undefined && result.items.length > limit ? true : result.hasMore,
     }
   }
