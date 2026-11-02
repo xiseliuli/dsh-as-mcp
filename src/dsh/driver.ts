@@ -2663,6 +2663,8 @@ export class DshDriver {
     includeTurns?: boolean
     /** Read money from cost-meter; false skips the ledger on a large scan. */
     includeCost?: boolean
+    /** Fold each row from this seq onward, for a segment of a long session. */
+    sinceSeq?: number
     limit: number
   }): Promise<SessionUsageReport> {
     const includeSubagents = request.includeSubagents ?? true
@@ -2706,7 +2708,14 @@ export class DshDriver {
         truncatedRows = true
         return
       }
-      rows.push(await this.usageRow(sessionId, origin, includeTurns, parentSessionId, includeCost))
+      rows.push(await this.usageRow(
+        sessionId,
+        origin,
+        includeTurns,
+        parentSessionId,
+        includeCost,
+        request.sinceSeq,
+      ))
     }
 
     if (request.sessionIds !== undefined && request.sessionIds.length > 0) {
@@ -2995,11 +3004,13 @@ export class DshDriver {
     includeTurns: boolean,
     parentSessionId?: string,
     includeCost = true,
+    sinceSeq?: number,
   ): Promise<SessionUsageRow> {
     try {
       const cut = await this.readUsageCut(sessionId)
       const report = buildUsageReport(cut, {
         includeTurns,
+        ...(sinceSeq === undefined ? {} : { sinceSeq }),
         ...(hasOpenTurn(cut.events) ? { partial: true } : {}),
       })
       const cost = includeCost

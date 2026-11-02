@@ -954,6 +954,17 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .boolean()
             .optional()
             .describe('Also return the per-turn breakdown of each row. Defaults to false.'),
+          sinceSeq: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .describe(
+              'Fold each row from this event seq onward, for an incremental receipt on a long session. A '
+              + 'windowed report cannot be compared with the harness projection (it covers the whole log), so '
+              + 'verifiedAgainstProjection is false for it; turns that started before the window are only '
+              + 'partly inside the segment.',
+            ),
           includeCost: z
             .boolean()
             .optional()
@@ -992,6 +1003,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         ...(args.includeSubagents === undefined ? {} : { includeSubagents: args.includeSubagents }),
         ...(args.includeTurns === undefined ? {} : { includeTurns: args.includeTurns }),
         ...(args.includeCost === undefined ? {} : { includeCost: args.includeCost }),
+        ...(args.sinceSeq === undefined ? {} : { sinceSeq: args.sinceSeq }),
         limit: args.limit ?? 20,
       }))),
     )

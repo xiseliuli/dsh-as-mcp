@@ -884,6 +884,31 @@ describe('DshDriver.sessionUsage', () => {
     expect((report.notes ?? []).some((note) => /unfinished turn/.test(note))).toBe(true)
   })
 
+  it('folds only the events at or after sinceSeq', async () => {
+    const twoTurns: DshSessionEvent[] = [
+      event('user/message', { role: 'user', content: [{ type: 'text', text: 'go' }], source: { kind: 'user', rpcId: 'r-1' } }, 0),
+      ...completedTurn(1, 1, [{ step: 0, text: 'one', usage: tokenUsage(100, 10) }]),
+      ...completedTurn(4, 2, [{ step: 0, text: 'two', usage: tokenUsage(30, 3) }]),
+    ]
+    const harness = fakeHarness({ logs: { 'session-1': twoTurns }, summaries: [summary('session-1')] })
+    const { driver } = makeDriver(harness)
+
+    const full = await driver.sessionUsage({ sessionId: 'session-1', includeTurns: true, limit: 5 })
+    const segment = await driver.sessionUsage({
+      sessionId: 'session-1',
+      includeTurns: true,
+      sinceSeq: 4,
+      limit: 5,
+    })
+    expect(full.sessions[0]?.usage?.totals.totalTokens).toBe(143)
+    expect(segment.sessions[0]?.usage?.totals.totalTokens).toBe(33)
+    expect(segment.sessions[0]?.usage?.sinceSeq).toBe(4)
+    expect(segment.sessions[0]?.usage?.byTurn.map((turn) => turn.turn)).toEqual([2])
+    // A window cannot be compared with the whole-log projection.
+    expect(segment.sessions[0]?.usage?.verifiedAgainstProjection).toBe(false)
+    expect(segment.sessions[0]?.usage?.projectionTotals).toBeUndefined()
+  })
+
   it('does not mark a settled session partial', async () => {
     const harness = fakeHarness({ logs: { 'session-1': FIRST_TURN }, summaries: [summary('session-1')] })
     const { driver } = makeDriver(harness)

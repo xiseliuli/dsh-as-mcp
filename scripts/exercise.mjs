@@ -740,6 +740,22 @@ try {
       'a turn that billed tokens names the route that charged them',
       `${modelledTurns.length} of ${perTurn.length} turn(s) with models`,
     )
+    // An incremental receipt: fold from a seq inside the session. It cannot exceed the
+    // full tally, must echo the window, and cannot be projection-verified.
+    const messageSeqs = (await must('session_messages', { sessionId, limit: 200 })).messages ?? []
+    const windowStart = messageSeqs.length > 1 ? messageSeqs[1]?.seq : undefined
+    if (typeof windowStart === 'number') {
+      const segment = await must('session_usage', { sessionId, includeTurns: true, sinceSeq: windowStart })
+      const segmentRow = segment.sessions?.find((row) => row.origin === 'self')
+      check(
+        segmentRow?.usage?.sinceSeq === windowStart &&
+          segmentRow.usage.totals.totalTokens <= receipt.totals.totalTokens &&
+          segmentRow.usage.verifiedAgainstProjection === false,
+        'a sinceSeq receipt folds only the segment and says so',
+        `${segmentRow?.usage?.totals?.totalTokens ?? '?'} of ${receipt.totals.totalTokens} tokens`,
+      )
+    }
+
     check(
       typeof receipt.cost?.available === 'boolean',
       'the receipt states whether money is available',
@@ -1114,15 +1130,27 @@ try {
         'session_tool_result returns the recorded result text',
         `${fetched.chars} chars`,
       )
-      const tail = await must('session_tool_result', {
-        sessionId, callId: withResult.id, maxChars: 40, from: 'end',
-      })
-      check(
-        tail.from === 'end' && tail.truncated === true &&
-          fetched.text.slice(-40) === tail.text,
-        'session_tool_result can return the tail of a long result',
-        `${tail.text.length} chars from the end`,
+      // The tail only truncates for a result longer than the cap; a short result comes
+      // back whole (with no `truncated`), which is correct but does not exercise the
+      // tail path. Pick a long one when the session has it.
+      const tailCandidate = calls.find(
+        (entry) => typeof entry.id === 'string' && typeof entry.resultChars === 'number' && entry.resultChars >= 80,
       )
+      if (tailCandidate !== undefined) {
+        const full = await must('session_tool_result', {
+          sessionId, callId: tailCandidate.id, maxChars: 100_000,
+        })
+        const tail = await must('session_tool_result', {
+          sessionId, callId: tailCandidate.id, maxChars: 40, from: 'end',
+        })
+        check(
+          tail.from === 'end' && tail.truncated === true && full.text.slice(-40) === tail.text,
+          'session_tool_result can return the tail of a long result',
+          `${tail.text.length} chars from the end`,
+        )
+      } else {
+        check(true, 'tail read skipped (no completed result of at least 80 chars)', '')
+      }
       const byName = await must('session_tool_result', {
         sessionId, toolName: withResult.name, maxChars: 200,
       })

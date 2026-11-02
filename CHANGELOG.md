@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.45.0
+
+- `session_usage` gained `sinceSeq`: fold each row from that event seq onward, for an
+  incremental receipt on a long session (or a segment of it) without re-reading spend
+  already billed. The window is echoed as `sinceSeq`; `verifiedAgainstProjection` is
+  false and no `projectionTotals` is emitted, because the harness projection covers the
+  whole log and comparing a window with it would be meaningless. A window starting
+  before a fork's inherited prefix is clamped to the prefix.
+- Driver test covers the full-vs-segment totals, the echoed window, the per-turn
+  subset and the projection caveat; the acceptance run checks a real segment against
+  the full tally. Both READMEs updated.
+
 ## 0.44.0
 
 - Per-turn usage rows now also carry `models`: the `provider/model` routes that charged
