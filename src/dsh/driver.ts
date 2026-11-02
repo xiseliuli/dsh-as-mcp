@@ -2314,8 +2314,12 @@ export class DshDriver {
        * that only needs prose should not grow by every invocation in the session.
        */
       includeToolCalls?: boolean
-      /** Also include `tool/result` events as `role: "tool"` rows, capped like messages. */
-      includeToolResults?: boolean
+      /**
+       * Also include `tool/result` events as `role: "tool"` rows, capped like
+       * messages. `'errors'` keeps only the results the harness marked as failures,
+       * which is the quickest way to find why a turn went wrong.
+       */
+      includeToolResults?: boolean | 'errors'
       /** Only rows the log attributes to this turn; the prompt row has no turn and is filtered out. */
       turn?: number
       /** Per-message character cap; absent means full text (the historical default). */
@@ -2336,7 +2340,7 @@ export class DshDriver {
         // A tool result is part of the timeline a poller wants to reconstruct, but
         // its text can be as large as a file; it is opt-in and capped like any other
         // message instead of being folded into the assistant row.
-        if (event.type === 'tool/result' && options.includeToolResults === true) role = 'tool' as const
+        if (event.type === 'tool/result' && options.includeToolResults !== undefined && options.includeToolResults !== false) role = 'tool' as const
         else continue
       }
       // The message id is what queue mutations address (`SessionUpdateQueue`), so
@@ -2363,6 +2367,7 @@ export class DshDriver {
       const toolError = role === 'tool'
         ? (event.data as { message?: { isError?: unknown } } | undefined)?.message?.isError === true
         : false
+      if (role === 'tool' && options.includeToolResults === 'errors' && !toolError) continue
       const text = textOfBlocks(rawBlocks)
       const toolCalls = options.includeToolCalls === true && role === 'assistant'
         ? toolCallsOfBlocks(rawBlocks, toolResults)

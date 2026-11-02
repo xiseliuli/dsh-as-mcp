@@ -898,6 +898,26 @@ describe('bounded replies', () => {
     expect(none.total).toBe(0)
   })
 
+  it('can keep only failed tool results', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'run it', 0)])
+    sessions.log.push(event('tool/result', {
+      turn: 1, step: 0, message: { role: 'tool', toolCallId: 'ok-1', content: [{ type: 'text', text: 'fine' }] },
+    }, 1))
+    sessions.log.push(event('tool/result', {
+      turn: 1, step: 1,
+      message: { role: 'tool', toolCallId: 'bad-1', content: [{ type: 'text', text: 'boom' }], isError: true },
+    }, 2))
+    const { driver } = driverWith(sessions)
+
+    const all = await driver.readTranscript('session-1', 10, { includeToolResults: true })
+    expect(all.messages.filter((message) => message.role === 'tool')).toHaveLength(2)
+    const failures = await driver.readTranscript('session-1', 10, { includeToolResults: 'errors' })
+    expect(failures.messages.filter((message) => message.role === 'tool')).toEqual([
+      expect.objectContaining({ role: 'tool', callId: 'bad-1', error: true, text: 'boom' }),
+    ])
+    expect(failures.messages.some((message) => message.role === 'user')).toBe(true)
+  })
+
   it('attributes rows to their turn and can filter by it', async () => {
     const sessions = fakeSessions([userMessage('req-1', 'one', 0), userMessage('req-2', 'two', 1)])
     sessions.log.push(event('assistant/message', {

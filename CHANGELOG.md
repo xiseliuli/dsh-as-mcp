@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.42.0
+
+- `session_messages { includeToolResults: "errors" }` keeps only the tool results the
+  harness marked as failures, so finding why a turn went wrong is one read instead of
+  scanning every result. `true` still returns all rows; the boolean form is unchanged.
+- Driver test covers the filter; the acceptance run compares the returned failures
+  with the error flags in the full result list. Both READMEs describe it.
+
 ## 0.41.0
 
 - `session_messages` rows now carry their `turn` and `step` when the log attributes

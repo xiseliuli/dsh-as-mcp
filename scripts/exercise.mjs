@@ -1073,6 +1073,21 @@ try {
       )
     }
 
+    // Only the failed results: the fast path for "why did this turn go wrong".
+    const failedOnly = await must('session_messages', {
+      sessionId,
+      limit: 200,
+      includeToolResults: 'errors',
+      maxCharsPerMessage: 200,
+    })
+    const failedRows = (failedOnly.messages ?? []).filter((entry) => entry.role === 'tool')
+    const expectedFailures = toolRows.filter((entry) => entry.error === true).length
+    check(
+      failedRows.length === expectedFailures && failedRows.every((entry) => entry.error === true),
+      'includeToolResults: "errors" keeps only failed results',
+      `${failedRows.length} failure(s) of ${toolRows.length} result(s)`,
+    )
+
     // The call list reports sizes; one lookup fetches the text of a single result,
     // which is what debugging a failure actually needs.
     const withResult = calls.find((entry) => typeof entry.resultChars === 'number' && entry.resultChars > 0)

@@ -755,12 +755,13 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               + 'prompt itself has no turn number, so it is not part of a turn-filtered read).',
             ),
           includeToolResults: z
-            .boolean()
+            .union([z.boolean(), z.literal('errors')])
             .optional()
             .describe(
               'Also include tool results as role "tool" rows (callId, text, error), so one read covers the whole '
-              + 'timeline. Off by default because a result can be as large as a file; each row obeys '
-              + 'maxCharsPerMessage.',
+              + 'timeline; "errors" keeps only the ones the harness marked as failures, which is the quickest way '
+              + 'to see why a turn went wrong. Off by default because a result can be as large as a file; each '
+              + 'row obeys maxCharsPerMessage.',
             ),
           includeToolCalls: z
             .boolean()
