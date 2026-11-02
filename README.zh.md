@@ -819,6 +819,9 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 | `workspace`、`session`、`agentTools`、`usage` | 18 | live-checks 59/59（被关闭的组会在原因里点名 `tools.<group>` 开关） |
 | 仅 `files`、`shell` | 11 | live-checks 65/65（会话/用量/队列/搜索段落跳过） |
 
+带 `--with-model` 的两行是含真实轮次的计数；`tools/release.sh --shapes` 不加该参数时只跑廉价子集，
+同样四个形态报 103/44/59/65。
+
 `node tools/shapes.mjs [--with-model]` 用一条命令复现上面的表：为每个形态建临时 profile、装入打包产物、
 等 harness 服务真正挂载（socket 会比服务先应答）、跑 `tools/live-checks.mjs`、打印计数，并清理所有
 profile 与进程。改表时用它，而不是手工测。
@@ -835,7 +838,7 @@ profile 与进程。改表时用它，而不是手工测。
 把漂移留到发布时才发现）；也可以单独运行。`tools/live-checks.mjs` 会先读取实际公布的工具面，因此也能用于**收窄的部署**（关闭了部分工具组的 profile）：对应段落会明确跳过而不是失败。
 
 `tools/release.sh` 把发布检查清单变成可执行脚本：两端 typecheck、测试、两个 bundle、打包、断言包里没有
-维护者专用目录、可选 live 检查（`--live URL [--with-model] [--with-subagent]`，或 `--full-live` 一次带上两者）、可选的完整验收（`--acceptance`：自建临时 profile 跑完
+维护者专用目录、可选 live 检查（`--live URL [--with-model] [--with-subagent]`，或 `--full-live` 一次带上两者）、`--shapes`（验证所有已文档化的部署形态，走 `tools/shapes.mjs`）、可选的完整验收（`--acceptance`：自建临时 profile 跑完
 再拆除）、以及可选安装进桌面 profile 并生成回滚目录（`--install`）。如果桌面 profile 已是同版本，它会拒绝重装——因为 pnpm 会把同一 tarball 路径当作
 "已安装"。
 

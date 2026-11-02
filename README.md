@@ -943,6 +943,9 @@ build:
 | `workspace`, `session`, `agentTools`, `usage` | 18 | live-checks 59/59 (a disabled group's reason names its `tools.<group>` switch) |
 | `files`, `shell` only | 11 | live-checks 65/65 (session/usage/queue/search sections skip) |
 
+The two turn-running rows are measured with `--with-model`; `tools/release.sh --shapes` without it
+exercises the cheap subset and reports 103/44/59/65 for the same four shapes.
+
 `node tools/shapes.mjs [--with-model]` reproduces that table in one command: for each shape it boots a
 throwaway profile with that shape's `tools` block, installs the packaged tarball, waits until the harness
 services are mounted (the socket answers before that), runs `tools/live-checks.mjs`, and prints the counts,
@@ -965,7 +968,7 @@ documentation or configuration.
 
 `tools/release.sh` is the release checklist as an executable: both typechecks, the test suite, the two
 bundles, the pack, an assertion that the package contains no maintainer-only directory, optional live
-checks (`--live URL [--with-model] [--with-subagent]`, or `--full-live` for both), an optional full acceptance run against a throwaway profile it
+checks (`--live URL [--with-model] [--with-subagent]`, or `--full-live` for both), `--shapes` to verify every documented deployment shape (`tools/shapes.mjs`), an optional full acceptance run against a throwaway profile it
 boots and tears down (`--acceptance`), and optional install into the desktop profile with a rollback
 directory (`--install`). It refuses to reinstall the version already in that profile, because pnpm
 treats the same tarball path as already-installed.

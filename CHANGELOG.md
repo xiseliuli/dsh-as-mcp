@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.37
+
+- `tools/release.sh --shapes` runs the shape driver as a release step (add `--with-model` to
+  spend turns). The driver also now picks **free ports** per shape instead of assuming
+  8821/8822 and killing whatever listens there — a release step must never kill an
+  operator's own endpoint. Both READMEs list the flag.
+- Verified end to end: `release.sh --skip-tests --shapes` reports 103/44/59/65 for the four
+  shapes (the cheap subset), and the READMEs now say those differ from the 143/84 rows because
+  those are measured with `--with-model`.
+
 ## 0.52.36
 
 - `tools/shapes.mjs` turns the hand-measured deployment matrix into one command: per shape it

@@ -13,6 +13,8 @@
 #   tools/release.sh --live URL          # ...then run tools/live-checks.mjs there
 #   tools/release.sh --live URL --with-model --with-subagent
 #   tools/release.sh --live URL --full-live   # same two flags in one word
+#   tools/release.sh --shapes             # verify every documented deployment shape
+#                                        # (add --with-model to spend turns)
 #   tools/release.sh --install           # ...then pack into ~/.dsh/packages and
 #                                        # install into the desktop profile, with a
 #                                        # rollback directory alongside
@@ -31,6 +33,7 @@ LIVE_ARGS=()
 INSTALL=0
 SKIP_TESTS=0
 ACCEPTANCE=0
+SHAPES=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --live)
@@ -59,6 +62,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --acceptance)
       ACCEPTANCE=1
+      shift
+      ;;
+    --shapes)
+      SHAPES=1
       shift
       ;;
     -h|--help)
@@ -119,6 +126,16 @@ if [[ -n "$LIVE_URL" ]]; then
   step "live checks against $LIVE_URL"
   env -u http_proxy -u https_proxy -u all_proxy -u NODE_USE_ENV_PROXY \
     node tools/live-checks.mjs --url "$LIVE_URL" "${LIVE_ARGS[@]}"
+fi
+
+if [[ $SHAPES -eq 1 ]]; then
+  step "deployment shapes"
+  SHAPES_ARGS=(--tarball "$TARBALL")
+  for argument in "${LIVE_ARGS[@]:-}"; do
+    [[ "$argument" == "--with-model" ]] && SHAPES_ARGS+=(--with-model)
+  done
+  env -u http_proxy -u https_proxy -u all_proxy -u NODE_USE_ENV_PROXY \
+    node tools/shapes.mjs "${SHAPES_ARGS[@]}"
 fi
 
 if [[ $ACCEPTANCE -eq 1 ]]; then

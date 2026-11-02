@@ -23,12 +23,11 @@
  */
 
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:net'
 import { existsSync, mkdirSync, openSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
-const ENDPOINT_PORT = 8821
-const WEB_PORT = 8822
 const RUNTIME = process.env.DSH_RUNTIME ?? '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
 const HOME = homedir()
 const DSH_HOME = process.env.DSH_HOME ?? join(HOME, '.dsh')
@@ -94,20 +93,25 @@ function run(command, args, options = {}) {
   })
 }
 
-function killPort(port) {
-  return new Promise((resolve) => {
-    const child = spawn('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN'])
-    let out = ''
-    child.stdout.on('data', (chunk) => { out += chunk })
-    child.on('exit', async () => {
-      const pids = [...new Set(out.split('\n').slice(1).map((line) => line.split(/\s+/)[1]).filter(Boolean))]
-      for (const pid of pids) {
-        try { process.kill(Number(pid), 'SIGTERM') } catch {}
-      }
-      if (pids.length > 0) await new Promise((resolve) => setTimeout(resolve, 2_000))
-      resolve()
+/** Two free loopback ports, chosen by the OS rather than assumed. */
+function allocatePorts() {
+  return new Promise((resolve, reject) => {
+    const servers = []
+    const listen = () => new Promise((done) => {
+      const server = createServer()
+      server.listen(0, '127.0.0.1', () => { servers.push(server); done(server) })
     })
-    child.on('error', () => resolve())
+    ;(async () => {
+      try {
+        const first = await listen()
+        const second = await listen()
+        const ports = [first.address().port, second.address().port]
+        for (const server of servers) server.close()
+        resolve(ports)
+      } catch (error) {
+        reject(error)
+      }
+    })()
   })
 }
 
@@ -181,6 +185,7 @@ const results = []
 try {
   for (const [index, shape] of selected.entries()) {
     const profile = `dsh-as-mcp-shapes-${process.pid}-${index}`
+    const [endpointPort, webPort] = await allocatePorts()
     const profileDir = join(DSH_HOME, 'profiles', profile)
     process.stdout.write(`\n== ${shape.label}\n`)
     rmSync(profileDir, { recursive: true, force: true })
@@ -200,7 +205,7 @@ try {
     }
     writeFileSync(join(profileDir, 'cordis.patch.yml'), `- id: dsh-as-mcp
   config:
-    http: { enabled: true, host: 127.0.0.1, port: ${ENDPOINT_PORT}, path: /mcp, mountOnWebServer: false }
+    http: { enabled: true, host: 127.0.0.1, port: ${endpointPort}, path: /mcp, mountOnWebServer: false }
     tools: { ${Object.entries(shape.groups).map(([group, on]) => `${group}: ${on}`).join(', ')} }
     agentTools: { allow: [], deny: [] }
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900000, scope: all }
@@ -208,18 +213,16 @@ try {
     approval: { policy: inherit }
 `)
 
-    await killPort(ENDPOINT_PORT)
-    await killPort(WEB_PORT)
     const serverLog = `/tmp/dsh-as-mcp-shapes-${process.pid}-${index}.log`
     const logFd = openSync(serverLog, 'w')
-    const server = spawn(RUNTIME, ['--profile', profile, '--no-open', '--port', String(WEB_PORT)], {
+    const server = spawn(RUNTIME, ['--profile', profile, '--no-open', '--port', String(webPort)], {
       cwd: '/tmp',
       stdio: ['ignore', logFd, logFd],
       detached: false,
     })
     try {
-      const ready = await waitForEndpoint(`http://127.0.0.1:${ENDPOINT_PORT}/mcp`, 60_000)
-        && await waitForServices(`http://127.0.0.1:${ENDPOINT_PORT}/mcp`, 60_000)
+      const ready = await waitForEndpoint(`http://127.0.0.1:${endpointPort}/mcp`, 60_000)
+        && await waitForServices(`http://127.0.0.1:${endpointPort}/mcp`, 60_000)
       if (!ready) {
         process.stdout.write(`  endpoint never answered; server log:\n${readFileSync(serverLog, 'utf8').split('\n').slice(-6).join('\n')}\n`)
         results.push({ shape, passed: 0, failed: 1, detail: 'endpoint never answered' })
@@ -229,7 +232,7 @@ try {
       const output = await new Promise((resolve) => {
         const child = spawn(process.execPath, [
           'tools/live-checks.mjs',
-          '--url', `http://127.0.0.1:${ENDPOINT_PORT}/mcp`,
+          '--url', `http://127.0.0.1:${endpointPort}/mcp`,
           ...liveArgs,
         ], {
           cwd: process.cwd(),
@@ -260,8 +263,6 @@ try {
     } finally {
       server.kill('SIGTERM')
       await new Promise((resolve) => setTimeout(resolve, 1_500))
-      await killPort(ENDPOINT_PORT)
-      await killPort(WEB_PORT)
       rmSync(profileDir, { recursive: true, force: true })
       rmSync(serverLog, { force: true })
     }
