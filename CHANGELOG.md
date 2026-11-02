@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.41
+
+- Removed the same class of flake risk from the mid-turn switch check: it switched routes
+  1.5 s after starting a turn made of three fast `echo` commands, so on a quick route the
+  turn could end first and the switch would apply to a *later* turn — the assertion would
+  fail without anything being wrong with the plugin. The prompt now starts with
+  `sleep 6`, so the turn is guaranteed to be open when the switch lands (and the check keeps
+  asserting that both routes answered the same turn).
+
 ## 0.52.40
 
 - Hardened the progress-notification check after one full-shape run reported 144/1 that

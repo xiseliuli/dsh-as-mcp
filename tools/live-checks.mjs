@@ -2059,12 +2059,16 @@ async function midTurnSwitchCheck() {
     provider: first.provider,
     model: first.models[0].id,
   })
-  const prompt = 'Run these with your shell tool one at a time: echo ONE, then echo TWO, then echo THREE. '
-    + 'After the third, reply with exactly: MID DONE.'
+  // The first command sleeps, so the turn is guaranteed to still be open when the
+  // switch lands: without it a fast route can finish three echoes before the delay
+  // elapses, and the switch would apply to a later turn instead (a flake risk the
+  // assertion cannot see coming).
+  const prompt = 'Run the bash command: sleep 6; echo WINDOW. '
+    + 'Then reply with exactly: MID DONE.'
   const key = `mid-turn-${Date.now()}`
   await callTool('session_prompt', { sessionId: session.sessionId, prompt, idempotencyKey: key, wait: false })
   // Give the turn a moment to start on the first route, then switch mid-flight.
-  await new Promise((resolve) => setTimeout(resolve, 1_500))
+  await new Promise((resolve) => setTimeout(resolve, 2_000))
   await callTool('session_set_model', {
     sessionId: session.sessionId,
     provider: second.provider,
