@@ -579,11 +579,14 @@ try {
       timeoutMs: 240_000,
     })
     const awaitMessages = await must('session_messages', { sessionId, limit: 100, role: 'user' })
+    const awaitPrompt = (awaitMessages.messages ?? []).filter(
+      (message) => String(message.text ?? '').includes('await marker'),
+    )
     check(
       awaited.replayed === true && /await marker/i.test(awaited.turn?.reply ?? '') &&
-        (awaitMessages.messages ?? []).filter((message) => String(message.text ?? '').includes('await marker')).length === 1,
+        awaitPrompt.length === 1 && awaitPrompt[0]?.requestId === `dsh-as-mcp-idem-${awaitKey}`,
       'a queue-then-retry awaits the queued turn without re-sending it',
-      `${(awaitMessages.messages ?? []).filter((message) => String(message.text ?? '').includes('await marker')).length} prompt(s)`,
+      `${awaitPrompt.length} prompt(s), requestId ${String(awaitPrompt[0]?.requestId ?? 'absent').slice(-20)}`,
     )
   }
 

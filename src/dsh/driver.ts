@@ -462,6 +462,13 @@ export interface TranscriptMessage {
   readonly toolCalls?: readonly TranscriptToolCall[]
   /** The harness message id; queue mutations address a pending message by it. */
   readonly id?: string
+  /**
+   * The request id the admission was made under, for user messages.
+   *
+   * It is what the log records as `source.rpcId` and what `idempotencyKey` derives,
+   * so a caller can correlate its own prompts (and retries) with transcript entries.
+   */
+  readonly requestId?: string
   /** The message text, cut to the caller's per-message cap when one was given. */
   readonly text: string
   readonly time: number
@@ -2287,6 +2294,9 @@ export class DshDriver {
       const messageId = role === 'user'
         ? (event.data as { id?: unknown } | undefined)?.id
         : (event.data as { message?: { id?: unknown } } | undefined)?.message?.id
+      const requestId = role === 'user'
+        ? (event.data as { source?: { rpcId?: unknown } } | undefined)?.source?.rpcId
+        : undefined
       if (options.role !== undefined && options.role !== role) continue
       if (options.sinceSeq !== undefined && event.seq <= options.sinceSeq) continue
       if (options.beforeSeq !== undefined && event.seq >= options.beforeSeq) continue
@@ -2306,6 +2316,7 @@ export class DshDriver {
       messages.push({
         role,
         ...(typeof messageId === 'string' && messageId !== '' ? { id: messageId } : {}),
+        ...(typeof requestId === 'string' && requestId !== '' ? { requestId } : {}),
         ...(toolCalls.length === 0 ? {} : { toolCalls }),
         text: truncated ? truncateText(text, cap) : text,
         time: event.time,

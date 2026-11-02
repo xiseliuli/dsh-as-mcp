@@ -927,6 +927,28 @@ describe('bounded replies', () => {
     })).rejects.toThrow(/either callId or toolName/)
   })
 
+  it('carries the admission request id on user messages', async () => {
+    const sessions = fakeSessions()
+    // The fake prompt() stamps source.rpcId from the request it was given.
+    await (sessions.controller.prompt as (request: unknown) => Promise<unknown>)({
+      requestId: 'dsh-as-mcp-idem-corr-1',
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'correlated prompt' }],
+    } as never)
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'reply' }] },
+    }, 50))
+    const { driver } = driverWith(sessions)
+    const transcript = await driver.readTranscript('session-1', 10)
+    const user = transcript.messages.find((message) => message.role === 'user')
+    expect(user?.requestId).toBe('dsh-as-mcp-idem-corr-1')
+    // Assistant messages have no admission id.
+    expect(transcript.messages.find((message) => message.role === 'assistant')?.requestId).toBeUndefined()
+  })
+
   it('reports the tool calls a model requested only when asked', async () => {
     const sessions = fakeSessions()
     sessions.log.push(userMessage('req-1', 'run it', 0))

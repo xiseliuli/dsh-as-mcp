@@ -3,6 +3,13 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.37.7
+
+- `session_messages` now carries the admission `requestId` on user messages (the same
+  id `idempotencyKey` derives and the log records as `source.rpcId`). A caller can
+  correlate its own prompts and retries with transcript entries instead of matching
+  on text; the acceptance run checks the awaited prompt's id.
+
 ## 0.37.6
 
 - **Fixed a real duplicate-send race in idempotent retries.** `wait: false` returns
