@@ -205,7 +205,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `session_set_model` | 切换后续轮次使用的 provider 路由与模型：先用便宜模型、难任务时升级、或某路由不可用时回退。回复里的按模型用量会显示每条路由各花了多少。 |
 | `session_rename` | 给会话设置显式的用户标题，让外部 harness 为任务起的名字在 DSH 界面里保持不变（同时停止自动生成标题）。若该会话正被另一个 DSH 进程持有写句柄，harness 会拒绝并在错误里说明。 |
 | `session_list` | 存活会话摘要，按最近更新排序；`includeTitle` 附加每个会话的最新标题（每会话一次日志读取），`cwd`/`running` 会在 limit 生效前过滤。回复带 `total`（截断前匹配数）以及 limit 有隐藏时的 `truncated`。 |
-| `session_prompt` | 给 DSH 会话下发一个任务；默认等待本轮结束，返回回复、agent 调过的工具调用，以及本轮的 token 用量和该会话的累计量。`toolCalls` 控制每次调用的回显量：`summary`（默认）只给名称/id/参数字节数，`full` 附带参数（受 `maxArgumentChars` 限制），`none` 只留计数。可用 `images` 附带截图（png/jpeg/webp/gif，最多 4 张）。带 `idempotencyKey` 时可安全重试：重复调用会返回已有轮次，而不是把任务再发一遍。客户端带 `progressToken` 时，等待期间最多每秒一次 `notifications/progress`；客户端取消请求时等待立即结束，回复标明 `aborted`/partial。`maxReplyChars` 可选地限制 agent 最终回复长度（被截断时带 `replyTruncated` 和原始 `replyChars`），`turn.models` 列出实际作答的 `provider/model`。客户端对该调用发出 `notifications/cancelled` 时，会中止对应轮次，等待以 `turn.aborted: true` 收尾——这条通知由端点自己路由，因为所用 SDK 版本只确认、不处理它。用量快照只有在轮次仍在运行时才带 `partial: true`；取消后已结算的轮次给出的是最终数字。 |
+| `session_prompt` | 给 DSH 会话下发一个任务；默认等待本轮结束，返回回复、agent 调过的工具调用，以及本轮的 token 用量和该会话的累计量。`toolCalls` 控制每次调用的回显量：`summary`（默认）只给名称/id/参数字节数，`full` 附带参数（受 `maxArgumentChars` 限制），`none` 只留计数。可用 `images` 附带截图（png/jpeg/webp/gif，最多 4 张）。带 `idempotencyKey` 时可安全重试：重复调用会返回已有轮次，而不是把任务再发一遍。客户端带 `progressToken` 时，等待期间最多每秒一次 `notifications/progress`。`maxReplyChars` 可选地限制 agent 最终回复长度（被截断时带 `replyTruncated` 和原始 `replyChars`），`turn.models` 列出实际作答的 `provider/model`。客户端对该调用发出 `notifications/cancelled` 时，会中止对应轮次，等待以 `turn.aborted: true` 收尾——这条通知由端点自己路由，因为所用 SDK 版本只确认、不处理它。用量快照只有在轮次仍在运行时才带 `partial: true`；取消后已结算的轮次给出的是最终数字。 |
 | `session_messages` | 读取会话的用户/助手对话记录。 |
 | `session_cancel` | 让 agent 停下当前这一轮。 |
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。 |
@@ -298,8 +298,9 @@ DSH 没有「会话结束」事件，所以没有可订阅的钩子，也没有�
 用量本身读不出来时也同样不存在——但这种情况**不会静默**：回复会带 `usageUnavailable: true` 和一
 条 `reason`，所以拿这些数字结账的调用方能分清“日志读不出来”和“这一轮没花钱”，也就可以改用
 `session_usage` 重试。`wait: false` 时没有可描述的轮次，但 `session` 仍然返回（读失败时同样带
-`usageUnavailable`）。等待超时或被取消会把总量标成 `partial: true`：那一轮还没落定、还会继续
-增长；排队中的消息也标 `partial`，因为它的轮次还没跑。
+`usageUnavailable`）。等待超时、或快照是在轮次仍在运行时取的，会把总量标成 `partial: true`：那一轮还没落定、还会继续
+增长；排队中的消息也标 `partial`，因为它的轮次还没跑。而被取消之后**已经结算**的轮次给的是最终数字，
+不会再有新的计费。
 
 **或者直接问。** `session_usage` 是最后一次 prompt 之后用来收账的收据。它读的是持久会话日志而不是
 存活会话，所以对已经空闲、已经离开存活 session store、甚至是更早一次 DSH 运行建出来的会话都答得上
@@ -717,7 +718,9 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
   还做了串行化，因此两个并发调用方不会把 prompt 交错在一起、然后对「哪条回复属于谁」产生分歧。
   代价要说清楚：串行化覆盖的是**整个等待**，不只是消息提交——前一个等待还没结束时，第二个
   `session_prompt` 的消息连提交都不会提交（直到前者落定或超时）；此时发来的 `steer` 也会被
-  推迟到前者结束，从而退化为一条排队消息。只想排队的调用方应当改用轮询 `session_messages`，
+  推迟到前者结束，从而退化为一条排队消息。针对进行中调用的 `notifications/cancelled` 会按请求 id
+  匹配并中止对应轮次（内部即 `session_cancel`），所以被取消的等待以 aborted 收尾而不是跑完。只想排队
+  的调用方应当改用轮询 `session_messages`，
   而不是长时间握着一个等待不放。**不同会话之间不互相串行**：两个会话可以同时跑轮次（实测：两个
   各自阻塞在 4 秒工具步骤上的 prompt 总共 6.3 秒完成），取消其中一个会话也不影响另一个。
 - **文件系统。** 只有 `workspace_create` 为创建工作区根目录本身用到 `node:fs` 的 `mkdir`

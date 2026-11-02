@@ -57,34 +57,63 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 
 ### 1.2 Services probed vs. services used
 
-`describeCapabilities()` (`driver.ts:183-194`) probes eight names; six of them are typed in `types.ts`:
+`describeCapabilities()` reports twenty probes, each answering "can this profile do it" rather than
+"which version is this" — the bridge is version-tolerant, so a missing service degrades one tool and
+`dsh_info.harnessServices` says which:
 
 | Probe | `ctx.get` key | Used by |
 | --- | --- | --- |
-| `workspaceRegistry` | `workspaceRegistry` | `createWorkspace`, `listWorkspaces` |
-| `sessionController` | `sessionController` | `createSession`, `listSessions`, `promptSession`, `cancelSession` |
-| `sessionQuery` | `sessionQuery` | `readEvents` (`readSession` only) |
-| `agents` | `agents` | **nothing** — probed for diagnostics only |
-| `fs` | `fs` | `readFile`, `writeFile`, `listDirectory` |
-| `shell` | `shell` | `runShell` |
-| `webServer` | `webServer` | `mountOnWebServer` (`src/index.ts:172-182`) |
-| `events` | — | `approval/request` answerer (`src/index.ts:257-268`) |
-| `connection` | `connection` | status route (`src/index.ts:214-230`); resolved by `ctx.inject`, not probed |
+| `workspaceRegistry` | `workspaceRegistry` | `workspace_create`/`list`/`delete`; `session_create { workspaceId }` |
+| `sessionController` | `sessionController` | create/fork/rename/set-model/list/prompt/cancel, agent scoping, ownership |
+| `sessionQuery` | `sessionQuery` | durable-log reads: transcripts, usage fold, prompt wait |
+| `agents` | `agents` | `resolveAgent` for prompt/tool scope and `approval.policy` |
+| `fs` | `fs` | `file_read`/`file_read_image`/`file_write`/`file_edit`/`file_list` |
+| `shell` | `shell` | `shell_run` and the background job tools |
+| `webServer` | `webServer` | `http.mountOnWebServer` (waited for, then an exact route) |
+| `tools` | `tools` | `dsh_tool_list` / `dsh_tool_call` |
+| `events` | — | waiting on `session/event` instead of polling; status updates |
+| `tokenUsage` | `tokenUsage` | verifying the usage fold against the harness projection |
+| `costMeter` | `costMeter` | money in usage replies, when a price plugin is installed |
+| `llm` | `llm` | catalog provider routes and `includeModels` |
+| `agentPresets` | `agentPresets` | catalog presets; which presets exist for `session_create` |
+| `permissionPresets` | `permissionPresets` | catalog permission presets |
+| `sandboxPolicy` | `sandboxPolicy` | catalog sandbox mode; read-only gating of `workspace_create` |
+| `approval` | `approval` | `approval.policy: "allow"` (the harness's unattended stance) |
+| `sessionRename` / `sessionModel` / `sessionFork` | `sessionController` members | controller features whose presence is version-dependent |
+| `shellBackground` | `shell` members | `start`/`execute` shape needed by background jobs |
+
+`connection` is not a capability probe: the status route is registered through `ctx.inject(['connection'], …)`,
+so it exists exactly as long as that service does.
 
 ### 1.3 Methods actually called
 
-| Service | Methods used | Methods available |
-| --- | --- | --- |
-| `workspaceRegistry` | `create`, `get`, `list`, `resolveByPath`, `status` | 7 (`api-catalog.ts:2969-3014`) |
-| `sessionController` | `create`, `list`, `selectModel`, `prompt`, `cancel`, `inspect` (fallback) | 19 (`:1444-1564`) |
-| `sessionQuery` | `readSession` | 15 (`:1742-1840`) |
-| `fs` | `resolve`, `processPath`, `stat`, `readByteRange`, `listDir`, `writeText` | 14 (`:953-1040`) |
-| `shell` | `resolve`, `run` | 3 (`:2118-2140`) |
-| `agents` | — (declared `DshAgent.whenIdle/status/cancel` at `types.ts:124-129`, never called) | 14 (`:253-344`) |
+The audit below reads the 0.1.5-rc.1 catalog; the method names are the stable reference, and the
+"used" column reflects the current plugin. Where a method was added to the surface later, the version
+that started using it is named.
 
-**The shape of the gap in one line:** the plugin can *start* a session's model turn and *read* its log.
-It cannot address the session's **agent** — and `agent: Agent` is the scoping key for most of the
-harness's non-model control surface.
+| Service | Methods used | Notes |
+| --- | --- | --- |
+| `workspaceRegistry` | `create`, `get`, `list`, `resolveByPath`, `delete` | `delete` used since 0.19.0 (`workspace_delete`) |
+| `sessionController` | `create`, `list`, `prompt`, `cancel`, `inspect` (fallback), `resolveAgent`, `fork`, `rename`, `selectModel` | `resolveAgent` closed the 0.1.5 gap below; fork since 0.6.0, rename 0.10.0, model 0.11.0 |
+| `sessionQuery` | `readSession`, `observeSession` (optional), `projections.tokenUsage` | `observeSession` carries the harness's own usage projection; the plain log read is the fallback |
+| `fs` | `resolve`, `processPath`, `stat`, `readByteRange`, `listDir`, `writeText` | |
+| `shell` | `resolve`, `run` / `execute`, `start`, `kill` (on the handle) | both the 0.1.5 `start` and the 0.1.7+ `execute` shapes |
+| `tools` | `schemas(agent)`, `execute(exec)` | the agent scope is what makes the allow-list meaningful |
+| `llm` | `listProviders`, `listModels` (opt-in only) | `listModels` may perform remote discovery, hence opt-in |
+| `agentPresets` | `list` | |
+| `permissionPresets` | `names` | |
+| `sandboxPolicy` | `resolve().mode`, `defaultMode` | read per call, because the panel can change it live |
+| `approval` | `setPolicy(agent, 'never')` | implements `approval.policy: "allow"` (0.15.0) |
+| `costMeter` | `getSessionCost` | third-party price plugin; absent by default |
+| `events` | `on` | session events, `internal/service` (web-server wait), `loader/volatile-update` |
+
+**The shape of the gap in one line (0.1.5 audit):** the plugin could *start* a session's model turn and
+*read* its log, but could not address the session's **agent** — and `agent: Agent` is the scoping key
+for most of the harness's non-model control surface.
+
+**That gap is closed.** `sessionController.resolveAgent(sessionId)` returns the agent handle, and it is
+what made `dsh_tool_list`/`dsh_tool_call` (0.2.1) and the `approval.policy: "allow"` implementation
+(0.15.0) possible: both operate inside the session's own scope and policy rather than around it.
 
 ### 1.4 Reach mechanics (why "available" means "on the context")
 
@@ -498,7 +527,7 @@ Then, in rough order: `shell_start`/`shell_output`/`shell_kill` (gap #4, written
 shapes), `file_read_image` (gap #5), `web_search`/`web_fetch` (gap #6), `session_fork` (gap #9), and
 progress notifications (§6.3) — all cheap and none of them contentious.
 
-**Since then (plugins 0.2.0–0.10.0), shipped from this list and around it:**
+**Since then (plugins 0.2.0–0.24.1), shipped from this list and around it:**
 
 - usage accounting: `session_usage` plus per-turn/cumulative tokens (and money, when `dsh-cost-meter` is
   installed) in every `session_prompt` reply — the original request behind this work;
@@ -512,6 +541,28 @@ progress notifications (§6.3) — all cheap and none of them contentious.
 - progress notifications (§6.3), client-abort handling, prompt image attachments, and tool-call
   `summary`/`full`/`none` detail so a `file_write` argument does not get echoed back to the caller.
 
+**0.11.0–0.24.1 added, each verified against a live harness before it shipped:**
+
+- `session_set_model` with shared, actionable selection failures; `turn.models` names the
+  `provider/model` routes that actually answered;
+- honest bounds on every reply channel: `dsh_tool_call` result cap (`resultBytes`/`truncated`),
+  `session_messages` `maxCharsPerMessage` and `total`/`truncated`, `session_prompt` `maxReplyChars`,
+  `shell_output` `maxBytes` with drop reporting;
+- usage receipt options: `sessionIds` batches and per-workspace `cwd` totals, plus a report-level
+  `partial` whenever any row was read mid-turn;
+- list contracts: `session_list` `cwd`/`running` filters with `total`/`truncated`, `shell_list`
+  `running`;
+- `workspace_delete` (unregister only — files and session history untouched);
+- **`approval.policy: "allow"` implemented** — it had been documented and parsed but never applied;
+  create/fork now switch the session to the harness's unattended stance and report
+  `approvalPolicy`/`approvalPolicyError`;
+- protocol: a 401 now carries `WWW-Authenticate: Bearer`, a 64 MiB declared body is refused before
+  reading, an unparseable body answers `-32700`, and **MCP `notifications/cancelled` is honored**
+  (the SDK only acknowledged it; a cancelled `session_prompt` used to keep waiting);
+- **`http.mountOnWebServer` fixed** — the route was never registered because the web-server service
+  mounts after its users and was sampled once; it now waits and mounts, and `dsh_info` reports
+  `mountNote` while waiting.
+
 **What I would refuse to add.**
 
 **`typertGateway.invoke` as a tool** — a generic `{namespace, method, args}` RPC passthrough. It is the one
@@ -520,8 +571,8 @@ addition that would silently void every other refusal on this page: a caller wit
 `webServer.register` without any of them ever being named in a tool schema, an audit trail, or this
 document. Every capability worth having here is worth naming, typing and allow-listing individually. If a
 future maintainer is ever tempted because "it makes the surface complete", the answer is that completeness
-was never the goal — `driver.ts` is 851 lines of careful contract work precisely because the author chose
-specificity over generality.
+was never the goal — `driver.ts` is a large amount of careful contract work precisely because the
+author chose specificity over generality.
 
 ---
 
@@ -529,13 +580,13 @@ specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 (25 as of plugin 0.19.0) |
+| MCP tools registered on 0.1.5-rc.1 | 12 (25 as of plugin 0.24.1) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |
-| Services the plugin probes | 8 |
-| Services the plugin meaningfully uses | 5 (+2 for plumbing) |
-| Methods the plugin calls | 20 |
+| Services the plugin probes (`dsh_info.harnessServices`) | 20 |
+| Services the plugin meaningfully uses | 15 (+1 for plumbing: `webServer` for the mount) |
+| Driver methods exposed to tools | 29 |
 | DSH built-in model-visible tools | 53 names / 55 registration sites |
 | Gaps classified "would add real capability" | 23 in the ranked table, plus the G1 bridge that enables several of them |
 | Gaps classified "should stay absent" | 13 surfaces |

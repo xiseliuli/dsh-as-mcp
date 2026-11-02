@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.24.2
+
+- Documentation consistency audit against everything verified in the 0.11.0–0.24.1
+  rounds: CAPABILITY-GAPS now records those findings (bounded replies, usage
+  receipt options, list contracts, `workspace_delete`, the `approval.policy`
+  implementation, protocol/cancellation work, the `mountOnWebServer` fix),
+  its service-probe table lists the real twenty probes, and its "the plugin
+  cannot address the session's agent" conclusion is marked closed by
+  `resolveAgent` (which is what made `dsh_tool_call` and `approval.policy`
+  possible). README/README.zh cancellation and `partial` wording now matches the
+  verified behaviour, and the zh design note gained the cancellation sentence the
+  en one already had.
+
 ## 0.24.1
 
 - Verified the web-server mount against the same protocol behaviours: with
