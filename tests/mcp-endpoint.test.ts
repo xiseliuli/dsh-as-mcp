@@ -563,6 +563,26 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('reports per-tool availability derived from the probes', async () => {
+    const own = await boot(stubDriver())
+    try {
+      const payload = JSON.parse((await callTool(own.url, 'dsh_info', {})).text) as {
+        toolAvailability?: { available: number; unavailable: { tool: string; reason: string }[] }
+      }
+      expect(payload.toolAvailability).toBeDefined()
+      expect(payload.toolAvailability?.available).toBeGreaterThan(0)
+      // The stub provides neither a filesystem nor a shell: the tools that need
+      // them must be named, with the missing service in the reason.
+      const fileRead = payload.toolAvailability?.unavailable.find((entry) => entry.tool === 'file_read')
+      expect(fileRead?.reason).toMatch(/filesystem/)
+      expect(payload.toolAvailability?.unavailable.some((entry) => entry.tool === 'shell_run')).toBe(true)
+      // dsh_info itself is always available.
+      expect(payload.toolAvailability?.unavailable.some((entry) => entry.tool === 'dsh_info')).toBe(false)
+    } finally {
+      await own.stop()
+    }
+  })
+
   it('reports the search probe only when asked', async () => {
     const own = await boot(stubDriver({
       probeSessionSearch: async () => ({ available: true, matches: 0 }),

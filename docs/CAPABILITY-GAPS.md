@@ -559,6 +559,8 @@ progress notifications (§6.3) — all cheap and none of them contentious.
   prompting it;
 - **`session_queue`** (0.29.0): edit/remove/steer one pending queued message by message id, so a
   caller that queued work with `wait: false` can retract it before it spends a turn;
+- **`dsh_info.toolAvailability`** (0.31.0): the per-tool dependency map is code, so a caller can see
+  which tools this profile cannot serve — and why — without discovering it one failed call at a time;
 - `workspace_delete` (unregister only — files and session history untouched);
 - **`approval.policy: "allow"` implemented** — it had been documented and parsed but never applied;
   create/fork now switch the session to the harness's unattended stance and report

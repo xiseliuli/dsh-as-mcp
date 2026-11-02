@@ -209,7 +209,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 
 | Tool | What it does |
 | --- | --- |
-| `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, and the `catalog` of accepted providers, agent presets and sandbox mode. |
+| `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, the `catalog` of accepted providers, agent presets and sandbox mode, and `toolAvailability` — which tools this deployment cannot serve and why. |
 | `workspace_create` | Register a directory as a DSH workspace (creating it if needed). |
 | `workspace_list` | Every registered workspace with id, path, title, session count, directory status. |
 | `workspace_delete` | Unregister a workspace (files and session history untouched); idempotent. |
@@ -799,7 +799,8 @@ what protects a host that cannot supply it.
 
 ## Deployment requirements
 
-Every tool names what it needs and reports an actionable error when the service is absent, but an
+Every tool names what it needs and reports an actionable error when the service is absent, and
+`dsh_info.toolAvailability` derives the same mapping at runtime for the caller's own profile, but an
 operator setting up a profile should be able to read the requirements in one place. "Required" means
 the tool does not work at all without it; "configured" means the service is present in normal profiles
 but a deployment can switch the capability off.

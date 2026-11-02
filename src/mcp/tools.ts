@@ -6,6 +6,7 @@ import type { DshDriver } from '../dsh/driver.js'
 import type { DshLogger } from '../dsh/types.js'
 import type { EndpointStatus } from '../status.js'
 import { VERSION } from '../version.js'
+import { describeToolAvailability } from './availability.js'
 
 /** Where external agents should connect, reported by `dsh_info`. */
 export interface ConnectionInfo {
@@ -217,7 +218,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         'Report which DeepSeek Harness services this endpoint can drive, which tool groups are enabled, '
         + 'the catalog of values session_create accepts (provider routes, agent presets, sandbox mode), and the '
         + 'endpoint URL plus where its bearer token comes from. Call this first when you are unsure whether a '
-        + 'capability (sessions, files, shell) is available in this DSH profile. `includeModels` also asks each '
+        + 'capability (sessions, files, shell) is available in this DSH profile, and `toolAvailability` lists the '
+        + 'tools this deployment cannot serve with the reason. `includeModels` also asks each '
         + 'provider route what models it advertises, which is the reliable way to pick a valid model id.',
       inputSchema: z.object({
         includeModels: z
@@ -250,6 +252,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         config: z.looseObject({}).optional(),
         health: z.looseObject({}).optional(),
         usage: z.looseObject({}).optional(),
+        toolAvailability: z.looseObject({}).optional(),
         search: z.looseObject({}).optional(),
         notes: z.array(z.string()).optional(),
       }),
@@ -265,6 +268,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       // Only when asked: opening the index on a cold profile is real work, and a
       // caller that never searches should not pay for it on every dsh_info.
       const search = args.probeSearch === true ? await driver.probeSessionSearch() : undefined
+      // What a caller can actually call here, derived from the probes above: the
+      // booleans say which services exist, this says which tools depend on them.
+      const toolAvailability = describeToolAvailability(enabled, capabilities, getConfig())
       return ok({
         endpoint: info.url,
         version: VERSION,
@@ -310,6 +316,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           heapUsedMb: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
         },
         harnessServices: capabilities,
+        toolAvailability,
         // What this deployment accepts, so `session_create`'s provider / model /
         // agentPreset are chosen from a list instead of guessed. Each field is
         // independent; `catalog.unavailable` names what could not be read.

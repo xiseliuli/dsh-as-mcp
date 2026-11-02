@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.31.0
+
+- `dsh_info` now reports **`toolAvailability`**: for every advertised tool, whether
+  this deployment can serve it and, when not, the concrete reason (a disabled tool
+  group, or the missing service — `session_queue` without `updateQueue`, background
+  shell tools without a `start()`/`execute()` handle, `dsh_tool_*` without `agents`,
+  ...). The dependency map lives in `src/mcp/availability.ts` next to the probes it
+  consumes, so it cannot drift from the capability names, and it is unit-tested for
+  each rule plus the notes (search index caveat, empty allow-list).
+- The raw `harnessServices` booleans are unchanged; this is a pre-flight aid for
+  callers planning calls, not an authorization layer.
+
 ## 0.30.9
 
 - `tools/check-docs.mjs` now checks the settings panel's localization: the zh and

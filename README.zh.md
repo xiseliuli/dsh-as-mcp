@@ -198,7 +198,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 
 | 工具 | 作用 |
 | --- | --- |
-| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用，以及可接受的 provider、agent preset 与 sandbox 模式的 `catalog`；`probeSearch` 可验证搜索是否真的可用。 |
+| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`，以及 `toolAvailability`（本部署无法服务的工具及原因）；`probeSearch` 可验证搜索是否真的可用。 |
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、会话数、目录是否还在。 |
 | `workspace_delete` | 注销一个工作区（文件与会话历史不受影响）；幂等。 |
@@ -710,7 +710,8 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 
 ## 部署要求
 
-每个工具在服务缺失时都会给出可操作的错误，但配置 profile 的人应当能在一处读到全部要求。"必需"表示
+每个工具在服务缺失时都会给出可操作的错误，而 `dsh_info.toolAvailability` 会在运行时按调用方自己的
+profile 推导同一份映射；不过配置 profile 的人应当能在一处读到全部要求。"必需"表示
 没有它该工具完全不可用；"可配置关闭"表示常规 profile 自带该服务，但部署可以把它关掉。
 
 | 工具组 | 需要 | 说明 |
