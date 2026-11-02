@@ -295,3 +295,36 @@ describe('number field drafts', () => {
     }
   })
 })
+
+describe('panel field invariants', () => {
+  const fields = GROUPS.flatMap((group) => group.fields)
+  it('declares every field path once, with no path shadowing another', () => {
+    const keys = fields.map((field) => field.path.join('.'))
+    expect(new Set(keys).size, keys.join(',')).toBe(keys.length)
+    for (const a of fields) {
+      for (const b of fields) {
+        if (a === b) continue
+        const short = a.path.join('.')
+        const long = b.path.join('.')
+        if (short !== long && long.startsWith(`${short}.`)) {
+          throw new Error(`${short} shadows ${long}`)
+        }
+      }
+    }
+  })
+  it('pairs each select with options and each number with a minimum', () => {
+    for (const field of fields) {
+      if (field.kind === 'select') {
+        expect(field.options?.length ?? 0, field.path.join('.')).toBeGreaterThan(0)
+      }
+      if (field.kind === 'number') {
+        // The host refuses a non-positive integer for every numeric setting, so the
+        // panel must not offer one (a bare number input would let the user type 0).
+        expect(field.min, field.path.join('.')).toBeDefined()
+        if (field.max !== undefined) {
+          expect(field.max, field.path.join('.')).toBeGreaterThanOrEqual(field.min ?? 0)
+        }
+      }
+    }
+  })
+})

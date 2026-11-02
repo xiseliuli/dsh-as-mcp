@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.46
+
+- The four positive-integer settings (`session.promptTimeoutMs`, `limits.maxReadBytes`,
+  `limits.shellTimeoutMs`, `limits.agentToolTimeoutMs`) had no minimum in the panel, so a
+  user could type `0` or a negative value and only learn it was refused after the write
+  failed. They now declare `min: 1`, matching the host's `positiveInt` rule.
+- Added field invariants as tests: every path unique (no shadowing), each `select` carries
+  options, each `number` declares a minimum and never a maximum below it.
+
 ## 0.52.45
 
 - Number fields no longer keep an unwritten value on screen: a draft the host would refuse
