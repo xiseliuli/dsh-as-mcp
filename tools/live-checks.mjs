@@ -2001,16 +2001,22 @@ async function titleUsageCheck() {
     prompt: 'Reply with exactly: TITLE PROBE',
     timeoutMs: 300_000,
   })
-  // The title call runs just after the turn settles; give it a moment to be written.
-  await new Promise((resolve) => setTimeout(resolve, 4_000))
+  // The title call runs just after the turn settles, and how long it takes is the
+  // harness's business: poll the log instead of sleeping a fixed guess that would flake
+  // on a slow machine.
   const command = `f=$(ls ~/.dsh/sessions/*/${session.sessionId}/session.v4.jsonl.zstd 2>/dev/null | head -1)`
     + '; if [ -z "$f" ]; then echo NOFILE; exit 0; fi'
     + '; echo "messages:$(zstd -dc "$f" | grep -c \'"type":"assistant/message"\')"'
     + '; echo "attempts:$(zstd -dc "$f" | grep -c \'"type":"assistant/attempt"\')"'
     + '; echo "titles:$(zstd -dc "$f" | grep -c \'"type":"session/title-llm-request"\')"'
     + '; echo "titleRoute:$(zstd -dc "$f" | grep -c \'"type":"session/title-llm-request".*"route"\')"'
-  const log = await callTool('shell_run', { command })
-  const stdout = String(log.stdout ?? '')
+  let stdout = ''
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const log = await callTool('shell_run', { command })
+    stdout = String(log.stdout ?? '')
+    if (stdout.includes('NOFILE') || Number(new RegExp('titles:(\\d+)').exec(stdout)?.[1] ?? '0') > 0) break
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+  }
   if (stdout.includes('NOFILE')) {
     skip('title usage check', 'could not locate the session log')
     return

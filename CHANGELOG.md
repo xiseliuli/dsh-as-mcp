@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.73
+
+- The title-visibility check no longer sleeps a fixed 4 seconds waiting for the harness to write
+  its title request; it polls the session log for up to 20 seconds and stops as soon as the event
+  appears (or the log is missing). A fixed guess is how a check measures the machine and flakes
+  on a slow run — the same discipline the rest of the suite follows. Full shape with
+  `--with-model` re-run after the change: 158/158.
+
 ## 0.52.72
 
 - Hybrid deployments now also check admission on the second entry: a request without a bearer is
