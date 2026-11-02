@@ -221,6 +221,88 @@ for (const tool of schemaOptionsOf(toolsSource)) {
   }
 }
 
+// --- the README configuration sample matches the shipped defaults ------------
+//
+// The sample block is what an operator copies into a profile patch, and a patch
+// *replaces* the row's config. A sample whose value differs from the default silently
+// changes behaviour for everyone who copied it, so the scalars must agree with
+// src/defaults.ts. `agentTools.allow/deny: []` are excluded on purpose: the sample
+// documents that empty means "use the built-in allow-list", which is not the default
+// array's literal value.
+
+const sampleMatch = /```yaml\n(- id: dsh-as-mcp[\s\S]*?)```/.exec(read('README.md'))
+if (sampleMatch === null) {
+  problems.push('README.md has no yaml configuration sample beginning with "- id: dsh-as-mcp"')
+} else {
+  const sample = new Map()
+  let section
+  for (const line of sampleMatch[1].split('\n')) {
+    const sectionMatch = /^ {4}([a-zA-Z]+):\s*$/.exec(line)
+    if (sectionMatch !== null) {
+      section = sectionMatch[1]
+      continue
+    }
+    const keyMatch = /^ {6}([a-zA-Z]+):\s*(.*)$/.exec(line)
+    if (keyMatch === null || section === undefined) continue
+    const raw = keyMatch[2].replace(/\s+#.*$/, '').trim()
+    sample.set(`${section}.${keyMatch[1]}`, raw)
+  }
+  const defaultsSource = read('src/defaults.ts')
+  const defaultsBlock = (name) => {
+    const at = defaultsSource.indexOf(`export const ${name} = {`)
+    return at === -1 ? undefined : balanced(defaultsSource, defaultsSource.indexOf('{', at))?.text
+  }
+  const render = (value) => (typeof value === 'string' ? value : String(value))
+  const expectations = [
+    ['http.enabled', 'DEFAULT_HTTP'], ['http.host', 'DEFAULT_HTTP'], ['http.port', 'DEFAULT_HTTP'],
+    ['http.path', 'DEFAULT_HTTP'], ['http.mountOnWebServer', 'DEFAULT_HTTP'],
+    ['tools.workspace', 'DEFAULT_TOOLS'], ['tools.session', 'DEFAULT_TOOLS'], ['tools.files', 'DEFAULT_TOOLS'],
+    ['tools.shell', 'DEFAULT_TOOLS'], ['tools.agentTools', 'DEFAULT_TOOLS'], ['tools.usage', 'DEFAULT_TOOLS'],
+    ['session.agentPreset', 'DEFAULT_SESSION'], ['session.provider', 'DEFAULT_SESSION'],
+    ['session.model', 'DEFAULT_SESSION'], ['session.promptTimeoutMs', 'DEFAULT_SESSION'],
+    ['session.scope', 'DEFAULT_SESSION'],
+    ['limits.maxReadBytes', 'DEFAULT_LIMITS'], ['limits.shellTimeoutMs', 'DEFAULT_LIMITS'],
+    ['limits.agentToolTimeoutMs', 'DEFAULT_LIMITS'],
+    ['approval.policy', 'DEFAULT_APPROVAL'],
+  ]
+  for (const [path, constantName] of expectations) {
+    const [, leaf] = path.split('.')
+    const block = defaultsBlock(constantName)
+    if (block === undefined) {
+      problems.push(`could not read ${constantName} from src/defaults.ts`)
+      continue
+    }
+    const declared = new RegExp(`^\\s+${leaf}:\\s*(.+?),?$`, 'm').exec(block)
+      ?? new RegExp(`\\b${leaf}:\\s*([^,}\\n]+)`).exec(block)
+    if (declared === null) {
+      problems.push(`could not find ${leaf} in ${constantName}`)
+      continue
+    }
+    let value
+    try {
+      value = new Function(`return (${declared[1].replaceAll('_', '')})`)()
+    } catch {
+      problems.push(`could not evaluate ${constantName}.${leaf} = ${declared[1]}`)
+      continue
+    }
+    const claimedRaw = sample.get(path)
+    if (claimedRaw === undefined) {
+      problems.push(`README sample omits ${path}`)
+      continue
+    }
+    // YAML writes an empty string as `''`; the value it denotes is the empty string.
+    const claimed = claimedRaw === "''" ? '' : claimedRaw
+    if (claimed !== render(value)) {
+      problems.push(`README sample says ${path}: ${claimedRaw}, the default is ${JSON.stringify(render(value))}`)
+    }
+  }
+  for (const leaf of ['allow', 'deny']) {
+    if (sample.get(`agentTools.${leaf}`) !== '[]') {
+      problems.push(`README sample must show agentTools.${leaf}: [] (empty means the built-in allow-list)`)
+    }
+  }
+}
+
 // --- documented caps match the constants they describe ----------------------
 //
 // These numbers are stated in prose and enforced in code. A cap raised in one place and

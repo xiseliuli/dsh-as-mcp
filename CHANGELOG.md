@@ -3,6 +3,19 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.59
+
+- The README yaml configuration sample is now checked against `src/defaults.ts`: every scalar
+  (http host/port/path/toggles, all six tool toggles, session fields, limits, approval policy)
+  must equal the shipped default, because a profile patch **replaces** the row's config and a
+  sample that drifted would silently change behaviour for whoever copied it.
+  `agentTools.allow/deny: []` stay documented as "empty means the built-in allow-list" and are
+  asserted to be empty rather than compared with the default array.
+- Proven by changing the sample's `promptTimeoutMs` to 900001 —
+  `DRIFT: README sample says session.promptTimeoutMs: 900001, the default is "900000"` — then
+  restoring. Building the check surfaced two of its own bugs (a `''` empty-string mismatch and
+  an inline `DEFAULT_APPROVAL` object it could not parse), both fixed.
+
 ## 0.52.58
 
 - The drift check now compares five caps stated in README prose with the constants that
