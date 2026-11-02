@@ -928,10 +928,13 @@ enumerated the class; it is worth reading before writing a double for a harness 
 with the version that shipped each one and how to reproduce the check — including the list of
 things that are *not* verified here and why.
 
-`tools/check-docs.mjs` compares the two README tool tables against the tools the code registers, the
-`package.json` version against the newest changelog heading, the shipped `files` list against what exists
-(and against maintainer-only directories), and every `docs/*.md` and script path the READMEs tell readers
-to use. It runs inside `tools/release.sh`; run it alone after editing documentation.
+`tools/check-docs.mjs` compares the two README tool tables against the tools the code registers, each
+README's configuration sample against the keys `normalizeConfig` accepts, the settings panel's field
+paths against those same keys (a config key with no field silently disappears from the panel, and a
+field for an unknown key writes nothing), the `package.json` version against the newest changelog
+heading, the shipped `files` list against what exists (and against maintainer-only directories), and
+every `docs/*.md` and script path the READMEs tell readers to use. It runs inside `tools/release.sh`;
+run it alone after editing documentation or configuration.
 
 `tools/release.sh` is the release checklist as an executable: both typechecks, the test suite, the two
 bundles, the pack, an assertion that the package contains no maintainer-only directory, optional live

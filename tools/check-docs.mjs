@@ -68,6 +68,104 @@ for (const [path, heading] of [['README.md', '## Tools'], ['README.zh.md', '## �
   notes.push(`${path}: ${seen.size} tool row(s)`)
 }
 
+// --- configuration keys: code vs README sample vs settings panel -----------
+
+const configSource = read('src/config.ts')
+const known = new Map()
+for (const match of configSource.matchAll(/rejectUnknown\(\s*\w+,\s*\[([^\]]*)\],\s*'([A-Za-z0-9]+)'/g)) {
+  // The root call guards the section list itself; the plugin has no `config.x` setting.
+  if (match[2] === 'config') continue
+  const keys = [...match[1].matchAll(/'([A-Za-z0-9_]+)'/g)].map((entry) => entry[1])
+  known.set(match[2], new Set(keys))
+}
+if (known.size === 0) problems.push('could not read any rejectUnknown() sections from src/config.ts')
+
+/**
+ * Leaf paths in the YAML-ish configuration sample (auth.token may be absent).
+ *
+ * The configuration sample is the yaml block inside the Configuration section that
+ * actually contains `config:`; a README has other yaml blocks (install commands,
+ * client configs) and the first one is not the settings table.
+ */
+function sampleKeys(path, heading) {
+  const text = read(path)
+  const start = text.indexOf(heading)
+  if (start === -1) {
+    problems.push(`${path}: no "${heading}" section`)
+    return new Set()
+  }
+  const end = text.indexOf('\n## ', start + heading.length)
+  const section = text.slice(start, end === -1 ? undefined : end)
+  const block = [...section.matchAll(/```yaml\n([\s\S]*?)```/g)]
+    .map((match) => match[1])
+    .find((candidate) => candidate.includes('config:'))
+  if (block === undefined) {
+    problems.push(`${path}: no yaml configuration sample with "config:" in "${heading}"`)
+    return new Set()
+  }
+  const paths = new Set()
+  const stack = []
+  for (const line of block.split('\n')) {
+    if (/^\s*#/.test(line) || line.trim() === '') continue
+    const match = line.match(/^(\s*)([A-Za-z0-9_]+):\s*(.*)$/)
+    if (match === null) continue
+    const depth = Math.floor(match[1].length / 2)
+    stack.length = depth
+    stack[depth] = match[2]
+    // `config:` and the section names have no value; leaves do.
+    if (match[1].length >= 4 && match[3] !== '' && depth >= 2) {
+      // The sample nests every setting under `config:`; strip that level so the
+      // paths match the config's own section names.
+      const path = stack.slice(1, depth + 1).join('.')
+      paths.add(path.startsWith('config.') ? path.slice('config.'.length) : path)
+    }
+  }
+  return paths
+}
+
+const configOptional = new Set(['auth.token'])
+for (const [path, heading] of [['README.md', '## Configuration'], ['README.zh.md', '## 配置']]) {
+  const sample = sampleKeys(path, heading)
+  const sampleLeaves = [...sample].filter((key) => key.includes('.'))
+  for (const key of sampleLeaves) {
+    const [section, leaf] = key.split('.')
+    if (known.get(section)?.has(leaf) !== true) problems.push(`${path}: sample sets ${key}, which the config does not accept`)
+  }
+  for (const [section, leaves] of known) {
+    for (const leaf of leaves) {
+      const key = `${section}.${leaf}`
+      if (configOptional.has(key)) continue
+      if (!sampleLeaves.includes(key)) problems.push(`${path}: sample omits the ${key} setting`)
+    }
+  }
+  for (const key of [...sampleLeaves]) {
+    if (!known.has(key.split('.')[0])) problems.push(`${path}: sample has an unknown section in ${key}`)
+  }
+  notes.push(`${path}: ${sampleLeaves.length} configuration key(s)`)
+}
+
+// The settings panel must expose every non-secret setting; a config key with no
+// field silently disappears from the panel, and a field for a key the config does
+// not accept writes nothing.
+const fieldSource = read('src/client/fields.ts')
+const panel = new Set(
+  [...fieldSource.matchAll(/path:\s*\['([A-Za-z0-9]+)',\s*'([A-Za-z0-9_]+)'\]/g)]
+    .map((match) => `${match[1]}.${match[2]}`),
+)
+if (panel.size === 0) problems.push('could not read any settings-panel paths from src/client/fields.ts')
+for (const [section, leaves] of known) {
+  for (const leaf of leaves) {
+    const key = `${section}.${leaf}`
+    if (configOptional.has(key)) continue
+    if (!panel.has(key)) problems.push(`settings panel has no field for ${key}`)
+  }
+}
+for (const key of panel) {
+  const [section, leaf] = key.split('.')
+  if (known.get(section)?.has(leaf) !== true) problems.push(`settings panel has a field for ${key}, which the config does not accept`)
+}
+notes.push(`settings panel: ${panel.size} field path(s)`)
+
 // --- version, changelog, and the files that ship --------------------------
 
 const pkg = JSON.parse(read('package.json'))

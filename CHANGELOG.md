@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.7
+
+- `tools/check-docs.mjs` now also checks configuration: each README's YAML sample
+  must set exactly the keys `normalizeConfig` accepts (minus the optional
+  `auth.token`), and the settings panel must expose a field for every one of those
+  keys and no field for an unknown key. Two parsing bugs surfaced while writing it
+  and were fixed (the root `config` guard was read as a section, and the section /
+  panel regexes only accepted lowercase names, so `agentTools` looked absent).
+  Negative-tested: deleting `session.scope` from the sample makes the check exit 1
+  naming it.
+
 ## 0.30.6
 
 - Added `tools/check-docs.mjs` and a `docs consistency` step in
