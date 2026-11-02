@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.22
+
+- Probed and asserted `session_queue { action: "steer" }`: queued while a sleeping turn
+  runs, the message is steered into that turn and its text appears inside the turn that
+  was already running rather than as a new one. The live check starts such a turn, steers,
+  settles it, and uses the turn count as the witness: three prompts produced **two** turns
+  (the steered message folded into the running one), and the steered text appears in the
+  transcript. Transcript rows do not always carry a turn number, so the count is the
+  honest evidence.
+
 ## 0.52.21
 
 - The transcript's turn window now has live evidence: with the two turns

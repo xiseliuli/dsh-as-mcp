@@ -1702,6 +1702,70 @@ async function orchestrationCheck() {
   }
 }
 
+// --- steering into a running turn ------------------------------------------
+
+/**
+ * `session_queue { action: "steer" }` promises to deliver a queued message into the turn
+ * that is *already running* instead of waiting behind it. Probed live before it was
+ * asserted: start a turn that sleeps, queue a marker, steer it, and check the marker
+ * appears inside that turn's number rather than as a new turn.
+ */
+async function steerCheck() {
+  section('steering (real turn)')
+  if (!has('session_queue') || !has('session_prompt')) {
+    skip('steer check', 'needs session_queue and session_prompt')
+    return
+  }
+  const session = await callTool('session_create', { cwd: process.cwd() })
+  await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Run the bash command: sleep 8; echo WINDOW. Then reply exactly: WINDOW DONE.',
+    wait: false,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1_500))
+  await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: STEER-INLINE',
+    wait: false,
+  })
+  const queue = await callTool('session_queue', { sessionId: session.sessionId })
+  const row = (queue.queued ?? []).find((entry) => String(entry.text ?? '').includes('STEER-INLINE'))
+  if (row === undefined) {
+    check(false, 'the message to steer is visible in the queue', `${(queue.queued ?? []).length} queued`)
+    return
+  }
+  const steered = await attemptTool('session_queue', {
+    sessionId: session.sessionId,
+    messageId: row.id,
+    action: 'steer',
+  })
+  check(
+    steered.ok === true && steered.payload?.accepted === true,
+    'a queued message can be steered into the running turn',
+    steered.ok ? String(steered.payload?.accepted) : steered.error?.slice(0, 60),
+  )
+
+  // Settle the turn, then read back: the steered text must be inside the original
+  // turn, not a later one.
+  await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: AFTER-STEER',
+    timeoutMs: 600_000,
+  })
+  const messages = await callTool('session_messages', { sessionId: session.sessionId, limit: 200 })
+  const rows = messages.messages ?? []
+  const steeredRow = rows.find((message) => String(message.text ?? '').includes('STEER-INLINE'))
+  // Transcript rows do not always carry a turn number, so the turn count is the honest
+  // witness: a message that merely queued would need a turn of its own.
+  const usage = await callTool('session_usage', { sessionId: session.sessionId, includeTurns: true })
+  const turns = usage.sessions?.[0]?.usage?.byTurn ?? []
+  check(
+    steeredRow !== undefined && turns.length === 2,
+    'the steered message is processed inside the running turn (no turn of its own)',
+    `${turns.length} turn(s); steered ${steeredRow !== undefined ? 'yes' : 'no'}`,
+  )
+}
+
 // --- mid-turn route switch -------------------------------------------------
 
 /**
@@ -2044,6 +2108,7 @@ try {
       await orchestrationCheck()
       await modelSelectionCheck()
       await midTurnSwitchCheck()
+      await steerCheck()
       await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()
     }
