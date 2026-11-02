@@ -6,6 +6,7 @@ import type { Config } from '../config.js'
 import { optional } from '../config.js'
 import { DEFAULT_AGENT_TOOLS } from '../defaults.js'
 import { combineCosts, readSessionCost, type CostReport } from './cost.js'
+import { loadOwnedSessions, saveOwnedSessions } from './ownership.js'
 import {
   buildUsageReport,
   summarizeUsage,
@@ -589,6 +590,9 @@ export interface DshCatalog {
  */
 export class DshDriver {
   private readonly log: DshLogger
+  /** Whether the durable ownership record has been read yet. */
+  private ownershipLoaded = false
+
   /** Sessions this plugin created, so an opt-in approver can be scoped to them. */
   private readonly ownedSessions = new Set<string>()
   /** Per-session promise chain: one driver-initiated turn runs at a time. */
@@ -616,7 +620,40 @@ export class DshDriver {
 
   /** Whether `sessionId` was created through this plugin. */
   ownsSession(sessionId: string): boolean {
+    this.ensureOwnershipLoaded()
     return this.ownedSessions.has(sessionId)
+  }
+
+  /**
+   * Load the remembered ownership record on first use.
+   *
+   * Lazy rather than in the constructor because a driver is also built by tests
+   * and by the status route, and the file is only relevant to session scoping.
+   * A failed load is not an error: it leaves the set empty, which hides sessions
+   * under `owned` instead of exposing them.
+   */
+  private ensureOwnershipLoaded(): void {
+    if (this.ownershipLoaded) return
+    this.ownershipLoaded = true
+    for (const sessionId of loadOwnedSessions()) this.ownedSessions.add(sessionId)
+  }
+
+  /**
+   * Remember a session this endpoint created, so `session.scope: "owned"` still
+   * covers it after a restart.
+   *
+   * Written on every create/fork regardless of the current scope: an operator can
+   * switch `session.scope` at runtime, and a session created while the scope was
+   * `all` should not become the one exception afterwards.
+   */
+  private rememberOwnedSession(sessionId: string): void {
+    this.ownedSessions.add(sessionId)
+    if (!saveOwnedSessions([...this.ownedSessions])) {
+      this.log.debug(
+        '[dsh-as-mcp] could not persist the owned-session record; ownership of %s lasts until this process restarts',
+        sessionId,
+      )
+    }
   }
 
   /**
@@ -627,7 +664,9 @@ export class DshDriver {
    * than once at the transport, so a later tool cannot quietly bypass it.
    */
   private sessionVisible(sessionId: string): boolean {
-    return this.config.session.scope === 'all' || this.ownedSessions.has(sessionId)
+    if (this.config.session.scope === 'all') return true
+    this.ensureOwnershipLoaded()
+    return this.ownedSessions.has(sessionId)
   }
 
   /** Refuse a session the current scope does not cover, naming the setting. */
@@ -1292,7 +1331,7 @@ export class DshDriver {
       ...(workspaceId === undefined ? { cwd: cwd as string } : { workspaceId }),
       ...(agentPreset === undefined ? {} : { agentPreset }),
     })
-    this.ownedSessions.add(created.sessionId)
+    this.rememberOwnedSession(created.sessionId)
 
     const provider = optional(request.provider) ?? optional(this.config.session.provider)
     const model = optional(request.model) ?? optional(this.config.session.model)
@@ -1973,7 +2012,7 @@ export class DshDriver {
       sessionId: request.sessionId,
       ...(request.atSeq === undefined ? {} : { atSeq: request.atSeq }),
     })
-    this.ownedSessions.add(child.sessionId)
+    this.rememberOwnedSession(child.sessionId)
     // The child is driven by this endpoint too, so it gets the same policy ask.
     const approval = await this.applyApprovalPolicy(child.sessionId)
 

@@ -123,6 +123,13 @@ explicitly rather than inferred from a changelog:
 | **F11 — session mutation is instance-wide** | `session_prompt`/`steer`, `session_cancel`, `session_rename`, `session_set_model`, `session_fork` and `session_queue` (edit/remove/steer a pending message) act on any session this DSH process holds, not only sessions the endpoint created. `ownedSessions` is used for usage scoping and approval answering, not as an authorization gate. | A token holder can silently withdraw a message a human queued in the UI, rename a session, switch its model, or cancel its running turn. There is no new *capability* beyond "the token is the user" (the same holder can prompt, or read `$DSH_HOME/sessions`), but the integrity impact is direct and previously required shell access to achieve. | **Accepted with F4 and documented** (both READMEs' security section, and the queue tool description). `session.scope` remains unimplemented; do not hand a token to a party who may not rewrite the user's own sessions. |
 | **F12 — content search discloses transcripts, not just metadata** | `session_search` returns a snippet of matched **message content** from every visible session, and the search index is asked for it by content, so the caller chooses the query. F4's argument ("the same bytes are in `$DSH_HOME/sessions`") still bounds the *authority*, but the result now lands in the caller's transcript, logs and context — a place the user's own session store never reaches. | Privacy: a caller can ask "who mentioned X?" and receive up to 20 snippets per query. Snippets are bounded (240 code points) and capped, but the operator should treat search as **reading arbitrary session content**, not as listing. | **Accepted and documented.** The deployment requirement is explicit: search is opt-in (`session-query` `openAt`), so a profile that leaves search disabled removes this path entirely; `dsh_info { probeSearch: true }` reports which state a deployment is in. |
 
+A related record the audit reviewed: under `session.scope: "owned"` the plugin remembers created
+session ids in `$DSH_HOME/dsh-as-mcp/owned.json` (`0600`, directory `0700`, newest 1000, atomic tmp +
+rename). It is **advisory, not a boundary**: a missing or corrupt file reads as "nothing owned"
+(fail-closed — it can only hide sessions), and anyone able to write it can already write the session
+store. It exists so ownership survives a restart, which is what makes `owned` usable rather than a
+one-process window.
+
 Also noted while re-reading this surface:
 
 - **Message ids are capability-bearing inside the endpoint.** `session_messages` returns the id

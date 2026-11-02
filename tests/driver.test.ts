@@ -335,6 +335,31 @@ describe('session.scope: owned', () => {
     expect(result.hidden).toBe(1)
   })
 
+  it('remembers owned sessions across driver instances through DSH_HOME', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-as-mcp-driver-home-'))
+    scratch.push(home)
+    const previous = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
+      const first = scoped(sessions, 'owned')
+      const created = await first.createSession({ cwd: '/tmp' })
+      expect(created.sessionId).toBe('session-1')
+
+      // A fresh driver is what a plugin reload looks like: nothing in memory.
+      const second = scoped(sessions, 'owned')
+      await expect(second.readTranscript('session-1', 10)).resolves.toBeDefined()
+      expect(second.ownsSession('session-1')).toBe(true)
+
+      // A session nobody created is still refused.
+      await expect(second.readTranscript('session-not-ours', 10))
+        .rejects.toThrow(/session\.scope is "owned"/)
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previous
+    }
+  })
+
   it('keeps the historical reach under scope all', async () => {
     const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
     const driver = scoped(sessions, 'all')
@@ -765,24 +790,35 @@ describe('DshDriver.promptSession', () => {
   })
 
   it('does not gate prompting or scoped usage on this process having created the session', async () => {
-    // After a DSH restart nothing is "owned" yet, and a caller that knows the id
-    // must be able to continue the work and read its bill. Ownership only decides
-    // the unscoped default, never access by id.
-    const sessions = fakeSessions()
-    const { driver } = driverWith(sessions)
-    expect(driver.ownsSession('session-1')).toBe(false)
+    // A caller that knows an id must be able to continue the work and read its
+    // bill under session.scope "all"; ownership only decides the unscoped default.
+    // A fresh DSH_HOME models a process that has never created this session: the
+    // durable ownership record is read from there, so an empty one proves the
+    // point without depending on test order.
+    const home = mkdtempSync(join(tmpdir(), 'dsh-as-mcp-restart-'))
+    scratch.push(home)
+    const previous = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      const sessions = fakeSessions()
+      const { driver } = driverWith(sessions)
+      expect(driver.ownsSession('session-1')).toBe(false)
 
-    const pending = driver.promptSession({
-      sessionId: 'session-1',
-      prompt: 'go',
-      mode: 'queue',
-      wait: false,
-      timeoutMs: 1_000,
-    })
-    await expect(pending).resolves.toMatchObject({ accepted: true })
-    await expect(driver.sessionUsage({ sessionId: 'session-1', limit: 5 }))
-      .resolves.toMatchObject({ scope: 'session' })
-    expect(sessions.prompts.length).toBe(1)
+      const pending = driver.promptSession({
+        sessionId: 'session-1',
+        prompt: 'go',
+        mode: 'queue',
+        wait: false,
+        timeoutMs: 1_000,
+      })
+      await expect(pending).resolves.toMatchObject({ accepted: true })
+      await expect(driver.sessionUsage({ sessionId: 'session-1', limit: 5 }))
+        .resolves.toMatchObject({ scope: 'session' })
+      expect(sessions.prompts.length).toBe(1)
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previous
+    }
   })
 
   it('reports which model routes answered the turn', async () => {

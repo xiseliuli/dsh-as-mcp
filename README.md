@@ -730,11 +730,14 @@ refusal names the setting. `all` (the default) keeps the historical instance-wid
 inside the token boundary, not a replacement for it: file, shell and agent-tool access are governed
 by their own tool groups and the deployment's sandbox policy.
 
-Two consequences of `owned` are worth stating because they are fail-closed rather than bugs:
-ownership is **per plugin process**, so sessions created before a DSH restart are no longer owned and
-become invisible (create them again, or set `all` for that window); and `session_search` filters the
-harness's page of at most 20 matches *after* it arrives, so a page can be entirely foreign — the
-reply then carries `hidden` and `hasMore` states that more matches exist.
+Ownership is **durable**: created and forked session ids are remembered in
+`$DSH_HOME/dsh-as-mcp/owned.json` (0600, newest 1000 ids), so `owned` still covers them after a
+plugin reload or a DSH restart. A missing or corrupt record reads as "nothing is owned" — it can only
+hide sessions, never expose them — and the file is advisory rather than a security boundary: anything
+that can write it can already write the session store.
+
+`session_search` filters the harness's page of at most 20 matches *after* it arrives, so a page can be
+entirely foreign — the reply then carries `hidden` and `hasMore` states that more matches exist.
 
 `mountOnWebServer` is enough on its own: with `enabled: false` the endpoint is served
 **only** on DSH's web server at `<dsh host>:<dsh web port><path>`, with no second port. The

@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.1
+
+- `session.scope: "owned"` now remembers what it created: created and forked
+  session ids are written to `$DSH_HOME/dsh-as-mcp/owned.json` (`0600`, directory
+  `0700`, newest 1000 ids, atomic tmp + rename), so ownership survives a plugin
+  reload or DSH restart instead of lasting one process. A missing or corrupt
+  record reads as "nothing is owned" — fail-closed, it can only hide sessions.
+  Tests now run under their own temporary `DSH_HOME`, so a suite run can no longer
+  write this record into the developer's real `~/.dsh`.
+
 ## 0.30.0
 
 - **`session.scope`** (`all` | `owned`, default `all`): the containment option the
