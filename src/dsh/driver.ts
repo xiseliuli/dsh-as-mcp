@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, dirname, resolve as resolveAbsolute } from 'node:path'
 
@@ -3543,7 +3543,13 @@ export class DshDriver {
     content: string
     cwd?: string
     createDirectories: boolean
-  }): Promise<{ path: string; operation: 'create' | 'update' }> {
+    /**
+     * Compare-and-swap guard: the write proceeds only when the file's current
+     * content hashes to this value. A caller that read the file and then wrote it
+     * back would otherwise silently clobber a concurrent edit.
+     */
+    expectedSha256?: string
+  }): Promise<{ path: string; operation: 'create' | 'update'; sha256: string }> {
     const fs = this.requireFileSystem()
     // Deliberately no `node:fs` mkdir here, even when `createDirectories` is set.
     // Creating the parent ourselves would run *before* `fs.resolve`, and therefore
@@ -3568,8 +3574,25 @@ export class DshDriver {
         )
       }
     }
+    if (request.expectedSha256 !== undefined) {
+      const current = await readCurrentText(fs, target)
+      const actual = current === undefined ? undefined : sha256OfText(current)
+      if (current === undefined) {
+        throw new Error(
+          `cannot write "${fs.processPath(target)}": expectedSha256 was given but the file does not exist `
+            + '(omit it to create a new file).',
+        )
+      }
+      if (actual !== request.expectedSha256.toLowerCase()) {
+        throw new Error(
+          `refusing to overwrite "${fs.processPath(target)}": its current sha256 is ${actual}, not the `
+            + `expected ${request.expectedSha256}. The file changed since you read it; read it again, or omit `
+            + 'expectedSha256 to overwrite unconditionally.',
+        )
+      }
+    }
     const outcome = await fs.writeText(target, request.content)
-    return { path: fs.processPath(target), operation: outcome.operation }
+    return { path: fs.processPath(target), operation: outcome.operation, sha256: sha256OfText(request.content) }
   }
 
   /**
@@ -3596,11 +3619,14 @@ export class DshDriver {
     newText: string
     replaceAll: boolean
     maxBytes: number
+    /** Compare-and-swap guard over the whole file, checked before any write. */
+    expectedSha256?: string
   }): Promise<{
     path: string
     replacements: number
     bytesBefore: number
     bytesAfter: number
+    sha256: string
   }> {
     if (request.oldText === '') throw new Error('oldText must not be empty')
     if (request.oldText === request.newText) {
@@ -3632,6 +3658,17 @@ export class DshDriver {
       )
     }
 
+    if (request.expectedSha256 !== undefined) {
+      const actual = sha256OfText(before)
+      if (actual !== request.expectedSha256.toLowerCase()) {
+        throw new Error(
+          `refusing to edit ${displayPath}: its current sha256 is ${actual}, not the expected `
+            + `${request.expectedSha256}. The file changed since you read it; read it again, or omit `
+            + 'expectedSha256 to edit unconditionally.',
+        )
+      }
+    }
+
     let replacements = 0
     for (let at = before.indexOf(request.oldText); at >= 0; at = before.indexOf(request.oldText, at + request.oldText.length)) {
       replacements += 1
@@ -3660,6 +3697,7 @@ export class DshDriver {
       replacements: request.replaceAll ? replacements : 1,
       bytesBefore: info.size ?? new TextEncoder().encode(before).byteLength,
       bytesAfter: new TextEncoder().encode(after).byteLength,
+      sha256: sha256OfText(after),
     }
   }
 
@@ -4392,6 +4430,25 @@ function findOwnPrompt(
  * The full list is built first because argument *sizes* are wanted in every mode;
  * only the strings are dropped or cut here.
  */
+/** Lowercase hex SHA-256 of a UTF-8 string, for compare-and-swap file writes. */
+function sha256OfText(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+/** Current UTF-8 text of a file, or `undefined` when it is not a readable file. */
+async function readCurrentText(
+  fs: DshFileSystem,
+  target: DshFsTarget,
+): Promise<string | undefined> {
+  const info = await fs.stat(target)
+  if (info === undefined || info.type !== 'file') return undefined
+  try {
+    return await fs.readText(target)
+  } catch {
+    return undefined
+  }
+}
+
 function shapeToolCalls(
   summary: Omit<TurnResult, 'timedOut'>,
   detail: ToolCallDetail,

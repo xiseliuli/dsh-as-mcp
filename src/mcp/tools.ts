@@ -1154,6 +1154,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'When false, the call fails if the parent directory does not exist instead of '
               + 'creating it. Defaults to true (create it).',
             ),
+          expectedSha256: z
+            .string()
+            .regex(/^[0-9a-fA-F]{64}$/)
+            .optional()
+            .describe(
+              'Compare-and-swap guard: write only if the file currently hashes to this (returned as sha256 by '
+              + 'a previous write/read). A mismatch names the actual hash and writes nothing; the file must '
+              + 'already exist.',
+            ),
         }),
         annotations: { openWorldHint: false },
       },
@@ -1162,6 +1171,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         content: args.content,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
         createDirectories: args.createDirectories ?? true,
+        ...(args.expectedSha256 === undefined ? {} : { expectedSha256: args.expectedSha256 }),
       }))),
     )
 
@@ -1221,6 +1231,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .boolean()
             .optional()
             .describe('Replace every occurrence instead of requiring a unique match. Defaults to false.'),
+          expectedSha256: z
+            .string()
+            .regex(/^[0-9a-fA-F]{64}$/)
+            .optional()
+            .describe(
+              'Compare-and-swap guard over the whole file: edit only if it currently hashes to this. A '
+              + 'mismatch names the actual hash and writes nothing.',
+            ),
         }),
         annotations: { openWorldHint: false },
       },
@@ -1231,6 +1249,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         newText: args.newText,
         replaceAll: args.replaceAll ?? false,
         maxBytes: getConfig().limits.maxReadBytes,
+        ...(args.expectedSha256 === undefined ? {} : { expectedSha256: args.expectedSha256 }),
       }))),
     )
   }

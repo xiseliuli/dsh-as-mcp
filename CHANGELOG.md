@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.49.0
+
+- `file_write` and `file_edit` accept `expectedSha256` (compare-and-swap) and return the
+  resulting file's `sha256`: an external harness that reads a file, decides, then writes
+  it back no longer clobbers a concurrent edit — a mismatch names the actual hash and
+  writes nothing. `file_write` with `expectedSha256` refuses to create a missing file
+  (omit the field to create one).
+- Tests cover the matching write, a stale write, a missing file, the matching edit and a
+  stale edit; the acceptance run does a real CAS round-trip on disk. Both READMEs updated.
+
 ## 0.48.0
 
 - `session_fork` accepts `atTurn`: cut the child at the end of that turn instead of a raw

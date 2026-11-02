@@ -872,6 +872,38 @@ try {
       ambiguous.error ?? 'no error payload',
     )
 
+    // Compare-and-swap: a write/edit carries the hash of the content the caller saw,
+    // so a concurrent change is refused instead of silently clobbered.
+    const casWrite = await must('file_write', { path, content: 'cas version 1\n', createDirectories: true })
+    check(
+      typeof casWrite.sha256 === 'string' && /^[0-9a-f]{64}$/.test(casWrite.sha256),
+      'file_write reports the written content hash',
+      `${String(casWrite.sha256).slice(0, 12)}…`,
+    )
+    const staleWrite = await tool('file_write', {
+      path,
+      content: 'should not land\n',
+      expectedSha256: 'a'.repeat(64),
+    })
+    check(
+      staleWrite.ok === false && /current sha256 is/.test(staleWrite.error ?? '') &&
+        (await readFile(path, 'utf8')) === 'cas version 1\n',
+      'file_write with a stale expectedSha256 is refused and writes nothing',
+      staleWrite.error?.slice(0, 60),
+    )
+    const casEdit = await must('file_edit', {
+      path,
+      oldText: 'version 1',
+      newText: 'version 2',
+      expectedSha256: casWrite.sha256,
+    })
+    check(
+      typeof casEdit.sha256 === 'string' && casEdit.sha256 !== casWrite.sha256 &&
+        (await readFile(path, 'utf8')) === 'cas version 2\n',
+      'file_edit with the matching expectedSha256 edits and reports the new hash',
+      `${String(casEdit.sha256).slice(0, 12)}…`,
+    )
+
     // An image round-trip: write a real 1x1 PNG and read it back through the
     // image tool, so the MCP image block is exercised, not just described.
     const pngPath = join(projectPath, 'pixel.png')

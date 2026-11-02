@@ -930,7 +930,7 @@ describe('MCP Streamable HTTP endpoint', () => {
     const own = await boot(stubDriver({
       editFile: async (request) => {
         seen.push(request as unknown as Record<string, unknown>)
-        return { path: request.path, replacements: 1, bytesBefore: 10, bytesAfter: 11 }
+        return { path: request.path, replacements: 1, bytesBefore: 10, bytesAfter: 11, sha256: 'stub' }
       },
     }))
     try {

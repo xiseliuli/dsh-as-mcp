@@ -67,8 +67,8 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
       offset: offset ?? 0,
       bytes: 5,
     }),
-    writeFile: async ({ path }) => ({ path, operation: 'create' }),
-    editFile: async ({ path }) => ({ path, replacements: 1, bytesBefore: 0, bytesAfter: 0 }),
+    writeFile: async ({ path }) => ({ path, operation: 'create', sha256: 'stub' }),
+    editFile: async ({ path }) => ({ path, replacements: 1, bytesBefore: 0, bytesAfter: 0, sha256: 'stub' }),
     listDirectory: async ({ path }) => ({ path, entries: [] }),
     // Present so the new group's tools can be registered; a test that exercises
     // them supplies its own driver.

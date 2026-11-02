@@ -11,6 +11,7 @@
  * convenient. Every rejection modelled below is quoted from the harness source.
  */
 
+import { createHash } from 'node:crypto'
 import { existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -821,7 +822,8 @@ describe('file_write honours createDirectories', () => {
       content: 'x',
       createDirectories: false,
     })
-    expect(outcome).toEqual({ path: '/present/out.txt', operation: 'create' })
+    expect(outcome).toMatchObject({ path: '/present/out.txt', operation: 'create' })
+    expect(outcome.sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(writes).toEqual(['/present/out.txt'])
   })
 
@@ -836,6 +838,128 @@ describe('file_write honours createDirectories', () => {
     })
     expect(outcome.operation).toBe('create')
     expect(writes).toEqual(['/anything/missing/out.txt'])
+  })
+})
+
+describe('compare-and-swap file writes', () => {
+  /** A single-file seam whose content the test owns. */
+  function fsWithFile(content: string | undefined): {
+    fs: DshFileSystem
+    read: () => string | undefined
+    writes: string[]
+  } {
+    let current = content
+    const writes: string[] = []
+    const fs: DshFileSystem = {
+      resolve: async (path: string) => targetFor(path),
+      processPath: (entry: DshFsTarget) => entry.displayPath,
+      stat: async () => (current === undefined ? undefined : { type: 'file' as const, size: current.length }),
+      readText: async () => {
+        if (current === undefined) throw new Error('ENOENT')
+        return current
+      },
+      readByteRange: async () => new Uint8Array(),
+      listDir: async () => [],
+      writeText: async (_target: DshFsTarget, text: string) => {
+        writes.push(text)
+        current = text
+        return { operation: 'update' as const }
+      },
+    }
+    return { fs, read: () => current, writes }
+  }
+
+  it('writes only when the current content hashes to expectedSha256, and returns the new hash', async () => {
+    const sha256 = createHash('sha256')
+    const oldHash = sha256.update('old content', 'utf8').digest('hex')
+    const { fs, read, writes } = fsWithFile('old content')
+    const driver = driverWith({ fs })
+    const outcome = await driver.writeFile({
+      path: '/project/a.ts',
+      content: 'new content',
+      createDirectories: true,
+      expectedSha256: oldHash,
+    })
+    expect(outcome.sha256).toBe(createHash('sha256').update('new content', 'utf8').digest('hex'))
+    expect(read()).toBe('new content')
+    expect(writes).toEqual(['new content'])
+  })
+
+  it('refuses a mismatched expectedSha256 and names the actual hash', async () => {
+    const { fs, read, writes } = fsWithFile('old content')
+    const actual = createHash('sha256').update('old content', 'utf8').digest('hex')
+    const driver = driverWith({ fs })
+    await expect(driver.writeFile({
+      path: '/project/a.ts',
+      content: 'new content',
+      createDirectories: true,
+      expectedSha256: 'a'.repeat(64),
+    })).rejects.toThrow(new RegExp(`current sha256 is ${actual}`))
+    expect(read()).toBe('old content')
+    expect(writes).toEqual([])
+  })
+
+  it('refuses expectedSha256 when the file does not exist yet', async () => {
+    const { fs, writes } = fsWithFile(undefined)
+    const driver = driverWith({ fs })
+    await expect(driver.writeFile({
+      path: '/project/a.ts',
+      content: 'x',
+      createDirectories: true,
+      expectedSha256: 'b'.repeat(64),
+    })).rejects.toThrow(/file does not exist/)
+    expect(writes).toEqual([])
+  })
+})
+
+describe('compare-and-swap file edits', () => {
+  function fsWithFile(content: string): { fs: DshFileSystem; read: () => string; writes: string[] } {
+    let current = content
+    const writes: string[] = []
+    const fs: DshFileSystem = {
+      resolve: async (path: string) => targetFor(path),
+      processPath: (entry: DshFsTarget) => entry.displayPath,
+      stat: async () => ({ type: 'file' as const, size: current.length }),
+      readText: async () => current,
+      readByteRange: async () => new Uint8Array(),
+      listDir: async () => [],
+      writeText: async (_target: DshFsTarget, text: string) => {
+        writes.push(text)
+        current = text
+        return { operation: 'update' as const }
+      },
+    }
+    return { fs, read: () => current, writes }
+  }
+
+  it('edits only when the file hashes to expectedSha256, and returns the new hash', async () => {
+    const before = 'const a = 1\n'
+    const expected = createHash('sha256').update(before, 'utf8').digest('hex')
+    const { fs, read } = fsWithFile(before)
+    const outcome = await driverWith({ fs }).editFile({
+      path: '/project/a.ts',
+      oldText: '1',
+      newText: '2',
+      replaceAll: false,
+      maxBytes: 1_000,
+      expectedSha256: expected,
+    })
+    expect(read()).toBe('const a = 2\n')
+    expect(outcome.sha256).toBe(createHash('sha256').update('const a = 2\n', 'utf8').digest('hex'))
+  })
+
+  it('refuses a stale expectedSha256 and writes nothing', async () => {
+    const { fs, read, writes } = fsWithFile('const a = 1\n')
+    await expect(driverWith({ fs }).editFile({
+      path: '/project/a.ts',
+      oldText: '1',
+      newText: '2',
+      replaceAll: false,
+      maxBytes: 1_000,
+      expectedSha256: 'c'.repeat(64),
+    })).rejects.toThrow(/refusing to edit .*current sha256 is/)
+    expect(read()).toBe('const a = 1\n')
+    expect(writes).toEqual([])
   })
 })
 
