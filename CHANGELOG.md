@@ -3,6 +3,12 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.57
+
+- `docs/CAPABILITY-GAPS.md` opened by claiming "25 tools" for several releases while the code
+  had 28. The page now says 28, and the drift check compares that opening sentence with the
+  registered tools — the appendix count was already checked, the introduction was not.
+
 ## 0.52.56
 
 - A live turn now asserts that the usage fold agrees with the harness's own token projection:

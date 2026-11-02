@@ -221,6 +221,21 @@ for (const tool of schemaOptionsOf(toolsSource)) {
   }
 }
 
+// --- the tool count in docs/CAPABILITY-GAPS.md's opening line ----------------
+//
+// The appendix count is checked above; the sentence that introduces the page carried a
+// stale 25 for several releases because nothing compared it with the code.
+
+const gapsIntro = read('docs/CAPABILITY-GAPS.md')
+const introCount = /MCP server with \*\*(\d+) tools\*\* today/.exec(gapsIntro)
+if (introCount === null) {
+  problems.push('docs/CAPABILITY-GAPS.md no longer states its tool count in the opening line')
+} else if (Number(introCount[1]) !== registered.length) {
+  problems.push(
+    `docs/CAPABILITY-GAPS.md opens by claiming ${introCount[1]} tools, the code registers ${registered.length}`,
+  )
+}
+
 // --- the probe count in docs/CAPABILITY-GAPS.md -----------------------------
 //
 // That page's appendix states how many capability probes `dsh_info.harnessServices`

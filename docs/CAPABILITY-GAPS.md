@@ -1,6 +1,6 @@
 # Capability gaps: what DSH can do that `dsh-as-mcp` cannot reach
 
-**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with 25 tools.
+**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **28 tools** today.
 The author wants to know exactly what is missing, what is worth adding, and what should never be added.
 
 **Artifacts**
