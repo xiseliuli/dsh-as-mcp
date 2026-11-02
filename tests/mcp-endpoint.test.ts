@@ -574,6 +574,22 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('forwards the turn filter to the transcript read', async () => {
+    const seen: unknown[] = []
+    const own = await boot(stubDriver({
+      readTranscript: async (_sessionId, _limit, options) => {
+        seen.push(options)
+        return { messages: [], total: 0 }
+      },
+    }), testConfig({ session: true }))
+    try {
+      expect((await callTool(own.url, 'session_messages', { sessionId: 's', turn: 3 })).isError).toBe(false)
+      expect(seen).toEqual([{ turn: 3 }])
+    } finally {
+      await own.stop()
+    }
+  })
+
   it('forwards includeToolResults to the transcript read', async () => {
     const seen: unknown[] = []
     const own = await boot(stubDriver({

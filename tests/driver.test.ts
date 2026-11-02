@@ -898,6 +898,36 @@ describe('bounded replies', () => {
     expect(none.total).toBe(0)
   })
 
+  it('attributes rows to their turn and can filter by it', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'one', 0), userMessage('req-2', 'two', 1)])
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'first answer' }] },
+    }, 2))
+    sessions.log.push(event('assistant/message', {
+      turn: 2,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'second answer' }] },
+    }, 3))
+    const { driver } = driverWith(sessions)
+
+    const all = await driver.readTranscript('session-1', 10)
+    // Log order: both prompts were committed before the answers, and the read keeps
+    // event order rather than inventing a conversational pairing.
+    expect(all.messages.map((message) => [message.role, message.text, message.turn])).toEqual([
+      ['user', 'one', undefined],
+      ['user', 'two', undefined],
+      ['assistant', 'first answer', 1],
+      ['assistant', 'second answer', 2],
+    ])
+
+    // The prompt row carries no turn in the log, so a turn-filtered read is the
+    // turn's own rows — documented, not a surprise.
+    const second = await driver.readTranscript('session-1', 10, { turn: 2 })
+    expect(second.messages.map((message) => message.text)).toEqual(['second answer'])
+  })
+
   it('includes tool results as their own rows only when asked', async () => {
     const sessions = fakeSessions([userMessage('req-1', 'run it', 0)])
     sessions.log.push(event('assistant/message', {
@@ -926,6 +956,8 @@ describe('bounded replies', () => {
       role: 'tool',
       callId: 'call-1',
       error: true,
+      turn: 1,
+      step: 0,
       text: 'boom: ',
       time: expect.any(Number),
       seq: 2,

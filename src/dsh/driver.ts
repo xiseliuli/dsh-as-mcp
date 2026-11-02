@@ -480,6 +480,10 @@ export interface TranscriptMessage {
   readonly requestId?: string
   /** The call a `tool` row answers; correlates with `toolCalls[].id`. */
   readonly callId?: string
+  /** The turn this row belongs to, when the log attributes one. */
+  readonly turn?: number
+  /** The step inside that turn, when the log records one. */
+  readonly step?: number
   /** True when the harness marked this tool result an error. */
   readonly error?: true
   /** The message text, cut to the caller's per-message cap when one was given. */
@@ -2312,6 +2316,8 @@ export class DshDriver {
       includeToolCalls?: boolean
       /** Also include `tool/result` events as `role: "tool"` rows, capped like messages. */
       includeToolResults?: boolean
+      /** Only rows the log attributes to this turn; the prompt row has no turn and is filtered out. */
+      turn?: number
       /** Per-message character cap; absent means full text (the historical default). */
       maxCharsPerMessage?: number
     } = {},
@@ -2344,6 +2350,10 @@ export class DshDriver {
       if (options.role !== undefined && options.role !== role) continue
       if (options.sinceSeq !== undefined && event.seq <= options.sinceSeq) continue
       if (options.beforeSeq !== undefined && event.seq >= options.beforeSeq) continue
+      const data = event.data as { turn?: unknown; step?: unknown } | undefined
+      const turn = typeof data?.turn === 'number' ? data.turn : undefined
+      const step = typeof data?.step === 'number' ? data.step : undefined
+      if (options.turn !== undefined && turn !== options.turn) continue
       const rawBlocks = role === 'user'
         ? (event.data as { content?: unknown } | undefined)?.content
         : (event.data as { message?: { content?: unknown } } | undefined)?.message?.content
@@ -2368,6 +2378,8 @@ export class DshDriver {
         ...(typeof messageId === 'string' && messageId !== '' ? { id: messageId } : {}),
         ...(typeof requestId === 'string' && requestId !== '' ? { requestId } : {}),
         ...(typeof callId === 'string' && callId !== '' ? { callId } : {}),
+        ...(turn === undefined ? {} : { turn }),
+        ...(step === undefined ? {} : { step }),
         ...(toolError ? { error: true as const } : {}),
         ...(toolCalls.length === 0 ? {} : { toolCalls }),
         text: truncated ? truncateText(text, cap) : text,

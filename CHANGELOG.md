@@ -3,6 +3,18 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.41.0
+
+- `session_messages` rows now carry their `turn` and `step` when the log attributes
+  them, and `turn: N` narrows a read to one turn. Since assistant and tool rows are the
+  ones the log attributes (`turn`/`step` on the event), a turn-filtered read is the
+  turn's own rows; the user prompt has no turn number and is documented as excluded
+  rather than guessed. Useful for "what did turn 3 do" and for grouping a long
+  transcript without re-reading it all.
+- Driver and endpoint tests cover attribution and the filter; the acceptance run
+  asserts real tool rows carry turn/step and that a turn-filtered read stays inside
+  that turn. Both READMEs describe the fields.
+
 ## 0.40.0
 
 - `session_messages` gained `includeToolResults`: each recorded `tool/result` becomes a

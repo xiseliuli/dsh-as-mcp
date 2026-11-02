@@ -745,6 +745,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               'Page backwards: only messages with a smaller seq, newest of those first-of-the-window '
               + 'last. To walk a long transcript, pass the seq of the oldest message you already have.',
             ),
+          turn: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .describe(
+              'Only rows the log attributes to this turn (assistant and tool rows carry turn/step; the user '
+              + 'prompt itself has no turn number, so it is not part of a turn-filtered read).',
+            ),
           includeToolResults: z
             .boolean()
             .optional()
@@ -786,6 +795,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           ...(args.beforeSeq === undefined ? {} : { beforeSeq: args.beforeSeq }),
           ...(args.includeToolCalls === undefined ? {} : { includeToolCalls: args.includeToolCalls }),
           ...(args.includeToolResults === undefined ? {} : { includeToolResults: args.includeToolResults }),
+          ...(args.turn === undefined ? {} : { turn: args.turn }),
           ...(args.role === undefined ? {} : { role: args.role }),
           ...(args.maxCharsPerMessage === undefined ? {} : { maxCharsPerMessage: args.maxCharsPerMessage }),
         })

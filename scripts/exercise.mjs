@@ -1055,10 +1055,23 @@ try {
     check(
       toolRows.length > 0 &&
         toolRows.every((entry) => typeof entry.callId === 'string' && typeof entry.text === 'string' &&
-          entry.text.length <= 120 && typeof entry.seq === 'number'),
+          entry.text.length <= 120 && typeof entry.seq === 'number' &&
+          typeof entry.turn === 'number' && typeof entry.step === 'number'),
       'session_messages can include tool results as their own rows',
       `${toolRows.length} result row(s)`,
     )
+
+    // Rows carry turn/step, and the turn filter narrows a read to one of them.
+    const someTurn = toolRows[0]?.turn
+    if (typeof someTurn === 'number') {
+      const turnRead = await must('session_messages', { sessionId, limit: 200, turn: someTurn })
+      check(
+        (turnRead.messages ?? []).length > 0 &&
+          (turnRead.messages ?? []).every((entry) => entry.turn === someTurn),
+        'a turn-filtered read returns only rows attributed to that turn',
+        `${(turnRead.messages ?? []).length} row(s) of turn ${someTurn}`,
+      )
+    }
 
     // The call list reports sizes; one lookup fetches the text of a single result,
     // which is what debugging a failure actually needs.
