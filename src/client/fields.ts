@@ -202,6 +202,26 @@ export function formatList(value: unknown): string {
   return Array.isArray(value) ? value.map((entry) => String(entry)).join(', ') : ''
 }
 
+/**
+ * Turn a number field's draft text into a value the host will accept.
+ *
+ * Returns `undefined` for a draft that is not a usable number (empty, half-typed,
+ * out of range), so the caller can reset the editor instead of leaving a value on
+ * screen that was never written. The host remains the authority; these bounds are
+ * the ones its schema declares.
+ */
+export function parseNumberDraft(
+  field: Pick<FieldSpec, 'min' | 'max'>,
+  text: string,
+): number | undefined {
+  if (text.trim() === '') return undefined
+  const parsed = Number(text)
+  if (!Number.isFinite(parsed)) return undefined
+  if (field.min !== undefined && parsed < field.min) return undefined
+  if (field.max !== undefined && parsed > field.max) return undefined
+  return parsed
+}
+
 /** Parse the editor's text back into the `string[]` the host stores. */
 export function parseList(text: string): string[] {
   return text

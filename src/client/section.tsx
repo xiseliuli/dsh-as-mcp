@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { Config } from '../config.js'
 import type { EndpointStatus } from '../status.js'
 import type { SettingsPathOp, SettingsScopeSnapshot } from './contract.js'
-import { GROUPS, formatList, parseList, pathKey, readPath, type FieldSpec, type GroupSpec } from './fields.js'
+import { GROUPS, formatList, parseNumberDraft, parseList, pathKey, readPath, type FieldSpec, type GroupSpec } from './fields.js'
 import { clientSnippet, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from './snippet.js'
 
 /** The bound settings namespace, as the section consumes it. */
@@ -52,7 +52,8 @@ function DraftInput({
   type: 'text' | 'number' | 'password'
   min?: number
   max?: number
-  onCommit(next: string): void
+  /** @returns `false` when the draft was not written and should be reset. */
+  onCommit(next: string): boolean | void
 }) {
   const [draft, setDraft] = useState(value)
   const editing = useRef(false)
@@ -78,7 +79,12 @@ function DraftInput({
       }}
       onBlur={() => {
         editing.current = false
-        if (draft !== value) onCommit(draft)
+        if (draft === value) return
+        if (onCommit(draft) === false) {
+          // A rejected draft must not linger: the field showed a value the host
+          // never received. Reset to the last committed value.
+          setDraft(value)
+        }
       }}
       onKeyDown={(event) => {
         if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
@@ -152,13 +158,12 @@ function FieldRow({
                 onWrite(next)
                 return
               }
-              // A number input can hold an empty or half-typed value; neither is
-              // a number the host would accept, so a draft like "1" on the way to
-              // "1000" must not become a write.
-              const parsed = Number(next)
-              if (next.trim() === '' || !Number.isFinite(parsed)) return
-              if (field.min !== undefined && parsed < field.min) return
-              if (field.max !== undefined && parsed > field.max) return
+              // A number input can hold an empty or half-typed value; neither is a
+              // number the host would accept, so a draft like "1" on the way to
+              // "1000" must not become a write — and the editor must not keep
+              // showing a value that was never written.
+              const parsed = parseNumberDraft(field, next)
+              if (parsed === undefined) return false
               onWrite(parsed)
             }}
           />

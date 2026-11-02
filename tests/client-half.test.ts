@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import { GROUPS, formatList, parseList, readPath } from '../src/client/fields.js'
+import { GROUPS, formatList, parseList, parseNumberDraft, readPath } from '../src/client/fields.js'
 import { normalizeConfig } from '../src/config.js'
 import { en, zh } from '../src/client/locales.js'
 import { clientSnippet, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from '../src/client/snippet.js'
@@ -278,5 +278,20 @@ describe('the settings panel status badge', () => {
     const source = await readFile(new URL('../src/client/section.tsx', import.meta.url), 'utf8')
     expect(source).toContain('setStatusRead(next !== undefined)')
     expect(source).toContain('{statusRead && (')
+  })
+})
+
+describe('number field drafts', () => {
+  const port = { min: 0, max: 65_535 }
+  it('accepts a usable number, including both bounds', () => {
+    expect(parseNumberDraft(port, '8790')).toBe(8_790)
+    expect(parseNumberDraft(port, '0')).toBe(0)
+    expect(parseNumberDraft(port, '65535')).toBe(65_535)
+    expect(parseNumberDraft({}, '12.5')).toBe(12.5)
+  })
+  it('rejects a draft the host would refuse, so the editor can reset', () => {
+    for (const text of ['', '   ', 'abc', '12abc', '70000', '-1']) {
+      expect(parseNumberDraft(port, text), text).toBeUndefined()
+    }
   })
 })

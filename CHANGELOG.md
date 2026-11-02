@@ -3,6 +3,14 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.45
+
+- Number fields no longer keep an unwritten value on screen: a draft the host would refuse
+  (empty, half-typed, out of range) is reset to the last committed value when the field
+  loses focus, instead of silently doing nothing while the input still showed e.g. `70000`.
+  The rule moved into `parseNumberDraft` so it is unit-tested (bounds accepted, invalid and
+  out-of-range rejected); text fields are unchanged.
+
 ## 0.52.44
 
 - Wrote the **flake discipline** into `docs/LIVE-VERIFICATION.md`, with the four cases from the
