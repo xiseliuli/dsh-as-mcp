@@ -32,7 +32,7 @@
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -272,6 +272,78 @@ async function shellChecks() {
     )
     await callTool('shell_kill', { jobId: loud.jobId }).catch(() => {})
   }
+}
+
+// --- info coherence --------------------------------------------------------
+
+/**
+ * `dsh_info` is what a caller plans against, so its claims must agree with the
+ * surface it is describing: the version is the installed build, the advertised tool
+ * count matches the tools actually served, the availability list names real tools,
+ * and the effective settings are echoed as booleans/values rather than prose.
+ */
+async function infoCoherenceChecks() {
+  section('info coherence')
+  const info = await callTool('dsh_info')
+  const repoVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+  check(
+    info.version === repoVersion,
+    'dsh_info reports the built version this checkout produces',
+    `${info.version} (repo ${repoVersion})`,
+  )
+  check(
+    typeof info.endpoint === 'string' && info.endpoint.replace(/\/+$/, '') === endpoint.replace(/\/+$/, ''),
+    'dsh_info echoes the endpoint the caller reached',
+    info.endpoint,
+  )
+  check(info.listening === true && info.listenError === null, 'dsh_info health says the listener is up')
+
+  const availability = info.toolAvailability ?? {}
+  const availableTools = availability.availableTools ?? []
+  check(
+    availability.available === surface.size && availableTools.length === surface.size &&
+      availableTools.every((name) => surface.has(name)) &&
+      [...surface].every((name) => availableTools.includes(name)),
+    'toolAvailability agrees with the tools actually advertised',
+    `${availability.available ?? '?'} vs ${surface.size}`,
+  )
+  check(
+    (availability.unavailable ?? []).every((entry) => typeof entry.tool === 'string' && typeof entry.reason === 'string'),
+    'every unavailable tool comes with a reason',
+    `${(availability.unavailable ?? []).length} unavailable`,
+  )
+
+  const groups = info.enabledToolGroups ?? {}
+  check(
+    Object.values(groups).every((value) => typeof value === 'boolean') &&
+      ['workspace', 'session', 'files', 'shell', 'agentTools', 'usage'].every((group) => group in groups),
+    'enabledToolGroups names every group as a boolean',
+    Object.keys(groups).join(','),
+  )
+
+  const services = info.harnessServices ?? {}
+  check(
+    Object.values(services).every((value) => typeof value === 'boolean') && services['sessionController'] === true,
+    'harnessServices is a boolean map and this profile reaches the session controller',
+    Object.keys(services).length + ' service(s)',
+  )
+
+  check(
+    typeof info.health?.node === 'string' && info.health.node.startsWith('v') &&
+      typeof info.health?.rssMb === 'number' && info.health.rssMb > 0,
+    'health reports the runtime and a live memory figure',
+    `${info.health?.node ?? '?'}, ${info.health?.rssMb ?? '?'} MB rss`,
+  )
+  check(
+    info.config?.session?.scope === 'all' || info.config?.session?.scope === 'owned',
+    'the effective session scope is echoed',
+    info.config?.session?.scope,
+  )
+  check(
+    Array.isArray(info.notes) && info.notes.length > 0 && info.notes.every((note) => typeof note === 'string'),
+    'dsh_info carries its caveats as notes',
+    `${info.notes?.length ?? 0} note(s)`,
+  )
 }
 
 // --- shell timeout and job cap ---------------------------------------------
@@ -1398,6 +1470,7 @@ try {
 try {
   await protocolChecks()
   await shellChecks()
+  await infoCoherenceChecks()
   await shellLimitsChecks()
   await listingImageChecks()
   await filePagingChecks()

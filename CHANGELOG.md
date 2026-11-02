@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.38.6
+
+- `tools/live-checks.mjs` checks that `dsh_info` agrees with the surface it describes:
+  the reported version equals this checkout's package version (so a stale installed
+  build is caught instead of silently verified), the endpoint echo matches the URL the
+  caller reached, `toolAvailability` names exactly the advertised tools with a reason
+  for each unavailable one, `enabledToolGroups` and `harnessServices` are boolean maps
+  covering every group/service, health reports the runtime and a live RSS figure, the
+  effective session scope is echoed, and the caveats come back as notes.
+
 ## 0.38.5
 
 - `tools/live-checks.mjs` checks the shell deadline and the job table: `shell_run`
