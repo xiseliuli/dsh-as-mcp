@@ -3,6 +3,15 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.43.0
+
+- `session_usage { includeTurns: true }` per-turn rows now carry `durationMs` (from the
+  turn's start to its end event) alongside their token buckets, so a caller can bill
+  per turn and see which turn was slow. Absent when the log lacks a boundary inside the
+  folded window (an inherited prefix, a turn still running) instead of guessed.
+- Usage-fold test covers the settled and still-running cases; the acceptance run
+  asserts the real session's settled turn carries a duration. Both READMEs updated.
+
 ## 0.42.0
 
 - `session_messages { includeToolResults: "errors" }` keeps only the tool results the

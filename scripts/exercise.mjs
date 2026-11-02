@@ -719,10 +719,18 @@ try {
       `receipt ${receipt.totals?.totalTokens} vs reply ${replyTotals}`,
     )
     const own = receipt.sessions?.find((row) => row.origin === 'self')
+    const perTurn = own?.usage?.byTurn ?? []
     check(
-      (own?.usage?.byTurn?.length ?? 0) > 0,
+      perTurn.length > 0,
       'includeTurns returns the per-turn breakdown',
-      `${own?.usage?.byTurn?.length ?? 0} turn(s)`,
+      `${perTurn.length} turn(s)`,
+    )
+    check(
+      perTurn.every((turn) => turn.durationMs === undefined ||
+        (typeof turn.durationMs === 'number' && turn.durationMs >= 0)) &&
+        perTurn.some((turn) => typeof turn.durationMs === 'number'),
+      'a settled turn in the breakdown carries its wall-clock duration',
+      `${perTurn.filter((turn) => typeof turn.durationMs === 'number').length} of ${perTurn.length} turn(s)`,
     )
     check(
       typeof receipt.cost?.available === 'boolean',

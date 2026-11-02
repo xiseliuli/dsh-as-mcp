@@ -15,8 +15,8 @@ import {
 import type { DshSessionEvent, DshTokenUsage } from '../src/dsh/types.js'
 
 /** One durable-log entry. */
-function event(type: string, data: unknown, seq: number): DshSessionEvent {
-  return { type, data, seq, time: 1_700_000_000_000 + seq }
+function event(type: string, data: unknown, seq: number, time = 1_700_000_000_000 + seq): DshSessionEvent {
+  return { type, data, seq, time }
 }
 
 /** A usage record with the buckets a DeepSeek adapter reports. */
@@ -70,6 +70,21 @@ describe('foldSessionUsage', () => {
     })
     expect(folded.samples).toBe(2)
     expect(folded.ignoredSamples).toBe(0)
+  })
+
+  it('reports each turn\'s wall-clock duration when the log has both boundaries', () => {
+    const folded = foldSessionUsage([
+      event('turn/start', { turn: 1 }, 1, 1_000),
+      settlement(2, 1, 1, usage(10, 0, 1)),
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 3, 2_500),
+      // A turn still running has a start but no end: no guessed duration.
+      event('turn/start', { turn: 2 }, 4, 3_000),
+      settlement(5, 2, 1, usage(10, 0, 1)),
+    ])
+    expect(folded.byTurn.map((turn) => [turn.turn, turn.durationMs])).toEqual([
+      [1, 1_500],
+      [2, undefined],
+    ])
   })
 
   it('attributes usage per turn and counts the steps inside each', () => {

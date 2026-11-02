@@ -65,6 +65,14 @@ export interface TurnUsage extends UsageTotals {
   readonly turn: number
   /** How many distinct steps inside this turn reported usage. */
   readonly steps: number
+  /**
+   * Wall-clock milliseconds from this turn's start event to its end event.
+   *
+   * Tokens say what the turn cost; this says how long it ran. Absent when the log
+   * does not contain both boundaries inside the window being folded (an inherited
+   * prefix, or a turn still running), rather than guessed.
+   */
+  readonly durationMs?: number
 }
 
 /**
@@ -357,12 +365,25 @@ export function foldSessionUsage(
   const fromSeq = options.fromSeq ?? 0
   const turns = new Map<number, TurnCell>()
   const models = new Map<string, ModelCell>()
+  const turnStarts = new Map<number, number>()
+  const turnEnds = new Map<number, number>()
   let slot: Slot | undefined
   let samples = 0
   let ignoredSamples = 0
 
   for (const event of events) {
     if (event.seq < fromSeq) continue
+    if (event.type === 'turn/start' || event.type === 'turn/end') {
+      const turnNumber = (event.data as { turn?: unknown } | undefined)?.turn
+      if (isCount(turnNumber)) {
+        const target = event.type === 'turn/start' ? turnStarts : turnEnds
+        // First start wins (a resumed turn keeps its original beginning); a later
+        // end wins, because that is when the turn actually settled.
+        if (event.type === 'turn/start' && target.has(turnNumber)) continue
+        target.set(turnNumber, event.time)
+      }
+      continue
+    }
     if (event.type === 'llm/retry-started') {
       // The slot is freed, *not* emptied: the failed attempt it held was billed
       // and stays in the totals. The next attempt for that step therefore adds.
@@ -415,7 +436,18 @@ export function foldSessionUsage(
 
   const byTurn: TurnUsage[] = [...turns.entries()]
     .sort(([left], [right]) => left - right)
-    .map(([turn, cell]) => ({ turn, steps: cell.steps.size, ...toTotals(cell.buckets) }))
+    .map(([turn, cell]) => {
+      const startedAt = turnStarts.get(turn)
+      const endedAt = turnEnds.get(turn)
+      return {
+        turn,
+        steps: cell.steps.size,
+        ...toTotals(cell.buckets),
+        ...(startedAt === undefined || endedAt === undefined
+          ? {}
+          : { durationMs: Math.max(0, endedAt - startedAt) }),
+      }
+    })
 
   const byModel: ModelUsage[] = [...models.values()]
     .filter((cell) => !isEmptyBuckets(cell.buckets))
