@@ -217,6 +217,61 @@ describe('locateTurn', () => {
   })
 })
 
+describe('per-session serialization', () => {
+  it('does not submit a second prompt on one session until the first wait settles', async () => {
+    // Two callers on one session must not interleave: the second prompt waits for
+    // the first wait to finish before it is even submitted, so nobody can disagree
+    // about which reply belongs to which message.
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+
+    const first = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'first',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    const second = driver.promptSession({
+      sessionId: 'session-1',
+      prompt: 'second',
+      mode: 'queue',
+      wait: true,
+      timeoutMs: 5_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(sessions.prompts).toHaveLength(1)
+
+    sessions.log.push(event('turn/start', { turn: 1 }, 2))
+    sessions.log.push(event('assistant/message', {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'first reply' }] },
+    }, 3))
+    sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 4))
+
+    const firstResult = await first
+    expect(firstResult.turn?.reply).toBe('first reply')
+
+    // The second prompt is submitted only now.
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(sessions.prompts).toHaveLength(2)
+
+    sessions.log.push(event('turn/start', { turn: 2 }, 5))
+    sessions.log.push(event('assistant/message', {
+      turn: 2,
+      step: 0,
+      message: { content: [{ type: 'text', text: 'second reply' }] },
+    }, 6))
+    sessions.log.push(event('turn/end', { turn: 2, reason: { kind: 'completed' } }, 7))
+
+    const secondResult = await second
+    expect(secondResult.turn?.reply).toBe('second reply')
+    expect(secondResult.turn?.turn).toBe(2)
+  })
+})
+
 describe('bounded replies', () => {
   it('cuts each transcript message to the requested cap and reports the original size', async () => {
     const sessions = fakeSessions()

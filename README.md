@@ -817,7 +817,9 @@ what protects a host that cannot supply it.
   does not even submit its message until that wait settles (up to its timeout), and a `steer` sent
   while another MCP wait is in flight is deferred until it, which turns it into a queued prompt.
   Callers that only want to queue a message should prefer `session_messages` polling over holding
-  a long wait open.
+  a long wait open. **Different sessions are not serialized against each other**: two sessions can
+  run turns at the same time (measured: two prompts each blocked on a four-second tool step
+  finished in 6.3 s total), and cancelling one session does not disturb the other.
 - **Filesystem.** Only `workspace_create` touches `node:fs` `mkdir` — the directory it creates
   *is* the new sandbox root, so by definition it sits outside every root that exists before it,
   which is why the call cannot go through the filesystem seam and is instead gated on the

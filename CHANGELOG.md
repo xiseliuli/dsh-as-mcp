@@ -3,6 +3,17 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.21.4
+
+- Steer and queue semantics verified live: a `mode: "steer"` message sent into a
+  running turn is folded into that turn (one turn, usage covering the whole turn),
+  while `mode: "queue"` becomes the next turn. Titled docs now also state
+  explicitly that different sessions are not serialized against each other
+  (measured concurrently: 6.3 s for two prompts each blocked on a 4 s tool step),
+  and that cancelling one session leaves another untouched.
+- Added the missing unit test for per-session serialization: a second prompt is
+  not even submitted until the first wait settles.
+
 ## 0.21.3
 
 - Timeout boundaries verified live: `shell_run` returns `timedOut: true` with
