@@ -210,7 +210,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | Tool | What it does |
 | --- | --- |
 | `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, the `catalog` of accepted providers, agent presets and sandbox mode, and `toolAvailability` — the tools that passed every rule (`availableTools`, comparable with `tools/list`), those this deployment cannot serve, and why. `probeSearch` additionally exercises a real search to say whether the index answers, rather than just whether the tool is enabled. |
-| `workspace_create` | Register a directory as a DSH workspace (creating it if needed, or only with `createDirectory: true` when the path must not be made implicitly). |
+| `workspace_create` | Register a directory as a DSH workspace (creating it if needed; pass `createDirectory: false` to require that it already exists). |
 | `workspace_list` | Every registered workspace with id, path, title, session count, directory status. |
 | `workspace_delete` | Unregister a workspace (files and session history untouched); idempotent. |
 | `session_create` | Start a DSH agent session bound to a workspace or bare directory. |
@@ -227,7 +227,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | `session_usage` | Token usage per session (its subagents included by default): exact bucket counts, a per-model breakdown, optional per-turn detail, and money when a price plugin is installed. Pass `sessionIds` to tally several known sessions in one receipt, or `cwd` to total every session that ran in one workspace directory. |
 | `file_read` | Read a UTF-8 file through DSH's filesystem service. Bounded by a byte limit; `offset`/`nextOffset` page through a larger file, `maxBytes` asks for a smaller window so reading a slice costs less, and `sha256: true` returns the whole file's hash as the compare-and-swap value for a later write/edit. |
 | `file_read_image` | Read an image (png/jpeg/gif/webp/bmp, detected from the bytes) and return it as an MCP image block, preceded by a metadata block (path, mimeType, bytes), so you can look at a screenshot or chart instead of guessing. Capped at 8 MiB. |
-| `file_write` | Create or replace a file through DSH's filesystem service. `createDirectories: true` creates missing parents, and `expectedSha256` makes the write compare-and-swap: it is refused when the file changed since the hash was read. |
+| `file_write` | Create or replace a file through DSH's filesystem service. Missing parents are created by default (`createDirectories: false` requires them to exist), and `expectedSha256` makes the write compare-and-swap: it is refused when the file changed since the hash was read. |
 | `file_edit` | Replace literal text (`oldText` → `newText`) in one file: exact match, unique unless `replaceAll`, nothing written on an ambiguous match, and `expectedSha256` refuses the edit when the file changed since it was read. Editing no longer costs a full read + write of the file. |
 | `file_list` | List a directory through DSH's filesystem service; `recursive` walks subdirectories (bounded by `maxDepth` and an entry cap, with `truncated`) and gives each entry a relative `path`; `sha256: true` hashes each file for bulk change detection. |
 | `shell_run` | Run one command through DSH's shell service and wait for it. |

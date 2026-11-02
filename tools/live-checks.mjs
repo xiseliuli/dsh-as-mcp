@@ -892,6 +892,22 @@ async function workspaceChecks() {
       typeof workspace?.id === 'string' && created.created === true && existsSync(dir),
       'workspace_create registers and makes the directory',
     )
+    // The default makes the directory; `createDirectory: false` is the strict mode.
+    const implicitParent = join(dir, 'nested', 'deeper')
+    const implicit = await callTool('workspace_create', { path: implicitParent })
+    check(
+      existsSync(implicitParent) && implicit.created === true,
+      'workspace_create makes a missing path by default',
+    )
+    await callTool('workspace_delete', { workspaceId: implicit.workspace?.id })
+    const strictMissing = join(dir, 'nested', 'strict')
+    const strict = await attemptTool('workspace_create', { path: strictMissing, createDirectory: false })
+    check(
+      strict.ok === false && existsSync(strictMissing) === false,
+      'workspace_create { createDirectory: false } refuses a missing path',
+      strict.error?.slice(0, 70),
+    )
+
     const again = await callTool('workspace_create', { path: dir, title: 'renamed title' })
     check(
       again.workspace?.id === workspace?.id && again.created === false,
@@ -955,6 +971,30 @@ async function fileEditChecks() {
   try {
     const written = await callTool('file_read', { path })
     check(written.text === 'alpha\nbeta\ngamma\n', 'file_write round-trips through file_read')
+
+    // `createDirectories` is the difference between "write into a tree that exists" and
+    // "quietly create whatever path was asked for".
+    const nested = join('/tmp', `dsh-as-mcp-live-nested-${process.pid}`, 'a', 'b.txt')
+    await callTool('file_write', { path: nested, content: 'nested' })
+    check(
+      (await callTool('file_read', { path: nested })).text === 'nested',
+      'file_write creates missing parents by default',
+    )
+    const strictNested = join('/tmp', `dsh-as-mcp-live-nested-${process.pid}`, 'c', 'b.txt')
+    const withoutParents = await attemptTool('file_write', { path: strictNested, content: 'x', createDirectories: false })
+    check(
+      withoutParents.ok === false && existsSync(strictNested) === false,
+      'file_write { createDirectories: false } refuses a missing parent',
+      withoutParents.error?.slice(0, 60),
+    )
+
+    // `maxDepth` bounds a recursive walk to the requested depth.
+    const shallow = await callTool('file_list', { path: dirname(nested), recursive: true, maxDepth: 1 })
+    check(
+      (shallow.entries ?? []).every((entry) => (entry.depth ?? 1) <= 1),
+      'file_list { maxDepth } bounds a recursive walk',
+      `${(shallow.entries ?? []).length} entr(ies)`,
+    )
 
     const ambiguous = await attemptTool('file_edit', { path, oldText: 'a', newText: 'A' })
     check(
@@ -1757,6 +1797,19 @@ async function modelSelectionCheck() {
           typeof rowCost.costEstimateUsd === 'number' && rowCost.source === 'dsh-cost-meter',
         'dsh_info advertises money and the receipt can price the session',
         `costUsd ${rowCost?.costUsd ?? '?'} / estimate ${rowCost?.costEstimateUsd ?? '?'}`,
+      )
+    }
+    // Fork by turn boundary: the child's transcript must stop before the later turn.
+    if (has('session_fork')) {
+      const forked = await callTool('session_fork', { sessionId: session.sessionId, atTurn: firstTurn })
+      const childTranscript = await callTool('session_messages', { sessionId: forked.sessionId, limit: 50 })
+      const childText = (childTranscript.messages ?? []).map((message) => String(message.text ?? '')).join('\n')
+      check(
+        typeof forked.atSeq === 'number' &&
+          childTranscript.messages?.length > 0 &&
+          !childText.includes('SWITCH OK'),
+        'session_fork { atTurn } stops the child before the later turn',
+        `atSeq ${forked.atSeq ?? '?'}, ${childTranscript.messages?.length ?? 0} message(s)`,
       )
     }
     const receiptTurns = (rowFor(firstTurn)?.totalTokens ?? 0) + (rowFor(secondTurn)?.totalTokens ?? 0)

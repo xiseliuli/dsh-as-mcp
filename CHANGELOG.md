@@ -3,6 +3,16 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.17
+
+- Live-checked the options documented in 0.52.16, and corrected the docs where the
+  behaviour was the opposite of the wording: `workspace_create` and `file_write` **create**
+  missing paths/parents by default and take `createDirectory: false` /
+  `createDirectories: false` as the strict mode. Checks now assert both directions
+  (default creates, `false` refuses), plus `file_list { maxDepth }` bounding a recursive
+  walk and `session_fork { atTurn }` stopping a child before the later turn — the last one
+  reuses the two turns `--with-model` already runs, so it adds no spend.
+
 ## 0.52.16
 
 - Documented the non-obvious options that were absent from **both** READMEs, in parallel:

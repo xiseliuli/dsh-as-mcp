@@ -199,7 +199,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | 工具 | 作用 |
 | --- | --- |
 | `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`，以及 `toolAvailability`（通过全部规则的 `availableTools`，可与 `tools/list` 对照；以及本部署无法服务的工具及原因）；`probeSearch` 可验证搜索是否真的可用。 |
-| `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建；`createDirectory: true` 时才会隐式创建）。 |
+| `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建；传 `createDirectory: false` 则要求它已存在）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、会话数、目录是否还在。 |
 | `workspace_delete` | 注销一个工作区（文件与会话历史不受影响）；幂等。 |
 | `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话。 |
@@ -216,7 +216,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。传 `sessionIds` 可一次结算多个已知会话，传 `cwd` 可汇总某个工作目录里跑过的所有会话。 |
 | `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件，`maxBytes` 用更小的窗口降低单次开销；`sha256: true` 返回整个文件的哈希，作为后续写入/编辑的比较并交换值。 |
 | `file_read_image` | 读取图片（png/jpeg/gif/webp/bmp，按字节嗅探）并以 MCP image block 返回，让你直接看截图或图表而不是靠猜。上限 8 MiB。 |
-| `file_write` | 经 DSH 文件系统服务创建或覆盖文件。`createDirectories: true` 会创建缺失的父目录；`expectedSha256` 让写入变成比较并交换：文件在读到哈希后变过就会被拒绝。 |
+| `file_write` | 经 DSH 文件系统服务创建或覆盖文件。默认会创建缺失的父目录（`createDirectories: false` 则要求父目录已存在）；`expectedSha256` 让写入变成比较并交换：文件在读到哈希后变过就会被拒绝。 |
 | `file_edit` | 在一个文件里替换字面文本（`oldText` → `newText`）：精确匹配，除非 `replaceAll` 否则要求唯一，歧义匹配不写入，`expectedSha256` 在文件读后变过时拒绝编辑。不再需要"整读 + 整写"。 |
 | `file_list` | 经 DSH 文件系统服务列目录；`recursive` 递归遍历子目录（受 `maxDepth` 与条目上限约束并带 `truncated`），每个条目给相对 `path`；`sha256: true` 为每个文件算哈希以便批量变更检测。 |
 | `shell_run` | 经 DSH shell 服务执行一条命令并等待它结束。 |
