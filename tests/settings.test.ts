@@ -109,6 +109,7 @@ describe('Config, as the harness reads it', () => {
       'session.model',
       'session.promptTimeoutMs',
       'session.provider',
+      'session.scope',
       'tools.agentTools',
       'tools.files',
       'tools.session',

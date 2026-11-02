@@ -386,13 +386,23 @@ afterEach(async () => {
  */
 function makeDriver(
   harness: FakeHarness,
-  options: { readonly tools?: Partial<Config['tools']>; readonly sessionQuery?: boolean } = {},
+  options: {
+    readonly tools?: Partial<Config['tools']>
+    readonly sessionQuery?: boolean
+    readonly session?: Partial<Config['session']>
+  } = {},
 ): { driver: DshDriver; ctx: Context } {
   const ctx = new Context()
   contexts.push(ctx)
   ctx.provide('sessionController', harness.controller)
   if (options.sessionQuery !== false) ctx.provide('sessionQuery', harness.query)
-  return { driver: new DshDriver(ctx, () => testConfig({ usage: true, ...options.tools })), ctx }
+  return {
+    driver: new DshDriver(ctx, () => ({
+      ...testConfig({ usage: true, ...options.tools }),
+      ...(options.session === undefined ? {} : { session: { ...testConfig().session, ...options.session } }),
+    })),
+    ctx,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -791,6 +801,19 @@ describe('DshDriver.sessionUsage', () => {
     const none = await driver.sessionUsage({ cwd: '/tmp/nowhere', limit: 5 })
     expect(none.sessions).toHaveLength(0)
     expect((none.notes ?? []).some((note) => /No session this DSH knows ran in/.test(note))).toBe(true)
+  })
+
+  it('leaves foreign sessions out of aggregate totals under session.scope owned, and says so', async () => {
+    const harness = treeHarness()
+    const { driver } = makeDriver(harness, { session: { scope: 'owned' } })
+    // Only a session this endpoint creates is visible under `owned`.
+    await driver.createSession({ cwd: '/tmp' })
+    const report = await driver.sessionUsage({ all: true, limit: 10 })
+    expect(report.sessions.map((row) => row.sessionId)).toEqual(['session-1'])
+    expect((report.notes ?? []).some((note) => /session\.scope is "owned"/.test(note))).toBe(true)
+    // An explicit foreign id is refused rather than silently omitted.
+    await expect(driver.sessionUsage({ sessionId: 'session-child', limit: 5 }))
+      .rejects.toThrow(/session\.scope is "owned"/)
   })
 
   it('refuses mixing cwd with the id selectors', async () => {

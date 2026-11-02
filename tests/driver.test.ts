@@ -271,6 +271,77 @@ describe('DshDriver.updateQueue', () => {
   })
 })
 
+describe('session.scope: owned', () => {
+  function scoped(sessions: ReturnType<typeof fakeSessions>, scope: 'all' | 'owned'): DshDriver {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', sessions.controller)
+    ctx.provide('sessionQuery', sessions.query)
+    return new DshDriver(ctx, () => ({
+      ...testConfig(),
+      session: { ...testConfig().session, scope },
+    }))
+  }
+
+  it('refuses a session it did not create, naming the setting', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
+    const driver = scoped(sessions, 'owned')
+    await expect(driver.readTranscript('session-1', 10))
+      .rejects.toThrow(/session\.scope is "owned"/)
+    await expect(driver.promptSession({
+      sessionId: 'session-1', prompt: 'x', mode: 'queue', wait: false,
+    })).rejects.toThrow(/session\.scope is "owned"/)
+    await expect(driver.sessionUsage({ sessionId: 'session-1', limit: 10 }))
+      .rejects.toThrow(/session\.scope is "owned"/)
+  })
+
+  it('allows a session it created and forked', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
+    const driver = scoped(sessions, 'owned')
+    const created = await driver.createSession({ cwd: '/tmp' })
+    expect(created.sessionId).toBe('session-1')
+    await expect(driver.readTranscript('session-1', 10)).resolves.toBeDefined()
+    expect(driver.ownsSession('session-1')).toBe(true)
+  })
+
+  it('lists only owned sessions', async () => {
+    const sessions = fakeSessions()
+    sessions.controller.list = async () => ({
+      items: [
+        { sessionId: 'session-1', cwd: '/tmp', running: false, blank: false, updatedAt: 2 },
+        { sessionId: 'session-user', cwd: '/tmp', running: false, blank: false, updatedAt: 1 },
+      ],
+    })
+    const driver = scoped(sessions, 'owned')
+    await driver.createSession({ cwd: '/tmp' })
+    const listed = await driver.listSessions(10)
+    expect(listed.sessions.map((entry) => entry.sessionId)).toEqual(['session-1'])
+    expect(listed.total).toBe(1)
+  })
+
+  it('filters search matches and reports how many it hid', async () => {
+    const sessions = fakeSessions()
+    ;(sessions.controller as Record<string, unknown>).search = async () => ({
+      items: [
+        { sessionId: 'session-1', snippet: 'mine' },
+        { sessionId: 'session-user', snippet: 'theirs' },
+      ],
+      hasMore: false,
+    })
+    const driver = scoped(sessions, 'owned')
+    await driver.createSession({ cwd: '/tmp' })
+    const result = await driver.searchSessions({ query: 'x' })
+    expect(result.items.map((item) => item.sessionId)).toEqual(['session-1'])
+    expect(result.hidden).toBe(1)
+  })
+
+  it('keeps the historical reach under scope all', async () => {
+    const sessions = fakeSessions([userMessage('req-1', 'hi', 0)])
+    const driver = scoped(sessions, 'all')
+    await expect(driver.readTranscript('session-1', 10)).resolves.toBeDefined()
+  })
+})
+
 describe('DshDriver.readQueue', () => {
   it('lists pending inbox rows with the ids queue mutations address', async () => {
     const ctx = new Context()

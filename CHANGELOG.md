@@ -3,6 +3,24 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.30.0
+
+- **`session.scope`** (`all` | `owned`, default `all`): the containment option the
+  security audit's F4/F11 asked for without changing the default. Under `owned`,
+  every content-bearing session tool — prompt/steer, cancel, list, transcript,
+  fork, rename, set-model, queue list/mutation and search — is limited to sessions
+  this endpoint created or forked; a refusal names the setting. Search filters
+  matches instead of failing and reports `hidden`; `session_usage` refuses explicit
+  foreign ids and notes rows it left out of aggregate scopes; `session_list`
+  filters before its limit, so `total` stays honest. Exposed in the settings panel
+  and both READMEs. Two fail-closed consequences are documented: ownership is
+  per plugin process (sessions from before a restart are no longer owned) and
+  search filters the harness's global page of 20 after it arrives (`hidden` says
+  when that page was entirely foreign). Verified live on a `scope: owned` profile
+  — owned prompt worked, four foreign calls were refused, `session_list` returned
+  only the owned session, usage noted the rows it left out, search reported
+  `hidden: 20` — and the acceptance run passed 142/142 under that scope.
+
 ## 0.29.3
 
 - Security audit caught up with the tools added after it was written. A third

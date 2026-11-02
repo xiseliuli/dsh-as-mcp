@@ -295,6 +295,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           },
           approval: getConfig().approval.policy,
           session: {
+            scope: getConfig().session.scope,
             ...(getConfig().session.agentPreset === '' ? {} : { agentPreset: getConfig().session.agentPreset }),
             ...(getConfig().session.provider === '' ? {} : { provider: getConfig().session.provider }),
             ...(getConfig().session.model === '' ? {} : { model: getConfig().session.model }),

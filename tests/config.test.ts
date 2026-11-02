@@ -57,7 +57,7 @@ describe('cordis.patch.yml', () => {
       // The patch spells out `agentTools` too. An empty `allow` means "keep the
       // built-in list", so the row and the schema still agree on the default.
       agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [] },
-      session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900_000 },
+      session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900_000, scope: 'all' },
       limits: { maxReadBytes: 1_048_576, shellTimeoutMs: 120_000, agentToolTimeoutMs: 120_000 },
       approval: { policy: 'inherit' },
     })
@@ -75,6 +75,19 @@ describe('cordis.patch.yml', () => {
     expect(config?.auth?.token).toBeUndefined()
     // The normalizer still hands the plugin the empty string it acts on.
     expect(load(rows[0]?.config ?? {}).auth.token).toBe('')
+  })
+})
+
+describe('session.scope', () => {
+  it('defaults to all and accepts owned', () => {
+    expect(load({}).session.scope).toBe('all')
+    expect(load({ session: { scope: 'owned' } }).session.scope).toBe('owned')
+  })
+
+  it('refuses an unknown scope', () => {
+    // The schema rejects it before the strict normalizer runs, so the error is the
+    // harness's ValidationError; all that matters is that it does not boot.
+    expect(() => load({ session: { scope: 'none' } })).toThrow(/scope/)
   })
 })
 

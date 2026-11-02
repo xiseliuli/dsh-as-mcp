@@ -128,7 +128,24 @@ export interface SessionConfig {
   model: string
   /** Upper bound for one `session_prompt` call that waits for the turn to end. */
   promptTimeoutMs: number
+  /**
+   * Which sessions the session tools may touch.
+   *
+   * `all` (default) keeps the historical instance-wide reach: any session the
+   * controller holds is addressable. `owned` restricts reads, prompts, forks and
+   * queue mutations to sessions this endpoint created or forked, which is the
+   * containment option for a token handed to a party that should not reach the
+   * user's own conversations. The bearer token remains the outer boundary either
+   * way; this narrows what the tools do with it.
+   */
+  scope: SessionScope
 }
+
+/** {@link SessionConfig.scope}. */
+export const SESSION_SCOPES = ['all', 'owned'] as const
+
+/** {@link SessionConfig.scope}. */
+export type SessionScope = (typeof SESSION_SCOPES)[number]
 
 /** Bounds that keep one external call from monopolising the host. */
 export interface LimitsConfig {
@@ -339,7 +356,7 @@ export function normalizeConfig(input: unknown = {}): Config {
   rejectUnknown(agentTools, ['allow', 'deny'], 'agentTools', issues)
 
   const session = section(root, 'session', 'session', issues)
-  rejectUnknown(session, ['agentPreset', 'provider', 'model', 'promptTimeoutMs'], 'session', issues)
+  rejectUnknown(session, ['agentPreset', 'provider', 'model', 'promptTimeoutMs', 'scope'], 'session', issues)
 
   const limits = section(root, 'limits', 'limits', issues)
   rejectUnknown(limits, ['maxReadBytes', 'shellTimeoutMs', 'agentToolTimeoutMs'], 'limits', issues)
@@ -382,6 +399,7 @@ export function normalizeConfig(input: unknown = {}): Config {
       provider: str(session, 'provider', fallback.session.provider, 'session', issues),
       model: str(session, 'model', fallback.session.model, 'session', issues),
       promptTimeoutMs: positiveInt(session, 'promptTimeoutMs', fallback.session.promptTimeoutMs, 'session', issues),
+      scope: oneOf(session, 'scope', SESSION_SCOPES, fallback.session.scope, 'session', issues),
     },
     limits: {
       maxReadBytes: positiveInt(limits, 'maxReadBytes', fallback.limits.maxReadBytes, 'limits', issues),
@@ -454,6 +472,13 @@ export const Config = Schema.object({
       .description('Model id; must be paired with provider.'),
     promptTimeoutMs: Schema.number().default(DEFAULT_SESSION.promptTimeoutMs).volatile()
       .description('How long session_prompt waits for its turn to settle.'),
+    scope: Schema.union([Schema.const('all'), Schema.const('owned')])
+      .default(DEFAULT_SESSION.scope)
+      .volatile()
+      .description(
+        'all: session tools reach every session this DSH holds. owned: only sessions this endpoint '
+        + 'created or forked.',
+      ),
   }).description('Defaults for turns this plugin starts.'),
   limits: Schema.object({
     maxReadBytes: Schema.number().default(DEFAULT_LIMITS.maxReadBytes).volatile()

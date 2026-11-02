@@ -633,6 +633,7 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
       provider: ''           # 必须和 model 成对出现
       model: ''
       promptTimeoutMs: 900000
+      scope: all             # all：本 DSH 的所有会话；owned：仅本端点创建或 fork 的会话
     limits:
       maxReadBytes: 1048576
       shellTimeoutMs: 120000
@@ -640,6 +641,16 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
     approval:
       policy: inherit        # inherit | allow
 ```
+
+`session.scope` 是把 token 交给"不应接触你自己对话"的一方时用的收窄选项：设为 `owned` 后，所有涉及
+会话内容的工具（prompt、cancel、list、messages、fork、rename、model、queue、search）都只作用于本端点
+创建或 fork 的会话，越界会明确报出该设置。默认 `all` 保持历史上的实例级触达。它位于 token 边界之内，
+不能替代 token：文件、shell、agent 工具仍由各自的工具开关与部署的沙箱策略约束。
+
+`owned` 有两个"失败即关闭"而非缺陷的后果，值得写清：归属是**按插件进程**的，DSH 重启前创建的会话
+不再属于本端点、会变得不可见（需要重新创建，或在该窗口临时用 `all`）；`session_search` 是对 harness
+返回的至多 20 条结果**先取后过滤**，所以一页可能全是别人的——此时回复带 `hidden`，并用 `hasMore`
+表明还有更多。
 
 `mountOnWebServer` 可以单独使用：配合 `enabled: false`，端点只挂在 DSH 的 web server 上
 （`<dsh 主机>:<dsh web 端口><path>`），不再占第二个端口。插件会等待该服务挂载，然后注册精确路由——

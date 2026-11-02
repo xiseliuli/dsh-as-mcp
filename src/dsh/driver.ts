@@ -620,6 +620,27 @@ export class DshDriver {
   }
 
   /**
+   * Whether the current `session.scope` lets this endpoint touch a session.
+   *
+   * `all` keeps the historical instance-wide reach; `owned` is the containment
+   * option, and it is checked at every entry point that names a session rather
+   * than once at the transport, so a later tool cannot quietly bypass it.
+   */
+  private sessionVisible(sessionId: string): boolean {
+    return this.config.session.scope === 'all' || this.ownedSessions.has(sessionId)
+  }
+
+  /** Refuse a session the current scope does not cover, naming the setting. */
+  private assertSessionVisible(sessionId: string, action: string): void {
+    if (this.sessionVisible(sessionId)) return
+    throw new Error(
+      `session ${sessionId} was not created by this endpoint, and session.scope is "owned": ${action} `
+        + 'is limited to sessions this endpoint created or forked. Set session.scope: "all" to allow it, '
+        + 'or create the session through this endpoint.',
+    )
+  }
+
+  /**
    * Canonicalise a caller-supplied directory, insisting that it exists and is one.
    *
    * The sandbox policy takes a session's `cwd` as its `workspaceRoot`, so this is
@@ -1199,6 +1220,7 @@ export class DshDriver {
     model: string
     reasoningEffort?: string
   }> {
+    this.assertSessionVisible(request.sessionId, 'session_set_model')
     const controller = this.requireSessionController()
     try {
       const selected = await controller.selectModel({
@@ -1354,6 +1376,7 @@ export class DshDriver {
     // it says; a limit applied first would return whatever happened to be recent.
     const cwd = options.cwd === undefined ? undefined : await this.canonicalFilterPath(options.cwd)
     const filtered = listed.items.filter((item) => {
+      if (!this.sessionVisible(item.sessionId)) return false
       if (options.running !== undefined && item.running !== options.running) return false
       if (cwd !== undefined && item.cwd !== cwd) return false
       return true
@@ -1460,6 +1483,7 @@ export class DshDriver {
     /** Why the usage read failed, when it did. */
     reason?: string
   }> {
+    this.assertSessionVisible(request.sessionId, 'session_prompt')
     return await this.enqueueTurn(request.sessionId, async () => {
       const controller = this.requireSessionController()
       // The harness records this id as `source.rpcId` on the committed user
@@ -1688,6 +1712,7 @@ export class DshDriver {
 
   /** Ask the live agent to cancel its current turn. */
   cancelSession(sessionId: string): { accepted: true } {
+    this.assertSessionVisible(sessionId, 'session_cancel')
     return this.requireSessionController().cancel({ sessionId })
   }
 
@@ -1704,6 +1729,7 @@ export class DshDriver {
     queued: { id: string; text: string; source?: string; images: number }[]
     note?: string
   }> {
+    this.assertSessionVisible(sessionId, 'session_queue')
     const query = this.sessionQuery()
     if (query === undefined || typeof query.observeSession !== 'function') {
       return {
@@ -1761,6 +1787,7 @@ export class DshDriver {
     action: 'remove' | 'edit' | 'steer'
     content?: string
   }): Promise<{ accepted: true; action: 'remove' | 'edit' | 'steer' }> {
+    this.assertSessionVisible(request.sessionId, 'session_queue')
     if (request.action === 'edit' && (request.content ?? '').trim() === '') {
       throw new Error('editing a queued message needs non-empty content')
     }
@@ -1803,6 +1830,8 @@ export class DshDriver {
       running?: boolean
     }[]
     hasMore: boolean
+    /** Matches dropped because session.scope is "owned" and they were not ours. */
+    hidden?: number
   }> {
     const query = request.query.trim()
     if (query === '') throw new Error('a search query must not be empty')
@@ -1855,8 +1884,12 @@ export class DshDriver {
       summaries = undefined
     }
     const byId = new Map((summaries ?? []).map((summary) => [summary.sessionId, summary]))
+    // `session.scope: "owned"` filters matches rather than failing the search: the
+    // caller still learns what it may see, and `hidden` says matches were removed.
+    const visible = items.filter((item) => this.sessionVisible(item.sessionId))
+    const hidden = items.length - visible.length
     return {
-      items: items.map((item) => {
+      items: visible.map((item) => {
         const summary = byId.get(item.sessionId)
         return {
           sessionId: item.sessionId,
@@ -1867,6 +1900,7 @@ export class DshDriver {
         }
       }),
       hasMore: limit !== undefined && result.items.length > limit ? true : result.hasMore,
+      ...(hidden === 0 ? {} : { hidden }),
     }
   }
 
@@ -1923,6 +1957,7 @@ export class DshDriver {
     approvalPolicy?: 'never'
     approvalPolicyError?: string
   }> {
+    this.assertSessionVisible(request.sessionId, 'session_fork')
     const controller = this.requireSessionController()
     const fork = (controller as { fork?: (request: { sessionId: string; atSeq?: number }) => Promise<{ sessionId: string }> }).fork
     if (typeof fork !== 'function') {
@@ -1982,6 +2017,7 @@ export class DshDriver {
     title: string
     seq: number
   }> {
+    this.assertSessionVisible(request.sessionId, 'session_rename')
     const controller = this.requireSessionController()
     const rename = (controller as {
       rename?: (input: { sessionId: string; title: string }) => Promise<{ title: string; seq: number }>
@@ -2022,6 +2058,7 @@ export class DshDriver {
       maxCharsPerMessage?: number
     } = {},
   ): Promise<{ messages: TranscriptMessage[]; total: number }> {
+    this.assertSessionVisible(sessionId, 'session_messages')
     const events = await this.readEvents(sessionId)
     const messages: TranscriptMessage[] = []
     for (const event of events) {
@@ -2225,6 +2262,7 @@ export class DshDriver {
     const includeCost = request.includeCost ?? true
     const notes: string[] = []
     const rows: SessionUsageRow[] = []
+    let hiddenSessions = 0
     let scope: SessionUsageReport['scope']
     let truncatedSubagents = false
     let truncatedRows = false
@@ -2248,6 +2286,10 @@ export class DshDriver {
       origin: 'self' | 'subagent',
       parentSessionId?: string,
     ): Promise<void> => {
+      if (!this.sessionVisible(sessionId)) {
+        hiddenSessions += 1
+        return
+      }
       if (rows.some((row) => row.sessionId === sessionId)) return
       if (rows.length >= MAX_USAGE_ROWS) {
         truncatedRows = true
@@ -2263,6 +2305,7 @@ export class DshDriver {
       scope = 'sessionIds'
       // Duplicates would double-count a row's tokens in the totals, and a caller
       // assembling ids from logs routinely repeats one.
+      for (const id of request.sessionIds) this.assertSessionVisible(id, 'session_usage')
       const ids = [...new Set(request.sessionIds)]
       if (ids.length > MAX_USAGE_ROWS) {
         truncatedRows = true
@@ -2326,6 +2369,7 @@ export class DshDriver {
       }
     } else if (request.sessionId !== undefined) {
       scope = 'session'
+      this.assertSessionVisible(request.sessionId, 'session_usage')
       await addRow(request.sessionId, 'self')
       // Children are enumerated even when they are excluded, so the report can
       // say that they exist and were left out instead of silently reporting a
@@ -2500,6 +2544,12 @@ export class DshDriver {
     // nothing to have found.
     if (scope === 'session' && includeSubagents && childrenOf !== undefined && rows.length === 1) {
       notes.push('No subagent session was found under this session.')
+    }
+    if (hiddenSessions > 0) {
+      notes.push(
+        `${hiddenSessions} session(s) were left out because session.scope is "owned": only sessions this `
+          + 'endpoint created or forked are included.',
+      )
     }
     notes.push(
       'Token totals are conversation usage folded from the durable session log, one record per model call. '

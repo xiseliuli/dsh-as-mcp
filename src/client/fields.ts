@@ -129,6 +129,16 @@ export const GROUPS: readonly GroupSpec[] = [
         // must not offer it.
         min: 1,
       },
+      {
+        kind: 'select',
+        path: ['session', 'scope'],
+        label: 'field.session.scope',
+        hint: 'field.session.scope.hint',
+        options: [
+          { value: 'all', label: 'field.session.scope.all' },
+          { value: 'owned', label: 'field.session.scope.owned' },
+        ],
+      },
     ],
   },
   {

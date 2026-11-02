@@ -947,15 +947,21 @@ try {
     if (search.ok) {
       // Matches are relevance-ordered and capped at 20, so our own session is not
       // guaranteed to be on the first page; what must hold is that the search
-      // answered with matches and said whether more exist.
+      // answered with matches and said whether more exist. Under session.scope
+      // "owned" a page can consist entirely of filtered foreign matches, in which
+      // case `hidden` says so — that is a correct answer, not an empty search.
       const matches = search.payload?.items ?? []
+      const hidden = search.payload?.hidden ?? 0
+      const shapeOk = matches.every(
+        (item) => typeof item.sessionId === 'string' && typeof item.snippet === 'string',
+      )
       check(
-        matches.length > 0 &&
-          matches.every((item) => typeof item.sessionId === 'string' && typeof item.snippet === 'string') &&
-          typeof search.payload?.hasMore === 'boolean' &&
-          (matches.some((item) => item.sessionId === sessionId) || search.payload?.hasMore === true),
+        shapeOk && typeof search.payload?.hasMore === 'boolean' &&
+          (matches.length > 0
+            ? matches.some((item) => item.sessionId === sessionId) || search.payload?.hasMore === true
+            : hidden > 0 && search.payload?.hasMore === true),
         'session_search answers with matches and hasMore',
-        `${matches.length} match(es), hasMore=${search.payload?.hasMore}`,
+        `${matches.length} match(es), hidden=${hidden}, hasMore=${search.payload?.hasMore}`,
       )
     } else {
       check(
@@ -1144,18 +1150,35 @@ try {
     // zero: a caller that mistypes an id would otherwise under-bill its run.
     const ghostSession = 'session-does-not-exist'
     const ghostPrompt = await tool('session_prompt', { sessionId: ghostSession, prompt: 'hi' })
-    check(!ghostPrompt.ok && /not found/.test(ghostPrompt.error ?? ''), 'an unknown session is reported, not run', (ghostPrompt.error ?? '').slice(0, 60))
+    check(
+      !ghostPrompt.ok && /not found|not created by this endpoint/.test(ghostPrompt.error ?? ''),
+      'an unknown session is reported, not run',
+      (ghostPrompt.error ?? '').slice(0, 60),
+    )
 
     const ghostMessages = await tool('session_messages', { sessionId: ghostSession })
-    check(!ghostMessages.ok && /not found/.test(ghostMessages.error ?? ''), 'transcript reads name the unknown session', (ghostMessages.error ?? '').slice(0, 60))
-
-    const ghostUsage = await must('session_usage', { sessionIds: [ghostSession] })
     check(
-      ghostUsage.sessions?.[0]?.error !== undefined && ghostUsage.totals?.totalTokens === 0 &&
-        (ghostUsage.notes ?? []).some((note) => /could not be read/.test(note)),
-      'an unknown id yields a row error and says the totals exclude it',
-      (ghostUsage.sessions?.[0]?.error ?? '').slice(0, 60),
+      !ghostMessages.ok && /not found|not created by this endpoint/.test(ghostMessages.error ?? ''),
+      'transcript reads name the unknown session',
+      (ghostMessages.error ?? '').slice(0, 60),
     )
+
+    const ghostUsage = await tool('session_usage', { sessionIds: [ghostSession] })
+    if (ghostUsage.ok) {
+      check(
+        ghostUsage.payload?.sessions?.[0]?.error !== undefined && ghostUsage.payload?.totals?.totalTokens === 0 &&
+          (ghostUsage.payload?.notes ?? []).some((note) => /could not be read/.test(note)),
+        'an unknown id yields a row error and says the totals exclude it',
+        (ghostUsage.payload?.sessions?.[0]?.error ?? '').slice(0, 60),
+      )
+    } else {
+      // Under session.scope "owned" a foreign id is refused before it is read.
+      check(
+        /not created by this endpoint/.test(ghostUsage.error ?? ''),
+        'an unreadable id is refused with a legible reason',
+        (ghostUsage.error ?? '').slice(0, 60),
+      )
+    }
 
     const missingRead = await tool('file_read', { sessionId, path: join(projectPath, 'definitely-absent.txt') })
     check(!missingRead.ok && /not found/.test(missingRead.error ?? ''), 'a missing file is reported with its path', (missingRead.error ?? '').slice(0, 60))

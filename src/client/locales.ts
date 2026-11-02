@@ -68,6 +68,10 @@ export const zh: Record<string, string> = {
   'field.session.model.hint': '留空表示使用 DSH 的默认模型。',
   'field.session.promptTimeoutMs': '等待回复超时（毫秒）',
   'field.session.promptTimeoutMs.hint': 'session_prompt 等待一轮结束的最长时间，超时不代表会话被取消。',
+  'field.session.scope': '会话可见范围',
+  'field.session.scope.hint': 'all：会话工具可触达本 DSH 的所有会话；owned：只限本端点创建或 fork 的会话。',
+  'field.session.scope.all': '全部会话',
+  'field.session.scope.owned': '仅本端点创建的会话',
 
   'field.limits.maxReadBytes': '单次读取上限（字节）',
   'field.limits.maxReadBytes.hint': '超过上限的内容会被截断。',
@@ -174,6 +178,10 @@ export const en: Record<string, string> = {
   'field.session.model.hint': 'Empty uses DSH’s default model.',
   'field.session.promptTimeoutMs': 'Reply timeout (ms)',
   'field.session.promptTimeoutMs.hint': 'How long session_prompt waits for a turn to settle. A timeout does not cancel the session.',
+  'field.session.scope': 'Session visibility',
+  'field.session.scope.hint': 'all: session tools reach every session in this DSH instance; owned: only sessions this endpoint created or forked.',
+  'field.session.scope.all': 'All sessions',
+  'field.session.scope.owned': 'Only sessions this endpoint created',
 
   'field.limits.maxReadBytes': 'Read limit (bytes)',
   'field.limits.maxReadBytes.hint': 'Content past the limit is truncated.',

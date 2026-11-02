@@ -125,7 +125,7 @@ export function testConfig(overrides: Partial<Config['tools']> = {}, port = 0): 
     auth: { token: TOKEN },
     tools: { workspace: true, session: true, files: true, shell: false, agentTools: false, usage: false, ...overrides },
     agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
-    session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 1000 },
+    session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 1000, scope: 'all' },
     limits: { maxReadBytes: 1024, shellTimeoutMs: 1000, agentToolTimeoutMs: 1000 },
     approval: { policy: 'inherit' },
   }

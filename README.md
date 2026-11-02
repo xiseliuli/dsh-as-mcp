@@ -525,7 +525,9 @@ draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
   content into a session it owns. `session_search`, when the deployment enables the index, turns the
   same history into a queryable message-content search (bounded snippets) — it is opt-in for exactly
   this reason. None of it exceeds "the token is you", but a token you would not hand out for
-  `shell_run` is also a token you should not hand out for these.
+  `shell_run` is also a token you should not hand out for these. `session.scope: "owned"` narrows the
+  session tools to sessions this endpoint created or forked, which is the containment option for a
+  token handed to a lower-trust caller.
 - **Spend is readable on the same boundary.** A token holder can read token usage — and, where
   `dsh-cost-meter` is installed, an estimated money figure — for any session this endpoint can
   reach: `session_usage`, and the usage block on every `session_prompt` reply. It is not a wider
@@ -712,6 +714,7 @@ key named, because a silently ignored typo means your override is not being appl
       provider: ''           # must be paired with model
       model: ''
       promptTimeoutMs: 900000
+      scope: all             # all: every session this DSH holds; owned: only sessions this endpoint created
     limits:
       maxReadBytes: 1048576
       shellTimeoutMs: 120000
@@ -719,6 +722,19 @@ key named, because a silently ignored typo means your override is not being appl
     approval:
       policy: inherit        # inherit | allow
 ```
+
+`session.scope` is the containment option for a token you hand to a party that should not reach
+your own conversations: `owned` restricts every content-bearing session tool (prompt, cancel, list,
+transcript, fork, rename, model, queue, search) to sessions this endpoint created or forked — a
+refusal names the setting. `all` (the default) keeps the historical instance-wide reach. It is
+inside the token boundary, not a replacement for it: file, shell and agent-tool access are governed
+by their own tool groups and the deployment's sandbox policy.
+
+Two consequences of `owned` are worth stating because they are fail-closed rather than bugs:
+ownership is **per plugin process**, so sessions created before a DSH restart are no longer owned and
+become invisible (create them again, or set `all` for that window); and `session_search` filters the
+harness's page of at most 20 matches *after* it arrives, so a page can be entirely foreign — the
+reply then carries `hidden` and `hasMore` states that more matches exist.
 
 `mountOnWebServer` is enough on its own: with `enabled: false` the endpoint is served
 **only** on DSH's web server at `<dsh host>:<dsh web port><path>`, with no second port. The

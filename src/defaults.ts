@@ -95,6 +95,13 @@ export const DEFAULT_SESSION = {
   provider: '',
   model: '',
   promptTimeoutMs: 15 * 60_000,
+  /**
+   * `all` keeps the historical instance-wide reach. `owned` restricts every
+   * content-bearing session tool to sessions this endpoint created or forked —
+   * the containment option for handing a token to a party that should not reach
+   * the user's own conversations.
+   */
+  scope: 'all',
 } as const satisfies SessionConfig
 
 /** {@link LimitsConfig} defaults: 1 MiB reads, 2-minute commands and agent tools. */
