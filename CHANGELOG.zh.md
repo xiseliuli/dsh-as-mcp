@@ -6,6 +6,11 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.52.83
+
+- 首次接入的 MCP 客户端现在能在它真正会读的地方看到上报契约：`initialize` 指令、`session_prompt` 的描述与 `wait` 选项都写明"`wait: false` 启动 → 用 `session_status` 跟进（`waitMs` 让变化即刻返回）"，以及失败通道（`turn.failure` = `{kind, message}`；正常完成不带 failure 块）。`session_prompt` 首次提供 output schema（含 `turn.failure`）；`session_status` 的 output schema 从只有 `sessionId`/`running` 扩展为完整报告（`idleMs`、`stalled`、`failure`、`lastTurn`、`changed`、`waitedMs` 等），schema 感知的客户端不必猜。很多 MCP 宿主不会把 `initialize.instructions` 传给模型，所以工具描述才是唯一可靠的首屏说明——这些措辞现在由测试固定，而不是靠习惯维护。
+- `tools/live-checks.mjs` 新增 onboarding 检查：真实端点必须返回非空指令且点名跟进方式，两个工具必须保留这些句子与 schema 字段。这样以后误删契约文字会直接检查失败，而不是让功能悄悄变成"不可发现"。0.52.83 实测：单次启动（搜索索引开启）下 live-checks **195/195**（`--with-model --with-subagent`，含 6 条 onboarding 检查）、验收 **166/166**。
+
 ## 0.52.82
 
 - 新增中文更新日志：`CHANGELOG.zh.md` 与英文 `CHANGELOG.md` 的版本标题一一对应，每个版本 1–3 条中文摘要。`tools/check-docs.mjs` 会校验两份文件的版本集合与顺序，并要求每个版本至少有一条中文要点——发布时漏写中文条目无法通过检查。它是摘要而非全文翻译：实现细节、实测数字与设计取舍以英文版为准（权威记录），两份文件互相链接，并随 npm 包发布（`files` 已包含）。

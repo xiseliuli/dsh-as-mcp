@@ -112,7 +112,44 @@ describe('MCP Streamable HTTP endpoint', () => {
     expect(instructions).toContain('session_tool_result')
     expect(instructions).toContain('session_queue')
     expect(instructions).toContain('session_search')
+    // Fire-and-forget work has no other onboarding surface: a client that starts a
+    // turn with wait:false must be told how to follow it, and a waiting caller must
+    // be told that a failed turn arrives as turn.failure.
+    expect(instructions).toContain('session_status')
+    expect(instructions).toContain('waitMs')
+    expect(instructions).toContain('turn.failure')
     expect(instructions).toContain('token')
+  })
+
+  // The tool surface is the only thing a client sees when it ignores the
+  // instructions (many hosts do not forward them to their model). Pin the
+  // fire-and-forget contract where such a client will actually read it.
+  it('teaches a first-time client the fire-and-forget contract in the tool surface', async () => {
+    const response = await rpc(url, { jsonrpc: '2.0', id: 13, method: 'tools/list', params: {} })
+    const body = (await readJsonRpc(response, 13)) as {
+      result?: { tools?: {
+        name: string
+        description?: string
+        inputSchema?: { properties?: Record<string, { description?: string }> }
+        outputSchema?: { properties?: Record<string, unknown> }
+      }[] }
+    }
+    const tools = body.result?.tools ?? []
+    const prompt = tools.find((tool) => tool.name === 'session_prompt')
+    const status = tools.find((tool) => tool.name === 'session_status')
+    expect(prompt).toBeDefined()
+    expect(status).toBeDefined()
+
+    // A failed turn must be discoverable from the prompt tool itself.
+    expect(prompt?.description).toContain('turn.failure')
+    expect(prompt?.description).toContain('session_status')
+    expect(prompt?.inputSchema?.properties?.wait?.description).toContain('session_status')
+    expect(Object.keys(prompt?.outputSchema?.properties ?? {})).toEqual(expect.arrayContaining(['turn']))
+    expect(JSON.stringify(prompt?.outputSchema)).toContain('failure')
+
+    // And the status tool must advertise the fields a supervisor acts on.
+    const statusFields = Object.keys(status?.outputSchema?.properties ?? {})
+    expect(statusFields).toEqual(expect.arrayContaining(['failure', 'stalled', 'idleMs', 'lastTurn', 'changed', 'waitedMs']))
   })
 
   it('lists the enabled tools and hides a disabled group', async () => {

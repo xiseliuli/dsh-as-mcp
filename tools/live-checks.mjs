@@ -2901,23 +2901,69 @@ async function concurrentTurnsCheck() {
   )
 }
 
+// --- onboarding for a first-time client ------------------------------------
+
+/**
+ * A client that has never seen this endpoint learns it from three places and
+ * nothing else: the `initialize` instructions, the tool descriptions, and the
+ * advertised output schemas. The fire-and-forget contract ("wait:false, then
+ * follow it with session_status; a failed turn arrives as turn.failure") is only
+ * discoverable if it is written there, so a later wording edit that drops it
+ * should fail a check instead of silently making the feature unreachable.
+ */
+async function onboardingChecks() {
+  section('onboarding (what a first-time client is told)')
+  check(typeof instructions === 'string' && instructions.length > 400, 'initialize carries instructions for a new client', `${(instructions.length / 1000).toFixed(1)}k chars`)
+  check(
+    ['session_status', 'turn.failure', 'waitMs'].every((token) => instructions.includes(token)),
+    'the instructions name the fire-and-forget follow-up (session_status / waitMs / turn.failure)',
+  )
+  const prompt = surfaceTools.find((tool) => tool.name === 'session_prompt')
+  const status = surfaceTools.find((tool) => tool.name === 'session_status')
+  if (prompt === undefined || status === undefined) {
+    skip('tool-description checks', 'needs session_prompt and session_status')
+    return
+  }
+  const promptDescription = String(prompt.description ?? '')
+  const waitDescription = String(prompt.inputSchema?.properties?.wait?.description ?? '')
+  check(
+    promptDescription.includes('turn.failure') && promptDescription.includes('session_status'),
+    'session_prompt says a failed turn arrives as turn.failure and how to follow wait:false',
+  )
+  check(
+    waitDescription.includes('session_status'),
+    'the wait option points at session_status for the fire-and-forget case',
+  )
+  const promptFailure = JSON.stringify(prompt.outputSchema ?? '')
+  check(
+    promptFailure.includes('failure'),
+    'session_prompt advertises the failure field in its output schema',
+  )
+  const statusProperties = Object.keys(status.outputSchema?.properties ?? {})
+  check(
+    ['failure', 'stalled', 'idleMs', 'lastTurn'].every((key) => statusProperties.includes(key)),
+    'session_status advertises its whole report in the output schema',
+    statusProperties.join(', '),
+  )
+}
+
 // --- run -------------------------------------------------------------------
 
 process.stdout.write(`${bold('dsh-as-mcp live checks')}\n`)
-await fetch(endpoint, {
-  method: 'POST',
-  headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...(token === undefined ? {} : { authorization: `Bearer ${token}` }) },
-  body: JSON.stringify({
-    jsonrpc: '2.0',
-    id: 0,
-    method: 'initialize',
-    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'live-checks', version: '1' } },
-  }),
-})
-  .then(async (response) => {
-    protocolVersion = ((await response.text()).match(/"protocolVersion":"([^"]+)"/) ?? [])[1]
+// The `initialize` result is the only place a first-time client is told how the
+// endpoint wants to be used; keep it (and the raw tool objects) for the onboarding
+// checks below instead of throwing the body away after reading the protocol version.
+let instructions = ''
+let surfaceTools = []
+try {
+  const init = await rpcOnce(0, 'initialize', {
+    protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'live-checks', version: '1' },
   })
-  .catch(() => undefined)
+  protocolVersion = init.payload?.result?.protocolVersion
+  instructions = init.payload?.result?.instructions ?? ''
+} catch {
+  // A failed handshake is reported just below and ends the run.
+}
 if (protocolVersion === undefined) {
   process.stdout.write(`${red('initialize failed — is anything listening at that endpoint?')}\n`)
   process.exit(2)
@@ -2925,7 +2971,8 @@ if (protocolVersion === undefined) {
 process.stdout.write(`${dim(`protocol ${protocolVersion}`)}\n`)
 try {
   const listed = await rpc('tools/list', {})
-  surface = new Set((listed.tools ?? []).map((tool) => tool.name))
+  surfaceTools = listed.tools ?? []
+  surface = new Set(surfaceTools.map((tool) => tool.name))
   process.stdout.write(`${dim(`${surface.size} tool(s) advertised`)}\n`)
 } catch {
   // Leaving `surface` empty makes every gated check report as skipped, which is
@@ -2934,6 +2981,7 @@ try {
 
 try {
   await protocolChecks()
+  await onboardingChecks()
   await shellChecks()
   await infoCoherenceChecks()
   await shellLimitsChecks()

@@ -540,8 +540,29 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             ),
         }),
         outputSchema: outputSchema({
-          sessionId: z.string(),
-          running: z.boolean(),
+          sessionId: z.string().optional(),
+          running: z.boolean().optional(),
+          openTurn: z.number().int().nullable().optional(),
+          openStep: z.number().int().nullable().optional(),
+          lastEventSeq: z.number().int().nullable().optional(),
+          lastEventAt: z.string().nullable().optional(),
+          idleMs: z.number().nullable().optional(),
+          lastTurn: z
+            .looseObject({
+              turn: z.number().int(),
+              endedAt: z.string().nullable(),
+              reason: z.unknown(),
+            })
+            .nullable()
+            .optional(),
+          // The field a supervisor acts on: null for a completed turn, set (kind +
+          // message) for an abnormal ending, including the wait-detected
+          // "unreadable" and "vanished".
+          failure: z.looseObject({ kind: z.string(), message: z.string() }).nullable().optional(),
+          stalled: z.boolean().optional(),
+          logReadable: z.boolean().optional(),
+          changed: z.boolean().optional(),
+          waitedMs: z.number().optional(),
         }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
@@ -657,7 +678,12 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           + 'task and the DSH agent runs its own tools (file edits, shell, subagents) in the session workspace, '
           + 'subject to this DSH instance\'s permission policy. By default the call waits for the turn to settle '
           + 'and returns the agent\'s final reply plus every tool call it made. Set wait=false to queue the '
-          + 'message and return immediately. '
+          + 'message and return immediately — that is a fire-and-forget handoff, so follow it with session_status '
+          + '(pass its waitMs to be told on the first change) or retry the same idempotencyKey with wait=true to '
+          + 'await the turn. An abnormal ending is reported, never returned as an ordinary success: turn.failure '
+          + 'carries {kind, message} for the harness\'s error, blocked, max-tokens and interrupted endings (and '
+          + 'for an ending this build does not recognize); a completed turn, a caller-requested cancellation '
+          + '(turn.aborted) and a fork boundary carry no failure block. '
           + 'Attach screenshots with images: each path is read through this instance\'s filesystem seam, '
           + 'and the agent sees the picture (png/jpeg/webp/gif, at most 4); prompt may be empty when images '
           + 'are attached. '
@@ -722,7 +748,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .enum(['queue', 'steer'])
             .optional()
             .describe('queue (default) runs a new turn; steer delivers into the running turn.'),
-          wait: z.boolean().optional().describe('Wait for the turn to settle. Defaults to true.'),
+          wait: z
+            .boolean()
+            .optional()
+            .describe(
+              'true (default) waits for the turn to settle. false returns as soon as the message is queued — '
+              + 'follow it with session_status, which reports whether the session is running, how long its log '
+              + 'has been quiet, and how the turn ended (including a failure).',
+            ),
           timeoutMs: z
             .number()
             .int()
@@ -736,6 +769,30 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .max(600_000)
             .optional()
             .describe('Upper bound for the wait. Defaults to the endpoint configuration.'),
+        }),
+        outputSchema: outputSchema({
+          accepted: z.boolean().optional(),
+          replayed: z.boolean().optional(),
+          turn: z
+            .looseObject({
+              reply: z.string().optional(),
+              replyChars: z.number().int().optional(),
+              models: z.array(z.string()).optional(),
+              toolCalls: z.array(z.looseObject({})).optional(),
+              turn: z.number().int().nullable().optional(),
+              turnEndReason: z.unknown().optional(),
+              timedOut: z.boolean().optional(),
+              aborted: z.boolean().optional(),
+              // Present only for an abnormal ending; absent for a completed turn,
+              // a caller-requested cancellation and a fork boundary.
+              failure: z.looseObject({ kind: z.string(), message: z.string() }).optional(),
+              durationMs: z.number().optional(),
+              usage: z.looseObject({}).optional(),
+            })
+            .optional(),
+          session: z.looseObject({}).optional(),
+          usageUnavailable: z.boolean().optional(),
+          reason: z.string().optional(),
         }),
         annotations: { openWorldHint: true },
       },

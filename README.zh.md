@@ -815,7 +815,7 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 
 | 启用的工具组 | 公布工具数 | 最近结果 |
 | --- | --- | --- |
-| 全部六组 | 29 | `--with-model --with-subagent` 下 live-checks 189/189；验收 166/166，同一轮启动、搜索索引开启 |
+| 全部六组 | 29 | `--with-model --with-subagent` 下 live-checks 195/195；验收 166/166，同一轮启动、搜索索引开启 |
 | 仅 `session`、`usage` | 14 | `--with-model` 下 live-checks 95/95（文件/shell/工作区段落跳过） |
 | `workspace`、`session`、`agentTools`、`usage` | 19 | live-checks 64/64（被关闭的组会在原因里点名 `tools.<group>` 开关） |
 | 仅 `files`、`shell` | 11 | live-checks 68/68（会话/用量/队列/搜索段落跳过） |

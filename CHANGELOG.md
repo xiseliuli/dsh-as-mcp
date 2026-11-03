@@ -6,6 +6,25 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.52.83
+
+- A first-time MCP client now learns the reporting contract where it actually looks. The `initialize`
+  instructions, the `session_prompt` description and its `wait` option all name the fire-and-forget
+  handoff (`wait: false` → follow with `session_status`, whose `waitMs` reports the first change) and
+  the failure channel (`turn.failure` = `{kind, message}`; a completed turn carries no failure block).
+  `session_prompt` advertises an output schema for the first time, including `turn.failure`, and
+  `session_status` now advertises its whole report (`idleMs`, `stalled`, `failure`, `lastTurn`,
+  `changed`, `waitedMs`, …) instead of only `sessionId`/`running` — a schema-aware client can see the
+  contract without guessing. Many MCP hosts do not forward `initialize.instructions` to their model,
+  so the tool surface is the only onboarding text that can be relied on; the wording is pinned by a
+  test rather than left to habit.
+- `tools/live-checks.mjs` gained an onboarding section: a real endpoint must carry non-empty
+  instructions naming the follow-up, and both tools must keep those sentences and schema fields.
+  That makes a wording edit which drops the contract fail a check instead of silently making the
+  feature undiscoverable. Measured on 0.52.83, one boot with the search index open: live-checks
+  **195/195** (`--with-model --with-subagent`, the six onboarding checks among them) and acceptance
+  **166/166**.
+
 ## 0.52.82
 
 - The changelog now has a Chinese summary for every release: `CHANGELOG.zh.md` mirrors the version

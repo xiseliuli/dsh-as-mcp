@@ -939,7 +939,7 @@ build:
 
 | Tool groups enabled | Tools advertised | Last result |
 | --- | --- | --- |
-| all six | 29 | live-checks 189/189 with `--with-model --with-subagent` and acceptance 166/166 — one boot, search index open |
+| all six | 29 | live-checks 195/195 with `--with-model --with-subagent` and acceptance 166/166 — one boot, search index open |
 | `session`, `usage` only | 14 | live-checks 95/95 with `--with-model` (file/shell/workspace sections skip) |
 | `workspace`, `session`, `agentTools`, `usage` | 19 | live-checks 64/64 (a disabled group's reason names its `tools.<group>` switch) |
 | `files`, `shell` only | 11 | live-checks 68/68 (session/usage/queue/search sections skip) |
