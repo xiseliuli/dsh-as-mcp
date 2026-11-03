@@ -968,6 +968,10 @@ cleaning up every profile and process. Use it instead of hand-measuring the tabl
 with the version that shipped each one and how to reproduce the check — including the list of
 things that are *not* verified here and why.
 
+The release-by-release record is [CHANGELOG.md](./CHANGELOG.md); a Chinese summary of every release —
+the same version headings, enforced by `tools/check-docs.mjs` — lives in
+[CHANGELOG.zh.md](./CHANGELOG.zh.md).
+
 `tools/check-docs.mjs` compares the two README tool tables against the tools the code registers, each
 README's configuration sample against the keys `normalizeConfig` accepts, the settings panel's field
 paths against those same keys (a config key with no field silently disappears from the panel, and a

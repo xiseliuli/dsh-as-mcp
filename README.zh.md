@@ -840,6 +840,9 @@ profile 与进程。改表时用它，而不是手工测。
 `docs/LIVE-VERIFICATION.md` 还记录了从这些轮次里总结的**抖动纪律**（检查必须自己制造它所依赖的前提，否则测到的是机器）；它同时记录哪些行为真正在真实 harness 上验证过、各自从哪个版本开始提供、如何复现，
 以及一份"**未在此验证**"的清单与原因。
 
+逐版本的更新记录在 [CHANGELOG.md](./CHANGELOG.md)；每个版本的中文摘要见
+[CHANGELOG.zh.md](./CHANGELOG.zh.md)（版本标题与英文版一一对应，由 `tools/check-docs.mjs` 强制检查）。
+
 `tools/check-docs.mjs` 会校验：两个 README 的工具表与代码注册的工具集合一致；两个 README 的配置示例
 与 `normalizeConfig` 接受的键一致；设置面板字段路径与这些键一致（配置里有、面板里没有的项会静默消失；
 面板里有、配置不接受的项写了也没用）；`package.json` 版本与 CHANGELOG 最新标题一致；发布 `files` 列表
