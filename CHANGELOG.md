@@ -3,6 +3,30 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
+this file stays the authoritative record.
+
+## 0.52.82
+
+- The changelog now has a Chinese summary for every release: `CHANGELOG.zh.md` mirrors the version
+  headings of this file one-to-one, with 1–3 Chinese bullets each. `tools/check-docs.mjs` fails when
+  the two files disagree on the version set or order, or when a version carries no Chinese bullet, so
+  a release that forgets its Chinese entry cannot ship silently. The Chinese file is a summary, not a
+  translation — implementation detail, measurements and design rationale stay here, in the
+  authoritative record. It is linked from both files and ships in the npm package (`files`).
+- The failure-reporting evidence gap from 0.52.81 is closed by fault injection against a throwaway
+  profile. A forced credential failure ended a real turn with `turnEndReason`/`turn.failure`
+  `{kind: "error"}` (AUTH 401, empty reply, settled in 478 ms instead of the 120 s timeout); the same
+  was observed when the session log was renamed away mid-turn (ENOENT, `error`, 13.8 s); `kill -9`
+  of the harness mid-turn produced, on the next cold read, `session_status.lastTurn.reason`
+  `{kind: "interrupted"}` and `failure {kind: "interrupted"}`; and `stalled` flipped to true on a
+  real running turn after 62.9 s of log silence. Two wait-side detections remain unit-tested only:
+  `unreadable` (the harness closes a log-less turn with `error` before the wait can read it) and
+  `vanished` (a crash is synthesised as `interrupted` on the cold read). `docs/LIVE-VERIFICATION.md`
+  now carries the verified rows and a narrowed statement of what is still not observed live; the raw
+  run (setup, replies, the credential-precedence hazard) is recorded in
+  `docs/FAULT-INJECTION-2026-11-03.md`.
+
 ## 0.52.81
 
 - New `session_status` reports one session's live state: whether a turn is open right now, its turn

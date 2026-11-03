@@ -73,6 +73,19 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 
 | `session_status` reports a running turn, its ending and the log silence | 0.52.81 | a `session_prompt { wait: false }` followed by a held `session_status { waitMs }`: the status call answered `changed: true` while the turn ran (`running: true`, an open turn, `idleMs` 3 ms after the newest event, `stalled: false`, `logReadable: true`), then — once the turn settled — `running: false`, `lastTurn.reason: {kind: "completed"}`, `failure: null`; the same turn's awaited reply carried `turnEndReason: {kind: "completed"}` and no `failure` block |
 
+### Failure reporting (fault injection)
+
+Run against a throwaway profile (`fault-probe`, copies of the credentials, headless, `DSH_PERMISSION_MODE=danger-full-access`),
+driven over the same MCP endpoint a real upstream uses; the recipe and the raw replies are recorded in
+`docs/FAULT-INJECTION-2026-11-03.md`.
+
+| Behaviour | Since | Evidence |
+| --- | --- | --- |
+| A real `error` ending is reported on the reply as `turn.failure`, not returned as an ordinary success | 0.52.81 | forced a provider auth failure by corrupting only the throwaway copy's `refs.DEEPSEEK_API_KEY`: the turn ended `turnEndReason: {kind: "error", error: {message: "Authentication Fails, …", code: "AUTH", status: 401}}` with `reply: ""` and `failure: {kind: "error", message: "Authentication Fails, …"}`, settled in 478 ms (a timeout would have been 120 s); `session_status` on the same session reported the identical `lastTurn.reason` and `failure` |
+| A log that disappears mid-turn is reported as a failure instead of "still running" | 0.52.81 | renamed the session log directory away 3 s into a real turn: the turn closed `turnEndReason: {kind: "error", error: {message: "ENOENT: … session.v4.jsonl.zstd"}}` with `failure.kind: "error"` and settled in 13.8 s, not its 120 s timeout; with the directory still moved, `session_status` answered `logReadable: false` instead of throwing |
+| A crash-orphaned turn is reported as `interrupted` on the next read | 0.52.81 | a real turn was running (`bash: sleep 45`) when the harness was `kill -9`'d; after restarting against the same `DSH_HOME`, a cold `session_status` (no prompt first) returned `running: false`, `lastTurn.reason: {kind: "interrupted"}`, `failure: {kind: "interrupted"}`, `logReadable: true` — the "task died and nobody said so" case |
+| `stalled` marks a running turn that has gone quiet for a minute | 0.52.81 | a real turn sleeping in a tool call: polling `session_status` every 5 s showed `running: true`, an open turn, `failure: null`, `idleMs` growing, and at `idleMs = 62 861 ms` `stalled: true` (60 s: `58 847 ms`, false) — a symptom, not a verdict, as documented |
+
 ### Files and shell
 
 | Behaviour | Since | Evidence |
@@ -145,7 +158,7 @@ These are gaps in *evidence*, not known defects:
 
 | Item | Why | What it would take |
 | --- | --- | --- |
-| A real failure ending (`error`, `blocked`, `max-tokens`, `interrupted`) or a wait-detected condition (`unreadable`, `vanished`) observed live | forcing a provider error or a disposed turn mid-sweep is not repeatable, and a synthetic failure would only test the script; the normalization is unit-tested against the recorded reason shapes (`tests/driver.test.ts`), and the live sweep asserts the other half — a completed turn carries no failure block | inject a fault in a throwaway profile (a bad provider route mid-turn, or a scripted session disposal) and re-run the cancelled/vanished sections |
+| The wait-side detections `unreadable` and `vanished` observed live | fault injection covered `error`, `interrupted` and `stalled` (see the failure-reporting section), but the harness resolves the two await-time conditions itself first: a turn whose log disappears closes with `error` (ENOENT), and a crashed turn is synthesised as `interrupted` on the cold read, so neither reaches the driver's own branch. Both are unit-tested (`tests/driver.test.ts`), and their user-visible outcome — a failure report instead of a timeout — was observed live through the `error`/`interrupted` paths | fault the agent loop in-process (a test-only composition that disposes a session mid-turn), not the whole harness |
 | Panel/visual rendering (widgets, slots, settings page layout) | the `ifc-view` MCP server used for visual inspection was disconnected in this session | reconnect `ifc-view`, or inspect the panel by hand |
 | `session_usage` money figures match the cost plugin's own numbers **exactly** | 0.52.8 | installed the current `dsh-cost-meter` (1.9.x) from its registry into a throwaway profile (a copied package directory dies on its hoisted deps: `Cannot find package 'acorn'`). For session `session-33b7153d-…`: the receipt returned `costUsd 0.00008131200000000001, calls 2` and the plugin's ledger row for the same session was `cost 8.131200000000001e-05, calls 2` — the same float, and `costEstimateUsd` agrees when no plan covers the call. live-checks now asserts the `info.usage.costAvailable` → receipt-cost implication when a price plugin is mounted |
 | Mutating a message queued by the **DSH UI** with `session_queue` | a *second MCP client* is covered live (0.52.5), and the queue projection/ids are shared code; the UI's own client was not driven | queue a message from the DSH UI while a turn runs, then `remove` it through the endpoint |

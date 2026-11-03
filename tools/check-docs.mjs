@@ -549,7 +549,7 @@ for (const entry of files) {
   }
   if (!existsSync(entry)) problems.push(`package.json files: "${entry}" does not exist`)
 }
-for (const required of ['lib', 'bin', 'cordis.patch.yml', 'README.md', 'README.zh.md', 'CHANGELOG.md']) {
+for (const required of ['lib', 'bin', 'cordis.patch.yml', 'README.md', 'README.zh.md', 'CHANGELOG.md', 'CHANGELOG.zh.md']) {
   if (!files.includes(required)) problems.push(`package.json files is missing "${required}"`)
 }
 
@@ -631,6 +631,39 @@ if (headings.length > 1) {
   const duplicates = headings.filter((version, index) => headings.indexOf(version) !== index)
   if (duplicates.length > 0) problems.push(`CHANGELOG.md: duplicate version headings: ${[...new Set(duplicates)].join(', ')}`)
 }
+// --- the Chinese changelog mirrors the same versions -------------------------
+//
+// `CHANGELOG.zh.md` is a summary, not a translation: what must match is the set
+// and the order of version headings, because a release that forgets its Chinese
+// entry would otherwise leave Chinese readers a version behind with no signal.
+// Bullet counts deliberately do not match — the summary may collapse detail.
+const changelogZh = read('CHANGELOG.zh.md')
+if (changelogZh === '') {
+  problems.push('CHANGELOG.zh.md is missing (the Chinese summary of this changelog)')
+} else {
+  const zhHeadings = [...changelogZh.matchAll(/^## (\d+\.\d+\.\d+)\s*$/gm)].map((match) => match[1])
+  if (zhHeadings.length === 0) problems.push('CHANGELOG.zh.md: no "## x.y.z" headings')
+  const missingVersions = headings.filter((version) => !zhHeadings.includes(version))
+  const extraVersions = zhHeadings.filter((version) => !headings.includes(version))
+  if (missingVersions.length > 0) {
+    problems.push(`CHANGELOG.zh.md is missing ${missingVersions.length} version(s): ${missingVersions.slice(0, 5).join(', ')}`)
+  }
+  if (extraVersions.length > 0) {
+    problems.push(`CHANGELOG.zh.md has version heading(s) this changelog does not: ${extraVersions.slice(0, 5).join(', ')}`)
+  }
+  if (zhHeadings.join(',') !== headings.join(',')) {
+    problems.push('CHANGELOG.zh.md: version headings are not in the same newest-first order')
+  }
+  // Every version must carry at least one bullet — a bare heading is a slot the
+  // release filled in without saying anything.
+  const sections = changelogZh.split(/^## /m).slice(1)
+  const emptySections = sections.filter((section) => !/^- /m.test(section))
+  if (emptySections.length > 0) {
+    problems.push(`CHANGELOG.zh.md: ${emptySections.length} version(s) have no Chinese bullet`)
+  }
+  notes.push(`CHANGELOG.zh.md mirrors ${zhHeadings.length} version(s)`)
+}
+
 // Live-verification rows cite the version that shipped each behaviour. A cited
 // version that has no changelog entry is either a typo or a behaviour described
 // against a release that never happened; both are worth failing on.
