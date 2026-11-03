@@ -6,6 +6,12 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.52.84
+
+- GitHub 安装指引改为先给「能长期有效的放行方式」：pnpm 按 `<name>@<git url>`（不带 `#<ref>`）匹配 git 依赖的构建，一条 `allowBuilds` 条目就能覆盖之后的所有 commit；原文先让读者抄 pnpm 打印的、钉在 commit 上的 key（`…/tar.gz/<sha>: true`），上游一 push 就失效，每更新一次都得重新手动放行。同时纠正本页两条命令的实际门槛：`github:…` 与 release `.tgz` 都按 tarball 拉取，所以按仓库 URL 放行需要 pnpm ≥11.19.0（11.11.0 只覆盖克隆形式的 git 依赖）；pnpm 10 上该开关叫 `onlyBuiltDependencies`。并新增「不放行构建」的通道：npm 与预构建的 Release 资产，两者都不执行 `prepare`。
+- `tools/check-docs.mjs` 新增漂移检查：只要 `package.json` 还带 `prepare` 且 `lib/` 仍在 `.gitignore` 里，中英两份 README 就必须带上由 manifest 推导出的 key（`dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git`）并点名 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`；改包名或仓库名、或提交 `lib/` 删掉 `prepare`，检查会失败或自动不再要求这段——不会再把一个匹配不上任何东西的 key 留在文档里。这条来自 issue #1：Plugin Hub 1.6.5 自己的 npm 反查没命中本包、回退到 git 通道，pnpm 的构建门禁拦下 `prepare`，而 DSH 只打印通用提示，读者只能自己抄 key。
+- 除上述安装说明外无行为变化：构建产物与各工具与 0.52.83 相同，差别只有 MCP `initialize` 宣告的版本号。
+
 ## 0.52.83
 
 - 首次接入的 MCP 客户端现在能在它真正会读的地方看到上报契约：`initialize` 指令、`session_prompt` 的描述与 `wait` 选项都写明"`wait: false` 启动 → 用 `session_status` 跟进（`waitMs` 让变化即刻返回）"，以及失败通道（`turn.failure` = `{kind, message}`；正常完成不带 failure 块）。`session_prompt` 首次提供 output schema（含 `turn.failure`）；`session_status` 的 output schema 从只有 `sessionId`/`running` 扩展为完整报告（`idleMs`、`stalled`、`failure`、`lastTurn`、`changed`、`waitedMs` 等），schema 感知的客户端不必猜。很多 MCP 宿主不会把 `initialize.instructions` 传给模型，所以工具描述才是唯一可靠的首屏说明——这些措辞现在由测试固定，而不是靠习惯维护。

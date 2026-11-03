@@ -76,33 +76,52 @@ dsh plugin --profile <name> add github:xiseliuli/dsh-as-mcp
 ```
 
 A git install fetches source, not the built `lib/`, so pnpm must run this package's `prepare`
-script (`tsdown && node scripts/build-client.mjs`) to produce it. pnpm ≥10 refuses to run that
-script — and the `esbuild` postinstall the build depends on — until the profile allows them, so
-the first `add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`.
+script (`tsdown && node scripts/build-client.mjs`) to produce it. pnpm's supply-chain gate blocks
+dependency build scripts by default — the `esbuild` postinstall the build needs included — until
+the profile allows them, so the first `add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`.
+That refusal is pnpm's policy, not a packaging defect: a git dependency can execute arbitrary
+code at install time, so pnpm requires an exact, explicit approval.
 
-A bare package name in `allowBuilds` works for `esbuild` (a registry dependency) but never for
-`dsh-as-mcp` here: pnpm only approves a git-hosted build by its exact resolved key, never by
-name alone ([pnpm docs](https://pnpm.io/settings/build#allowbuilds)). The failed `add` prints
-that exact key in its error; copy it verbatim into the profile's `pnpm-workspace.yaml`
-(`~/.dsh/profiles/<name>/pnpm-workspace.yaml`) and re-run the `add`. Don't rely on pnpm having
-written a placeholder entry for you — on this failure path it does not. The result looks like:
+**Approve the build once, by repository URL.** pnpm matches a git dependency's build by
+`<name>@<git url>` with no `#<ref>`, so a single entry keeps the build working across commits and
+releases. On a profile whose pnpm is ≥11.19.0 — DSH 0.2.1-rc.5 bundles 11.28.5, and a successful
+`add` names the version it used on its last line (`… using pnpm v…`) — add this to the profile's
+`pnpm-workspace.yaml` (`~/.dsh/profiles/<name>/pnpm-workspace.yaml`) and re-run the `add`:
 
 ```yaml
 allowBuilds:
-  '<the exact git spec pnpm wrote, including its commit hash>': true
+  'dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git': true
   esbuild: true
 ```
 
-Treat that allowance as permission to run this package's code on your machine at install time;
-pin a commit (`github:xiseliuli/dsh-as-mcp#<sha>`) so a later push cannot silently change what runs.
-`dsh plugin add` runs the pnpm version DSH pins (v11.28.5 in DSH 0.2.1-rc.5 — its output ends with
-`using pnpm v…`), so the following applies only once DSH ships a newer pnpm. If the
-profile's pnpm is ≥11.19.0 (≥11.11.0 for a cloned, non-`github:` git dependency), you can instead
-approve the repository itself — `'dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git': true`, with
-no `#<sha>` — so a later commit on the same repo keeps building without re-approval; on an older
-pnpm the exact-commit key is your only option and needs re-approving after every update
-([pnpm 11.11 release notes](https://pnpm.io/blog/releases/11.11-11.14),
-[pnpm/pnpm#12367](https://github.com/pnpm/pnpm/issues/12367)).
+A bare name (`dsh-as-mcp: true`) never approves a git-hosted artifact; pnpm matches on the
+identity, not the package name ([pnpm docs](https://pnpm.io/settings/build#allowbuilds)).
+
+On an older pnpm (11.0–11.18) only the exact key works, because approving a tarball-fetched
+`github:` dependency by repository URL landed in
+[pnpm 11.19.0](https://github.com/pnpm/pnpm/releases/tag/v11.19.0) — both commands on this page
+are fetched as tarballs (`github:…`, and a release `.tgz`). The failed `add` prints that exact key
+pinned to the resolved commit; copy it verbatim, keeping it on one line if the terminal wrapped
+it, and expect to re-approve after any update
+([pnpm/pnpm#12367](https://github.com/pnpm/pnpm/issues/12367)). Don't wait for pnpm to write the
+entry for you: on this failure path it writes nothing. On pnpm 10 the same decision is
+`onlyBuiltDependencies`, not `allowBuilds`; trust the key pnpm prints.
+
+The approval is permission to run this package's build code on your machine at install time. If
+you pin a commit (`github:xiseliuli/dsh-as-mcp#<sha>`), the key must carry that commit; the
+repository-URL key above approves any commit from this repository.
+
+**Without approving a build**, install a published artifact instead — both ship the built `lib/`
+and never run `prepare`:
+
+```bash
+dsh plugin --profile <name> add dsh-as-mcp
+dsh plugin --profile <name> add \
+  https://github.com/xiseliuli/dsh-as-mcp/releases/download/v<version>/dsh-as-mcp-<version>.tgz
+```
+
+Git installs also need DSH ≥ `0.1.5-rc.1` ([Compatibility](#compatibility)); an older runtime
+refuses the plugin unless an exact-version exemption is granted with `dsh plugin allow-version`.
 
 **From a tarball:**
 

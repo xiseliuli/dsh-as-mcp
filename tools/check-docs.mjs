@@ -553,6 +553,33 @@ for (const required of ['lib', 'bin', 'cordis.patch.yml', 'README.md', 'README.z
   if (!files.includes(required)) problems.push(`package.json files is missing "${required}"`)
 }
 
+// --- the git-install build approval matches the package's own identity -----
+//
+// A git install has to build `lib/` (it is gitignored), and pnpm only runs that
+// build for an exact `allowBuilds` key: `<name>@<repository url>`, with no
+// `#<ref>`. The README that hands readers that key is prose; renaming the
+// package or the repository would leave it matching nothing, and every reader
+// copying it would hit the same ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED the text
+// exists to resolve. Issue #1 was exactly this failure reaching a reader without
+// that key. Both languages must carry it, and the warning must disappear
+// together with the condition that causes it: drop the `prepare` script and
+// commit `lib/`, and this check stops demanding the paragraph.
+const gitignore = read('.gitignore')
+const prepareScript = typeof pkg.scripts?.prepare === 'string' && pkg.scripts.prepare !== ''
+const buildOutputIgnored = /^lib\/$/m.test(gitignore)
+if (prepareScript && buildOutputIgnored) {
+  const allowBuildsKey = `${pkg.name}@${pkg.repository?.url ?? ''}`
+  for (const [path, text] of [['README.md', enReadme], ['README.zh.md', zhReadme]]) {
+    if (!text.includes(allowBuildsKey)) {
+      problems.push(`${path}: git installs run prepare (lib/ is gitignored), so it must carry the allowBuilds key "${allowBuildsKey}"`)
+    }
+    if (!text.includes('ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED')) {
+      problems.push(`${path}: git installs run prepare (lib/ is gitignored), so it must name ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED and how to clear it`)
+    }
+  }
+  notes.push(`git-install build approval: ${allowBuildsKey}`)
+}
+
 // --- settings panel localization ------------------------------------------
 
 const localesSource = read('src/client/locales.ts')

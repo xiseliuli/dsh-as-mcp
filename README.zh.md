@@ -73,31 +73,47 @@ dsh plugin --profile <名称> add github:xiseliuli/dsh-as-mcp
 ```
 
 git 安装拉下来的是源码，不是构建产物 `lib/`，所以 pnpm 得跑本包的 `prepare` 脚本
-（`tsdown && node scripts/build-client.mjs`）才能把它建出来。pnpm ≥10 默认拒绝执行这个脚本——
-连带它依赖的 `esbuild` 的 postinstall 也一并拦下——直到 profile 显式放行，所以第一次 `add` 会以
-`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 失败。
+（`tsdown && node scripts/build-client.mjs`）才能把它建出来。pnpm 的供应链门禁默认拒绝执行
+依赖的构建脚本——连带它依赖的 `esbuild` 的 postinstall 也一并拦下——直到 profile 显式放行，
+所以第一次 `add` 会以 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 失败。这是 pnpm 的策略，不是打包
+缺陷：git 依赖在安装期可以执行任意代码，所以 pnpm 要求一次精确、明确的放行。
 
-`allowBuilds` 里写裸包名，对 `esbuild`（来自 registry）有效，但对这里的 `dsh-as-mcp` 永远无效：
-pnpm 只认 git 依赖精确解析出来的那个 key，不认包名
-（[pnpm 文档](https://pnpm.io/settings/build#allowbuilds)）。失败的那次 `add` 会在报错里打印这个
-精确 key；把它原样抄进 profile 的 `pnpm-workspace.yaml`（`~/.dsh/profiles/<名称>/pnpm-workspace.yaml`），
-再重新跑一次 `add`。不要指望 pnpm 已经替你写好占位项——这条失败路径下它不会写。结果长这样：
+**一次放行、按仓库 URL 生效（推荐）。** pnpm 按 `<name>@<git url>`（不带 `#<ref>`）匹配 git 依赖的
+构建，因此一条条目就能跨 commit、跨版本一直有效。profile 的 pnpm ≥11.19.0 时——DSH 0.2.1-rc.5
+自带 11.28.5，成功的那次 `add` 最后一行会写明用的版本（`… using pnpm v…`）——把下面这段写进
+profile 的 `pnpm-workspace.yaml`（`~/.dsh/profiles/<名称>/pnpm-workspace.yaml`），再重跑 `add`：
 
 ```yaml
 allowBuilds:
-  '<pnpm 写出来的那个精确 git spec，含 commit hash>': true
+  'dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git': true
   esbuild: true
 ```
 
-这个放行等于允许在你机器上、在安装阶段执行这个包的代码——建议钉死到某个 commit
-（`github:xiseliuli/dsh-as-mcp#<sha>`），免得后续的 push 悄悄改掉实际跑的代码。`dsh plugin add` 使用的是
-DSH 锁定的 pnpm 版本（DSH 0.2.1-rc.5 为 v11.28.5，输出末尾会打印 `using pnpm v…`），所以下面这条要等
-DSH 自带更新的 pnpm 后才适用。如果 profile 用的 pnpm
-≥11.19.0（若是克隆而非 `github:` 这种 tarball 形式的 git 依赖，则 ≥11.11.0 即可），可以改为放行整个
-仓库——`'dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git': true`，不带 `#<sha>`——这样同一个仓库
-之后再提交新 commit 也不用重新放行；更早的 pnpm 版本只能用精确 commit 的 key，每次更新都要重新放行一次
-（[pnpm 11.11 release notes](https://pnpm.io/blog/releases/11.11-11.14)，
-[pnpm/pnpm#12367](https://github.com/pnpm/pnpm/issues/12367)）。
+裸包名（`dsh-as-mcp: true`）永远不会放行 git 托管产物：pnpm 认的是带来源的身份，不是包名
+（[pnpm 文档](https://pnpm.io/settings/build#allowbuilds)）。
+
+更早的 pnpm（11.0–11.18）只认精确 key，因为「按仓库 URL 放行 tarball 形式的 `github:` 依赖」是
+[pnpm 11.19.0](https://github.com/pnpm/pnpm/releases/tag/v11.19.0) 才有的——本页两条命令
+（`github:…` 和 release `.tgz`）都是按 tarball 拉取的。失败的那次 `add` 会打印这个精确 key
+（钉在解析出的 commit 上）；原样抄过去，如果终端把 URL 折行了就拼回一行；并且此后**每次更新都要
+重新放行**（[pnpm/pnpm#12367](https://github.com/pnpm/pnpm/issues/12367)）。不要指望 pnpm 已经替你
+写好占位项：这条失败路径下它不会写。pnpm 10 上这个开关叫 `onlyBuiltDependencies` 而不是
+`allowBuilds`，以报错里给出的 key 为准。
+
+这个放行等于允许在你机器上、在安装阶段执行这个包的构建代码。如果你把依赖钉死到某个 commit
+（`github:xiseliuli/dsh-as-mcp#<sha>`），key 就必须带那个 commit；上面那条仓库 URL 形式放行的是
+本仓库的任意 commit。
+
+**不想放行构建**，就装已经构建好的发布物——两者都带现成的 `lib/`，都不执行 `prepare`：
+
+```bash
+dsh plugin --profile <名称> add dsh-as-mcp
+dsh plugin --profile <名称> add \
+  https://github.com/xiseliuli/dsh-as-mcp/releases/download/v<版本>/dsh-as-mcp-<版本>.tgz
+```
+
+git 安装还要求 DSH ≥ `0.1.5-rc.1`（见[兼容性](#兼容性)）；更老的运行时会拒绝加载，除非用
+`dsh plugin allow-version` 授予精确版本豁免。
 
 **从 tarball：**
 

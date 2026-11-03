@@ -6,6 +6,29 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.52.84
+
+- The GitHub-install instructions now lead with the approval that keeps working. pnpm matches a
+  git dependency's build by `<name>@<git url>` with no `#<ref>`, so one `allowBuilds` entry covers
+  every later commit; the previous text led with the commit-pinned key pnpm prints
+  (`…/tar.gz/<sha>: true`), which stops matching on the next push and forced a fresh manual
+  approval on every update. The section also states the correct floor for the two commands it
+  documents — `github:…` and a release `.tgz` are both fetched as tarballs, so the repository form
+  needs pnpm ≥11.19.0 (11.11.0 only covers cloned git dependencies), and pnpm 10 names the same
+  decision `onlyBuiltDependencies` — and points at the channels that need no build approval: `npm`
+  and the prebuilt Release asset, neither of which runs `prepare`.
+- `tools/check-docs.mjs` now fails when either README's git-install guidance drifts from the
+  package's own identity. While `package.json` keeps a `prepare` script and `lib/` stays
+  gitignored, both languages must carry the manifest-derived key
+  (`dsh-as-mcp@git+https://github.com/xiseliuli/dsh-as-mcp.git`) and name
+  `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`. A package or repository rename, or making the build
+  unnecessary, therefore breaks the release check instead of silently leaving readers a key that
+  matches nothing. Issue #1 is why this exists: a Plugin Hub 1.6.5 install fell back to the git
+  channel after its own npm lookup missed this package, pnpm's build gate refused the `prepare`
+  run, and DSH's generic hint left the reporter to copy a key by hand.
+- Install guidance is the only change: the built `lib/` and every tool behave as in 0.52.83, apart
+  from the version the MCP `initialize` result advertises.
+
 ## 0.52.83
 
 - A first-time MCP client now learns the reporting contract where it actually looks. The `initialize`
