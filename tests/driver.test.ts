@@ -1612,6 +1612,35 @@ describe('DshDriver.promptSession', () => {
     expect(outcome.timedOut).toBe(false)
   })
 
+  it('settles a cancelled prompt whose message was never committed', async () => {
+    // The harness opens the turn before it commits the prompt, so a client that
+    // cancels as soon as `session_list { running: true }` shows the session can
+    // land in that window; the turn is then aborted with the message still in the
+    // inbox, and the log holds no `user/message` for this request at all. Without
+    // a cancellation generation the waiter has nothing to anchor on and sits out
+    // its whole timeout, reporting `timedOut` on a turn the caller cancelled
+    // (measured against 0.52.80: a 30 s timeout returned at 29 995 ms with
+    // `aborted: false`; live-checks catches it as a failed cancellation).
+    const sessions = fakeSessions()
+    // Model the pre-commit window: admission succeeds, nothing is committed.
+    sessions.controller.prompt = async () => ({ accepted: true })
+    const { driver } = driverWith(sessions)
+
+    const startedAt = Date.now()
+    const pending = driver.promptSession({
+      sessionId: 'session-1', prompt: 'ours', mode: 'queue', wait: true, timeoutMs: 30_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    sessions.log.push(event('turn/start', { turn: 1 }, 100))
+    sessions.log.push(event('turn/end', { turn: 1, reason: { kind: 'aborted' } }, 101))
+    await driver.cancelSession('session-1')
+
+    const outcome = (await pending).turn as TurnResult
+    expect(outcome.aborted).toBe(true)
+    expect(outcome.timedOut).toBe(false)
+    expect(Date.now() - startedAt).toBeLessThan(5_000)
+  })
+
   it('runs one turn at a time per session', async () => {
     let active = 0
     let peak = 0

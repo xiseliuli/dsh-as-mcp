@@ -3,6 +3,51 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.80
+
+- A cancellation that lands in the window *after* the harness opened the turn but *before* the
+  prompt was committed no longer leaves the waiting `session_prompt` running to its timeout. The
+  durable log holds no `user/message` for that request (the turn was aborted with the message still
+  in the inbox), so `locateTurn` had nothing to anchor on and the wait reported `timedOut: true` on
+  a turn the caller had already cancelled. The driver now keeps a per-session cancellation
+  generation: `cancelSession` bumps it, and the wait settles with `turn.aborted: true` as soon as
+  it sees the bump. `cancelSession` is what both `session_cancel` and an MCP
+  `notifications/cancelled` call, so both paths are covered. Measured: a 30 s `timeoutMs` used to
+  return at 29 995 ms with `aborted: false`; after the fix the same cancellation settled 18 ms after
+  the notification in the full sweep. `tests/driver.test.ts` pins the pre-commit window (a stub
+  whose admission commits nothing).
+- The full live sweep now runs with the session-search index open and
+  `DSH_PERMISSION_MODE=danger-full-access` (`tools/sweep-local.sh`), so the checks meet the shape a
+  deployment actually opts into instead of the stock `openAt: "never"` one. Two findings from
+  building it, both recorded in the script: a headless throwaway profile leaves the stock approval
+  policy `ask`, parking a turn on a question nobody answers (the cancellation check then has
+  nothing to stop — it sat at the 300 s prompt timeout with `turn.aborted: false`); and the
+  cancellation window above, which the earlier profiles happened not to hit. Measured after both
+  fixes, one boot with the search index open: live-checks **180/180** (`--with-model
+  --with-subagent`) and acceptance **166/166**.
+- The caller-set truncation caps are asserted with receipts: one real turn with
+  `toolCalls: "full"`, `maxArgumentChars: 200` and `maxReplyChars: 40` must return a tool call
+  with `truncated: true` and its original `argumentsBytes` beside the cut arguments, and a reply
+  with `replyTruncated: true` whose `replyChars` is the original length. "The parameter was
+  accepted" would pass a silent cut. Measured in the sweep: 464 bytes → 200 chars and 299 → 40
+  characters, each with its original length beside it.
+- New maintainer tool `tools/clean-probe-sessions.mjs` (not shipped in the package): the checks
+  create real sessions, and a long-lived checkout accumulates thousands of them in
+  `$DSH_HOME/sessions`. It removes only sessions it has *positive evidence* the checks created —
+  a throwaway workspace key, or a log whose every prompt carries the plugin's own `rpcId`
+  (`dsh-as-mcp-…`) — and never a session with any human prompt, whichever key it is in and
+  whatever its transcript says; a `user/message` without an `rpcId` counts as human (subagent
+  prompts look like that, so check subagents are left as noise rather than guessed at). It also
+  never touches a session written to in the last 10 minutes, and never changes anything on a dry
+  run. `--yes` moves removals to `$DSH_HOME/sessions-trash/` instead of deleting them; `--purge` is
+  the only permanent path. The first draft of this tool matched check-prompt *text* anywhere in a
+  log, and on 2026-11-03 that deleted two real developer sessions (one while the app had it open)
+  because their transcripts quoted the checks' own sources;
+  `docs/INCIDENT-2026-11-03-session-log-deletion.md` records the incident, what survived, and the
+  rule this entry states. `tests/clean-probe-sessions.test.ts` pins the behaviour with 15
+  synthetic-store cases, including a human session whose transcript contains every marker and a
+  symlinked workspace key that must not be followed.
+
 ## 0.52.79
 
 - Two more options are asserted by effect: `session_list` folds titles only when `includeTitle` is

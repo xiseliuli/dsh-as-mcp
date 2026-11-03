@@ -2328,6 +2328,44 @@ async function secondEntryChecks() {
   }
 }
 
+// --- truncation caps that the caller sets ----------------------------------
+
+/**
+ * `maxReplyChars` and `maxArgumentChars` are billed as cuts with receipts, not silent
+ * truncation: the reply says `replyTruncated` and its original `replyChars`, and each
+ * echoed tool call says `truncated` beside `argumentsBytes`. One turn exercises both.
+ */
+async function truncationCheck() {
+  section('caller-set truncation (real turn)')
+  if (!has('session_prompt') || !has('shell_run')) {
+    skip('truncation check', 'needs session_prompt and shell_run')
+    return
+  }
+  const session = await callTool('session_create', { cwd: process.cwd() })
+  const filler = 'x'.repeat(400)
+  const reply = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: `Run the bash command: echo ${filler}; then reply with the single word DONE repeated 60 times, nothing else.`,
+    toolCalls: 'full',
+    maxArgumentChars: 200,
+    maxReplyChars: 40,
+    timeoutMs: 300_000,
+  })
+  const calls = reply.turn?.toolCalls ?? []
+  const widened = calls.find((call) => call.arguments !== undefined && (call.argumentsBytes ?? 0) > 200)
+  check(
+    widened !== undefined && widened.truncated === true && (widened.arguments ?? '').length <= 200,
+    'maxArgumentChars cuts the echoed arguments and keeps the original size',
+    `${widened?.argumentsBytes ?? '?'} bytes -> ${(widened?.arguments ?? '').length} chars`,
+  )
+  check(
+    reply.turn?.replyTruncated === true && (reply.turn?.replyChars ?? 0) > 40 &&
+      (reply.turn?.reply ?? '').length <= 40,
+    'maxReplyChars cuts the reply and reports the original length',
+    `${reply.turn?.replyChars ?? '?'} -> ${(reply.turn?.reply ?? '').length} chars`,
+  )
+}
+
 // --- steering into a running turn ------------------------------------------
 
 /**
@@ -2859,6 +2897,7 @@ try {
       await idempotencyCheck()
       await promptImageCheck()
       await titleUsageCheck()
+      await truncationCheck()
       await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()
     }

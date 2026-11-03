@@ -704,6 +704,21 @@ export class DshDriver {
   /** Per-session promise chain: one driver-initiated turn runs at a time. */
   private readonly turnQueues = new Map<string, Promise<unknown>>()
   /**
+   * Per-session cancellation generations.
+   *
+   * A cancel can land after the harness opened the turn but before the prompt was
+   * committed as a `user/message` — the window a client hits when it cancels as
+   * soon as `session_list { running: true }` shows the session. The durable log
+   * then holds no prompt for the waiter to anchor on, so `locateTurn` reports
+   * `settled: false` forever and the call used to sit out its full `timeoutMs` and
+   * report `timedOut: true` on a turn the caller had already cancelled (measured:
+   * a 30 s timeout returned at 29 995 ms with `aborted: false`). This counter lets
+   * the wait notice that a cancel was requested for its session and settle as
+   * aborted instead. It is a generation, not a flag, so a prompt queued *behind*
+   * the cancelled one starts with the current value and is not affected.
+   */
+  private readonly cancelGenerations = new Map<string, number>()
+  /**
    * Idempotency keys this process admitted, with the content they admitted.
    *
    * The durable log is the normal place to find an earlier prompt, but a
@@ -1718,6 +1733,10 @@ export class DshDriver {
     await this.assertSessionVisible(request.sessionId, 'session_prompt')
     return await this.enqueueTurn(request.sessionId, async () => {
       const controller = this.requireSessionController()
+      // The cancellation generation this call's turn starts under. A cancel that
+      // arrives after this point belongs to this call; one that arrived while the
+      // call was still queued behind another turn does not.
+      const cancelGeneration = this.cancelGenerations.get(request.sessionId) ?? 0
       // The harness records this id as `source.rpcId` on the committed user
       // message, which is how the wait below identifies *our* turn — and how an
       // idempotent retry finds the message an earlier call already admitted.
@@ -1761,7 +1780,7 @@ export class DshDriver {
           requestId,
           request.sessionId,
         )
-        return await this.finishPrompt(request, requestId, true)
+        return await this.finishPrompt(request, requestId, true, cancelGeneration)
       }
 
       await controller.prompt(
@@ -1787,7 +1806,7 @@ export class DshDriver {
           }
         }
       }
-      return await this.finishPrompt(request, requestId, false)
+      return await this.finishPrompt(request, requestId, false, cancelGeneration)
     })
   }
 
@@ -1812,6 +1831,7 @@ export class DshDriver {
     },
     requestId: string,
     replayed: boolean,
+    cancelGenerationAtStart: number,
   ): Promise<{
     accepted: true
     turn?: TurnResult
@@ -1852,6 +1872,20 @@ export class DshDriver {
         }
 
         if (request.signal?.aborted === true) {
+          return await this.settledReply(
+            request.sessionId,
+            shapeToolCalls(summarizeTurn(events, location), request.toolCalls ?? 'summary', request.maxArgumentChars),
+            { timedOut: false, aborted: true, partial: true, ...flag, maxReplyChars: request.maxReplyChars },
+          )
+        }
+
+        // A cancel can stop the turn in the window before this prompt's
+        // `user/message` is committed. The log then never shows a turn to settle
+        // for us, so without this the wait would report `timedOut` minutes later
+        // for a turn the caller had already cancelled. The generation is checked
+        // after `settled` so an ordinary completion still wins a near-simultaneous
+        // cancel.
+        if ((this.cancelGenerations.get(request.sessionId) ?? 0) !== cancelGenerationAtStart) {
           return await this.settledReply(
             request.sessionId,
             shapeToolCalls(summarizeTurn(events, location), request.toolCalls ?? 'summary', request.maxArgumentChars),
@@ -1965,6 +1999,10 @@ export class DshDriver {
   /** Ask the live agent to cancel its current turn. */
   async cancelSession(sessionId: string): Promise<{ accepted: true }> {
     await this.assertSessionVisible(sessionId, 'session_cancel')
+    // Bump before asking, so a wait that cannot anchor on a committed prompt sees
+    // the cancel on its next wake even when the turn has already stopped and the
+    // cancel call itself has nothing left to do.
+    this.cancelGenerations.set(sessionId, (this.cancelGenerations.get(sessionId) ?? 0) + 1)
     return this.requireSessionController().cancel({ sessionId })
   }
 
