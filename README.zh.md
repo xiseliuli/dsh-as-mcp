@@ -208,6 +208,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `session_rename` | 给会话设置显式的用户标题，让外部 harness 为任务起的名字在 DSH 界面里保持不变（同时停止自动生成标题）。若该会话正被另一个 DSH 进程持有写句柄，harness 会拒绝并在错误里说明。 |
 | `session_search` | 对会话**消息内容**做搜索（FTS 词/短语），每条命中返回 `sessionId`、一段 snippet，以及（会话列表可读时）该匹配的 `cwd`/`updatedAt`/`running`，subagent 会话还带 `parentSessionId`/`origin`；harness 单次上限 20 条并给 `hasMore`。匹配的是词/短语（不是任意子串），多个词须同时命中。**需要开启**：随包组合把 `session-query` 配成 `openAt: "never"`，此时该工具会说明如何启用索引，而不是假装搜索过。 |
 | `session_list` | 存活会话摘要，按最近更新排序；`includeTitle` 附加每个会话的最新标题（每会话一次日志读取），`cwd`/`running` 会在 limit 生效前过滤。subagent 会话会带 `parentSessionId` 与 `origin: "subagent"`；`origin`（`root`/`subagent`）在 limit 之前过滤，因此扁平列表可当树视图用。回复带 `total`（截断前匹配数）以及 limit 有隐藏时的 `truncated`。 |
+| `session_status` | 单个会话的实时状态，供 `session_prompt { wait: false }` 这类"先启动、后观察"的用法：`running`、当前 `turn`/`step`、最新事件（`lastEventSeq`/`lastEventAt`）、`idleMs`（日志安静了多久）、`stalled`（在运行但已静默一分钟——是症状，不是结论）、最后一场轮次的结束方式（`lastTurn.reason`），以及异常结束时的 `failure`。`waitMs` 会把调用挂起到"状态发生变化"或超时（上限 60 秒），上游因此可以每次变化报一次，而不必猜轮询间隔。只读。 |
 | `session_prompt` | 给 DSH 会话下发一个任务；默认等待本轮结束，返回回复、agent 调过的工具调用，以及本轮的 token 用量和该会话的累计量。`toolCalls` 控制每次调用的回显量：`summary`（默认）只给名称/id/参数字节数，`full` 附带参数（受 `maxArgumentChars` 限制），`none` 只留计数。可用 `images` 附带截图（png/jpeg/webp/gif，最多 4 张；harness 会真正解码，因此只有文件头、能被 `file_read_image` 嗅探识别的文件会被判为 malformed）。带 `idempotencyKey` 时可安全重试：重复调用会返回已有轮次，而不是把任务再发一遍；若重试带 `wait: true`，它会**等待**那一轮结束——这正是"先用 `wait: false` 排队、之后再来等它的结果"的做法。客户端带 `progressToken` 时，等待期间最多每秒一次 `notifications/progress`。`maxReplyChars` 可选地限制 agent 最终回复长度（被截断时带 `replyTruncated` 和原始 `replyChars`），`turn.models` 列出实际作答的 `provider/model`。客户端对该调用发出 `notifications/cancelled` 时，会中止对应轮次，等待以 `turn.aborted: true` 收尾——这条通知由端点自己路由，因为所用 SDK 版本只确认、不处理它。用量快照只有在轮次仍在运行时才带 `partial: true`；取消后已结算的轮次给出的是最终数字。 **同一连接**在轮次运行中再次 prompt 会排在其后（本端点对每个会话一次只跑一个轮次），而不是进入 harness 收件箱；要让消息真正排在运行中的轮次后面，需要第二个 MCP 客户端，或用 `mode: "steer"` 把它并入当前轮次。 |
 | `session_messages` | 读取会话的用户/助手对话记录；`sinceSeq`/`role` 让它成为增量轮询，`maxCharsPerMessage` 限制每条消息长度（被截断的消息带 `truncated` 与原始 `chars`），每条消息还带队列操作要用的 `id`（用户消息另带 `requestId`，即 `idempotencyKey` 派生出的准入 id），`includeToolCalls` 会把每条助手消息里的工具调用（名称、call id、参数 JSON 长度，以及工具答完后结果的长度与是否出错）折叠进记录，`includeToolResults` 则把每个工具结果作为独立的 `role: "tool"` 行（callId、文本、error）加入，让一次读取覆盖完整时间线（传 `"errors"` 只保留失败的结果）；助手行与工具行还带 `turn`/`step`，用 `turn: N` 或 `fromTurn`/`toTurn` 可把读取收窄到某一轮或某个阶段，`beforeSeq` 可向前翻页：传入你手上最老的 seq，返回更早窗口的尾部，因此长于窗口的完整记录也能读完。回复带 `total`（过滤器匹配到的消息数）以及在 limit 窗口隐藏了更早消息时的 `truncated`。 |
 | `session_queue` | 只传 `sessionId` 时列出**待执行队列**（排队消息还没有对话事件，所以 `session_messages` 看不到它）；带 `messageId` + `action` 时修改其中一条：`remove`（不再执行）、`edit`（替换文本，消息 id 保持不变，无需重新列队）、`steer`（插入正在运行的轮次——它会作为用户消息出现在对话记录里，该轮次会据此行动）。`session_cancel` 停的是当前轮次，这个工具改的是它后面排队的活。 |
@@ -814,9 +815,9 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 
 | 启用的工具组 | 公布工具数 | 最近结果 |
 | --- | --- | --- |
-| 全部六组 | 28 | `--with-model --with-subagent` 下 live-checks 180/180（仅 `--with-model` 时 163/163）；验收 166/166，同一轮启动、搜索索引开启 |
-| 仅 `session`、`usage` | 13 | `--with-model` 下 live-checks 95/95（文件/shell/工作区段落跳过） |
-| `workspace`、`session`、`agentTools`、`usage` | 18 | live-checks 64/64（被关闭的组会在原因里点名 `tools.<group>` 开关） |
+| 全部六组 | 29 | `--with-model --with-subagent` 下 live-checks 189/189；验收 166/166，同一轮启动、搜索索引开启 |
+| 仅 `session`、`usage` | 14 | `--with-model` 下 live-checks 95/95（文件/shell/工作区段落跳过） |
+| `workspace`、`session`、`agentTools`、`usage` | 19 | live-checks 64/64（被关闭的组会在原因里点名 `tools.<group>` 开关） |
 | 仅 `files`、`shell` | 11 | live-checks 68/68（会话/用量/队列/搜索段落跳过） |
 
 第五个形态 `mountonly` 以 `http.enabled: false` + `mountOnWebServer: true` 启动，经 DSH 自己的

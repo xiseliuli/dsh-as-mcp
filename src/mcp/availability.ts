@@ -38,7 +38,7 @@ export interface ToolAvailability {
 const GROUP_TOOLS: Record<keyof ToolToggles, readonly string[]> = {
   workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
   session: [
-    'session_create', 'session_search', 'session_list', 'session_prompt', 'session_messages',
+    'session_create', 'session_search', 'session_status', 'session_list', 'session_prompt', 'session_messages',
     'session_tool_result', 'session_queue', 'session_cancel', 'session_fork', 'session_rename',
     'session_set_model',
   ],
@@ -72,6 +72,7 @@ const REQUIRED_CAPABILITIES: Record<string, readonly string[]> = {
   session_create: ['sessionController'],
   session_search: ['sessionController', 'sessionSearch'],
   session_list: ['sessionController'],
+  session_status: ['sessionController'],
   session_prompt: ['sessionController'],
   session_messages: ['sessionController'],
   session_tool_result: ['sessionController'],

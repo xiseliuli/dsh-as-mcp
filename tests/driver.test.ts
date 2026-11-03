@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative as relativeTo } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { DshDriver, locateTurn, type TurnResult } from '../src/dsh/driver.js'
+import { DshDriver, failureOfReason, locateTurn, type TurnResult } from '../src/dsh/driver.js'
 import type { DshSessionEvent } from '../src/dsh/types.js'
 import { testConfig } from './harness.js'
 
@@ -1928,5 +1928,141 @@ describe('DshDriver capability gating', () => {
       fs: false,
       shell: false,
     })
+  })
+})
+
+describe('turn failure reporting', () => {
+  it('does not call a completed, cancelled or forked turn a failure', () => {
+    expect(failureOfReason({ kind: 'completed' })).toBeUndefined()
+    expect(failureOfReason({ kind: 'aborted', reason: { kind: 'user' } })).toBeUndefined()
+    expect(failureOfReason({ kind: 'forked' })).toBeUndefined()
+    expect(failureOfReason(null)).toBeUndefined()
+  })
+
+  it('names the harness endings a caller should treat as failures', () => {
+    expect(failureOfReason({ kind: 'error', error: { message: 'provider exploded' } }))
+      .toEqual({ kind: 'error', message: 'provider exploded' })
+    expect(failureOfReason({ kind: 'error', error: {} })?.message).toContain('failed')
+    expect(failureOfReason({ kind: 'blocked' })?.kind).toBe('blocked')
+    expect(failureOfReason({ kind: 'max-tokens' })?.kind).toBe('max-tokens')
+    expect(failureOfReason({ kind: 'interrupted' })?.kind).toBe('interrupted')
+    // Unknown endings are reported as failures, not read as success.
+    expect(failureOfReason({ kind: 'something-new' })?.kind).toBe('something-new')
+  })
+
+  it('reports an error ending on the prompt reply instead of a silent success', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    const pending = driver.promptSession({
+      sessionId: 'session-1', prompt: 'go', mode: 'queue', wait: true, timeoutMs: 5_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    sessions.log.push(event('turn/start', { turn: 1 }, 100))
+    sessions.log.push(event(
+      'assistant/message',
+      { turn: 1, step: 0, message: { content: [{ type: 'text', text: 'partial answer' }] } },
+      101,
+    ))
+    sessions.log.push(event('turn/end', {
+      turn: 1,
+      reason: { kind: 'error', error: { message: 'provider exploded' } },
+    }, 102))
+
+    const outcome = (await pending).turn as TurnResult
+    expect(outcome.aborted).toBe(false)
+    expect(outcome.timedOut).toBe(false)
+    expect(outcome.failure).toEqual({ kind: 'error', message: 'provider exploded' })
+  })
+
+  it('reports a turn that vanished without a turn/end instead of waiting out the timeout', async () => {
+    const sessions = fakeSessions()
+    const { driver, ctx } = driverWith(sessions)
+    // The harness's own agent state: present, but idle while our turn is open.
+    ctx.provide('agents', {
+      get: () => ({ status: 'idle', whenIdle: async () => {}, cancel: () => {} }),
+    })
+    const startedAt = Date.now()
+    const pending = driver.promptSession({
+      sessionId: 'session-1', prompt: 'go', mode: 'queue', wait: true, timeoutMs: 30_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    sessions.log.push(event('turn/start', { turn: 1 }, 100))
+
+    const outcome = (await pending).turn as TurnResult
+    expect(outcome.timedOut).toBe(false)
+    expect(outcome.failure?.kind).toBe('vanished')
+    expect(Date.now() - startedAt).toBeLessThan(15_000)
+  })
+
+  it('reports an unreadable session log instead of surfacing a bare error', async () => {
+    const sessions = fakeSessions()
+    const { driver } = driverWith(sessions)
+    sessions.query.readSession = async () => {
+      throw new Error('ENOENT: session.v4.jsonl.zstd')
+    }
+    const outcome = (await driver.promptSession({
+      sessionId: 'session-1', prompt: 'go', mode: 'queue', wait: true, timeoutMs: 5_000,
+    })).turn as TurnResult
+    expect(outcome.failure?.kind).toBe('unreadable')
+    expect(outcome.failure?.message).toContain('ENOENT')
+    expect(outcome.timedOut).toBe(false)
+  })
+})
+
+describe('DshDriver.sessionStatus', () => {
+  it('reports a settled turn and its ending', async () => {
+    const sessions = fakeSessions(turn(0, 1, 'done', 'req-1'))
+    const { driver } = driverWith(sessions)
+    const status = await driver.sessionStatus({ sessionId: 'session-1' })
+    expect(status.running).toBe(false)
+    expect(status.openTurn).toBeNull()
+    expect(status.openStep).toBeNull()
+    expect(status.lastEventSeq).toBe(3)
+    expect(status.lastTurn).toMatchObject({ turn: 1, reason: { kind: 'completed' } })
+    expect(status.failure).toBeNull()
+    expect(status.idleMs).toBeGreaterThan(0)
+    expect(status.stalled).toBe(false)
+    expect(status.logReadable).toBe(true)
+    expect(status.waitedMs).toBe(0)
+  })
+
+  it('reports an open turn, its step, and a stalled log', async () => {
+    const now = Date.now()
+    const sessions = fakeSessions([
+      userMessage('req-1', 'go', 0),
+      event('turn/start', { turn: 1 }, 1),
+      event('step/start', { turn: 1, step: 0 }, 2, now - 120_000),
+    ])
+    const { driver, ctx } = driverWith(sessions)
+    ctx.provide('agents', {
+      get: () => ({ status: 'running', whenIdle: async () => {}, cancel: () => {} }),
+    })
+    const status = await driver.sessionStatus({ sessionId: 'session-1' })
+    expect(status.running).toBe(true)
+    expect(status.openTurn).toBe(1)
+    expect(status.openStep).toBe(0)
+    expect(status.lastTurn).toBeNull()
+    expect(status.stalled).toBe(true)
+  })
+
+  it('returns early when the session changes while a waitMs call is held', async () => {
+    const sessions = fakeSessions(turn(0, 1, 'done', 'req-1'))
+    const { driver } = driverWith(sessions)
+    const pending = driver.sessionStatus({ sessionId: 'session-1', waitMs: 3_000 })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    sessions.log.push(event('turn/start', { turn: 2 }, 10))
+    const status = await pending
+    expect(status.changed).toBe(true)
+    expect(status.openTurn).toBe(2)
+    expect(status.waitedMs).toBeLessThan(3_000)
+  })
+
+  it('returns unchanged when the waitMs bound elapses with no activity', async () => {
+    const sessions = fakeSessions(turn(0, 1, 'done', 'req-1'))
+    const { driver } = driverWith(sessions)
+    const status = await driver.sessionStatus({ sessionId: 'session-1', waitMs: 300 })
+    expect(status.changed).toBe(false)
+    expect(status.waitedMs).toBeGreaterThanOrEqual(300)
+    expect(status.lastTurn).toMatchObject({ turn: 1 })
   })
 })

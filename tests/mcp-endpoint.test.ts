@@ -281,7 +281,7 @@ describe('MCP Streamable HTTP endpoint', () => {
     const groups: Record<string, string[]> = {
       workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
       session: [
-        'session_create', 'session_list', 'session_search', 'session_fork', 'session_rename',
+        'session_create', 'session_list', 'session_search', 'session_status', 'session_fork', 'session_rename',
         'session_set_model', 'session_prompt', 'session_messages', 'session_tool_result', 'session_queue',
         'session_cancel',
       ],
@@ -299,7 +299,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(28)
+      expect(all).toHaveLength(29)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {
@@ -569,6 +569,38 @@ describe('MCP Streamable HTTP endpoint', () => {
       expect(isError).toBe(false)
       expect(seen).toEqual([{ sessionId: 's', callId: 'call-1', maxChars: 10 }])
       expect(JSON.parse(text)).toEqual({ sessionId: 's', callId: 'call-1', chars: 2, text: 'ok' })
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('forwards a held session_status call and returns its report', async () => {
+    const seen: unknown[] = []
+    const own = await boot(stubDriver({
+      sessionStatus: async (request) => {
+        seen.push({ sessionId: request.sessionId, waitMs: request.waitMs })
+        return {
+          sessionId: request.sessionId,
+          running: true,
+          openTurn: 4,
+          openStep: 2,
+          lastEventSeq: 77,
+          lastEventAt: '2026-11-03T00:00:00.000Z',
+          idleMs: 42_000,
+          lastTurn: { turn: 3, endedAt: '2026-11-03T00:00:00.000Z', reason: { kind: 'completed' } },
+          failure: null,
+          stalled: false,
+          logReadable: true,
+          changed: true,
+          waitedMs: 12,
+        }
+      },
+    }), testConfig({ session: true }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_status', { sessionId: 's', waitMs: 5_000 })
+      expect(isError).toBe(false)
+      expect(seen).toEqual([{ sessionId: 's', waitMs: 5_000 }])
+      expect(JSON.parse(text)).toMatchObject({ running: true, openTurn: 4, openStep: 2, stalled: false, changed: true })
     } finally {
       await own.stop()
     }

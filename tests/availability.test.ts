@@ -37,10 +37,10 @@ describe('describeToolAvailability', () => {
   it('reports every advertised tool available when every probe is true', () => {
     const report = describeToolAvailability(allOn().tools, FULL, allOn())
     expect(report.unavailable).toEqual([])
-    // dsh_info plus the 27 other registered tools (28 advertised in total).
-    expect(report.available).toBe(28)
-    expect(report.availableTools).toHaveLength(28)
-    expect(new Set(report.availableTools).size).toBe(28)
+    // dsh_info plus the 28 other registered tools (29 advertised in total).
+    expect(report.available).toBe(29)
+    expect(report.availableTools).toHaveLength(29)
+    expect(new Set(report.availableTools).size).toBe(29)
     expect(report.availableTools[0]).toBe('dsh_info')
     expect(report.notes ?? []).toEqual([])
   })
@@ -52,7 +52,7 @@ describe('describeToolAvailability', () => {
       'shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list',
     ])
     expect(report.unavailable[0]?.reason).toMatch(/tools\.shell: false/)
-    expect(report.available).toBe(23)
+    expect(report.available).toBe(24)
     expect(report.availableTools).not.toContain('shell_run')
   })
 

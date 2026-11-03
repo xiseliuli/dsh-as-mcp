@@ -59,6 +59,7 @@ export type McpDriver = Pick<
   | 'setSessionModel'
   | 'listSessions'
   | 'searchSessions'
+  | 'sessionStatus'
   | 'updateQueue'
   | 'readQueue'
   | 'probeSessionSearch'
@@ -512,6 +513,49 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     )
 
     server.registerTool(
+      'session_status',
+      {
+        title: 'Report one session\'s live state',
+        description:
+          'Report whether a session is running right now, which turn and step are open, how long its log '
+          + 'has been quiet, and how the last turn ended — including a failure reason when it ended abnormally '
+          + '(error, blocked, max-tokens, interrupted). This is the reporting channel for work started with '
+          + 'session_prompt { wait: false }: poll it, or pass waitMs and the call returns as soon as anything '
+          + 'changes or the bound elapses, whichever comes first. stalled is true when a turn is running but '
+          + 'nothing has been written for a minute — a symptom worth reporting, not a verdict, because a model '
+          + 'call may legitimately think for a long time. A turn that disappeared without a turn/end (the wait '
+          + 'reports it as failure kind "vanished") also shows up here as not running with no fresh ending, so '
+          + 'a supervisor never has to assume a silent session is healthy.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id from session_create or session_list.'),
+          waitMs: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(60_000)
+            .optional()
+            .describe(
+              'Hold the call until the session changes or this many milliseconds pass (capped at 60 s). '
+              + 'Omitted or 0 answers immediately.',
+            ),
+        }),
+        outputSchema: outputSchema({
+          sessionId: z.string(),
+          running: z.boolean(),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('session_status', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.sessionStatus({
+          sessionId: args.sessionId,
+          ...(args.waitMs === undefined ? {} : { waitMs: args.waitMs }),
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
+    )
+
+    server.registerTool(
       'session_fork',
       {
         title: 'Fork a live DSH session',
@@ -718,9 +762,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
               onProgress: (update) => {
                 // `progress` is monotonically non-decreasing seconds, which is
                 // what a progress bar needs; the message carries the real state.
+                // The silence is reported separately from the elapsed wait: a turn
+                // can be long and healthy, or long and dead, and only the second
+                // number tells them apart.
+                const quiet = update.idleMs >= 2_000
+                  ? `, log quiet for ${Math.round(update.idleMs / 1_000)}s`
+                  : ''
                 progress(
                   `turn ${update.turn ?? '?'}: ${update.toolCalls} tool call(s), `
-                  + `${Math.round(update.elapsedMs / 1_000)}s`
+                  + `${Math.round(update.elapsedMs / 1_000)}s elapsed${quiet}`
                   + (update.settled ? ' (settled)' : ''),
                   update.elapsedMs / 1_000,
                 )

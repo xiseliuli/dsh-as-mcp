@@ -58,6 +58,38 @@ import {
 export const TURN_POLL_INTERVAL_MS = 1_000
 
 /**
+ * How long a running turn may leave the log untouched before `session_status`
+ * calls it stalled.
+ *
+ * This is a report, not a timeout: a model call can legitimately think for
+ * minutes, so the wait keeps waiting. A minute of total silence is long enough to
+ * be worth telling a polling caller about and short enough that an upstream does
+ * not spend an hour believing a dead turn is healthy.
+ */
+export const STALL_MS = 60_000
+
+/**
+ * Upper bound on one `session_status { waitMs }` long-poll.
+ *
+ * A status call is meant to be cheap and repeatable; the cap keeps a caller from
+ * parking a connection for as long as a prompt wait would, and is short enough
+ * that the caller's own report cadence stays in control.
+ */
+const STATUS_MAX_WAIT_MS = 60_000
+
+/**
+ * How long a committed prompt may sit with its agent idle, and no `turn/end`, before
+ * the wait calls the turn vanished.
+ *
+ * The harness normally closes every turn it opens, but a disposed agent or a
+ * dropped loop can leave a turn open forever; without this the caller would wait
+ * out the whole timeout for a turn that no longer exists. The grace period covers
+ * the ordinary gap between a turn/end and the queued turn that starts right after
+ * it.
+ */
+const VANISH_GRACE_MS = 1_500
+
+/**
  * Hard cap on session rows in one `session_usage` report.
  *
  * Every row costs one durable-log read plus one price lookup, so an unbounded
@@ -255,6 +287,25 @@ export interface ToolCallInfo {
  */
 export type ToolCallDetail = 'summary' | 'full' | 'none'
 
+/**
+ * Why a turn is a failure, as opposed to an ending the caller asked for.
+ *
+ * The harness records the reason a turn ended; a caller that only sees "the call
+ * returned" cannot tell "the agent answered" from "the model errored". This is the
+ * normalized version of that reason, and the same value appears in
+ * `session_status.failure`, so polling and waiting report the same facts.
+ */
+export interface TurnFailure {
+  /**
+   * The harness ending (`error`, `blocked`, `max-tokens`, `interrupted`), or one of
+   * the two conditions a wait detects itself: `unreadable` (the session log stopped
+   * being readable mid-wait) and `vanished` (the turn stopped without `turn/end`).
+   */
+  readonly kind: string
+  /** One sentence a caller can log or show, naming what happened. */
+  readonly message: string
+}
+
 /** The settled outcome of one driver-initiated agent turn. */
 export interface TurnResult {
   /** The agent's final reply, cut to `maxReplyChars` when the caller set one. */
@@ -278,6 +329,19 @@ export interface TurnResult {
   readonly timedOut: boolean
   /** True when the turn ended because it was cancelled. */
   readonly aborted: boolean
+  /**
+   * Why this turn is a failure, when it ended abnormally.
+   *
+   * Absent for a completed turn, for a cancellation the caller asked for
+   * (`aborted: true` already says that) and for a fork boundary. Present for the
+   * harness's own failure endings — `error`, `blocked`, `max-tokens`, and
+   * `interrupted` (the turn never ended and was closed after the fact) — and for
+   * the two conditions a wait detects itself: `unreadable` (the session log
+   * stopped being readable mid-wait) and `vanished` (the turn stopped without a
+   * `turn/end`). `session_status.failure` carries the same value, so a polling
+   * caller and a waiting caller see one contract.
+   */
+  readonly failure?: TurnFailure
   /**
    * Wall-clock milliseconds from the turn's start event to its end event.
    *
@@ -406,8 +470,49 @@ export interface TurnProgress {
   readonly toolCalls: number
   /** Milliseconds since the prompt was submitted. */
   readonly elapsedMs: number
+  /**
+   * Milliseconds since the newest event in the log.
+   *
+   * `elapsedMs` is how long the caller has waited; this is how long the agent has
+   * been *quiet*. A turn that is working shows a small number here even after a
+   * long wait, and a stalled model call shows it growing — which is the difference
+   * between "still running" and "still alive" that a heartbeat should report.
+   */
+  readonly idleMs: number
   /** True on the final update, when the turn has settled or the wait gave up. */
   readonly settled: boolean
+}
+
+/**
+ * One session's live state, for a caller that polls instead of holding a wait open.
+ *
+ * Built from a durable-log read plus the harness's own agent state, so it answers
+ * the two questions a waiting caller cannot ask between events: is anything
+ * running, and did the last thing that ran fail.
+ */
+export interface SessionStatus {
+  readonly sessionId: string
+  /** A turn is open right now, per the harness's own agent state. */
+  readonly running: boolean
+  /** The open turn and step, when the log shows one. */
+  readonly openTurn: number | null
+  readonly openStep: number | null
+  readonly lastEventSeq: number | null
+  /** ISO timestamp of the newest durable event. */
+  readonly lastEventAt: string | null
+  /** Milliseconds since that event, as of this report. */
+  readonly idleMs: number | null
+  /** The most recently closed turn: its number, when it ended, and why. */
+  readonly lastTurn: { readonly turn: number; readonly endedAt: string | null; readonly reason: unknown } | null
+  /** Set when {@link lastTurn} ended abnormally (see {@link TurnFailure}). */
+  readonly failure: TurnFailure | null
+  /** Running while the log has been quiet for at least {@link STALL_MS} — a symptom, not a verdict. */
+  readonly stalled: boolean
+  /** False when the durable log could not be read at all. */
+  readonly logReadable: boolean
+  /** Only on a `waitMs` call: whether anything changed while waiting. */
+  readonly changed?: boolean
+  readonly waitedMs: number
 }
 
 /** One background shell job, as listed to a caller. */
@@ -626,6 +731,52 @@ function toolResultsOfEvents(
 function isAbortedReason(reason: unknown): boolean {
   if (reason === null || typeof reason !== 'object') return false
   return (reason as { kind?: unknown }).kind === 'aborted'
+}
+
+/**
+ * Normalize a harness `turn/end` reason into a caller-facing failure, or undefined
+ * when the ending is not a failure.
+ *
+ * Completed, caller-requested cancellation (`aborted`) and fork boundaries are not
+ * failures; `error`, `blocked`, `max-tokens` and `interrupted` are. `interrupted`
+ * is the harness's own name for a turn that never ended and was closed after the
+ * fact — exactly the "the task died and nobody said so" case this reporting exists
+ * for. An ending this plugin does not know is reported as a failure rather than
+ * read as success, matching the harness's own rule for consumed work.
+ */
+export function failureOfReason(reason: unknown): TurnFailure | undefined {
+  if (reason === null || typeof reason !== 'object') return undefined
+  const record = reason as { kind?: unknown; error?: unknown }
+  const kind = typeof record.kind === 'string' ? record.kind : 'unknown'
+  switch (kind) {
+    case 'completed':
+    case 'aborted':
+    case 'forked':
+      return undefined
+    case 'error': {
+      const error = record.error as { message?: unknown; code?: unknown } | undefined
+      const message = typeof error?.message === 'string' && error.message !== ''
+        ? error.message
+        : 'the turn failed (the harness recorded an error ending)'
+      return { kind: 'error', message }
+    }
+    case 'blocked':
+      return { kind: 'blocked', message: 'the turn was blocked before it could finish' }
+    case 'max-tokens':
+      return { kind: 'max-tokens', message: 'the turn reached its output-token ceiling' }
+    case 'interrupted':
+      return {
+        kind: 'interrupted',
+        message: 'the turn was closed without an ending by the harness (crash-orphaned)',
+      }
+    default:
+      return { kind, message: `the turn ended with an unrecognized reason "${kind}"` }
+  }
+}
+
+/** ISO timestamp for a durable event's own clock, or null when it has none. */
+function isoOfEventTime(time: unknown): string | null {
+  return typeof time === 'number' && Number.isFinite(time) ? new Date(time).toISOString() : null
 }
 
 /** One provider route a caller may name in `session_create`. */
@@ -1668,6 +1819,114 @@ export class DshDriver {
   }
 
   /**
+   * One session's live state, optionally held open until it changes.
+   *
+   * `waitMs` turns a poll into a long-poll: the call returns as soon as anything
+   * observable changes (a new event, a turn opening or closing, the agent going
+   * idle) or when the bound elapses, whichever comes first. That is the shape an
+   * upstream supervisor wants: it never has to guess a poll interval, and a change
+   * is reported at once instead of on the next tick. A session that stopped
+   * producing events while running is what `stalled` and `idleMs` are for.
+   */
+  async sessionStatus(request: {
+    sessionId: string
+    waitMs?: number
+    signal?: AbortSignal
+  }): Promise<SessionStatus> {
+    await this.assertSessionVisible(request.sessionId, 'session_status')
+    const budget = Math.max(0, Math.min(request.waitMs ?? 0, STATUS_MAX_WAIT_MS))
+    const startedAt = Date.now()
+    let current = await this.readSessionStatus(request.sessionId)
+    if (budget === 0) return current
+    const signature = statusSignature(current)
+    for (;;) {
+      if (request.signal?.aborted === true) {
+        return { ...current, changed: false, waitedMs: Date.now() - startedAt }
+      }
+      const remaining = budget - (Date.now() - startedAt)
+      if (remaining <= 0) return { ...current, changed: false, waitedMs: Date.now() - startedAt }
+      await waitForSessionActivity(
+        this.ctx,
+        request.sessionId,
+        Math.min(remaining, TURN_POLL_INTERVAL_MS),
+        request.signal,
+      )
+      current = await this.readSessionStatus(request.sessionId)
+      if (statusSignature(current) !== signature) {
+        return { ...current, changed: true, waitedMs: Date.now() - startedAt }
+      }
+    }
+  }
+
+  /** Read one status snapshot: the durable log plus the harness's own agent state. */
+  private async readSessionStatus(sessionId: string): Promise<SessionStatus> {
+    let events: readonly DshSessionEvent[] = []
+    let logReadable = true
+    try {
+      events = await this.readEvents(sessionId)
+    } catch {
+      logReadable = false
+    }
+    let openTurn: number | null = null
+    let openStep: number | null = null
+    let lastTurn: SessionStatus['lastTurn'] = null
+    for (const event of events) {
+      if (event.type === 'turn/start') {
+        openTurn = turnOf(event)
+        openStep = null
+        continue
+      }
+      if (event.type === 'step/start') {
+        const step = (event.data as { step?: unknown } | undefined)?.step
+        if (typeof step === 'number') openStep = step
+        continue
+      }
+      if (event.type === 'step/end') {
+        openStep = null
+        continue
+      }
+      if (event.type === 'turn/end') {
+        openTurn = null
+        openStep = null
+        lastTurn = {
+          turn: turnOf(event) ?? 0,
+          endedAt: isoOfEventTime(event.time),
+          reason: (event.data as { reason?: unknown } | undefined)?.reason ?? null,
+        }
+      }
+    }
+    const newest = events.at(-1)
+    const idleMs = newest === undefined ? null : Math.max(0, Date.now() - newest.time)
+    const running = await this.liveRunning(sessionId)
+    return {
+      sessionId,
+      running,
+      openTurn,
+      openStep,
+      lastEventSeq: newest?.seq ?? null,
+      lastEventAt: newest === undefined ? null : isoOfEventTime(newest.time),
+      idleMs,
+      lastTurn,
+      failure: lastTurn === null ? null : failureOfReason(lastTurn.reason) ?? null,
+      stalled: running && idleMs !== null && idleMs >= STALL_MS,
+      logReadable,
+      waitedMs: 0,
+    }
+  }
+
+  /** Whether a session has a turn open, from the cheapest source the profile has. */
+  private async liveRunning(sessionId: string): Promise<boolean> {
+    const agent = this.agentRegistry()?.get(sessionId)
+    if (agent !== undefined) return agent.status === 'running'
+    try {
+      const listed = await this.requireSessionController().list({}, new AbortController().signal)
+      return listed.items.some((item) => item.sessionId === sessionId && item.running)
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * Submit one user message and, by default, wait for its turn to settle.
    *
    * Turns on one session are serialized, so two concurrent MCP callers cannot
@@ -1857,8 +2116,33 @@ export class DshDriver {
       const deadline = Date.now() + timeoutMs
 
       const startedAt = Date.now()
+      // Set while a committed prompt's turn is open but its agent is idle; a turn
+      // in that state is not slow, it is gone, and the caller should hear it.
+      let vanishedSince: number | undefined
       for (;;) {
-        const events = await this.readEvents(request.sessionId)
+        let events: readonly DshSessionEvent[]
+        try {
+          events = await this.readEvents(request.sessionId)
+        } catch (error) {
+          // The wait outlives the log only if it is not told: report the condition
+          // instead of surfacing a bare ENOENT after the caller's timeout.
+          const reason = error instanceof Error ? error.message : String(error)
+          this.log.warn('[dsh-as-mcp] session %s became unreadable while waiting: %s', request.sessionId, reason)
+          return await this.settledReply(
+            request.sessionId,
+            emptyTurnSummary(),
+            {
+              timedOut: false,
+              partial: true,
+              failure: {
+                kind: 'unreadable',
+                message: `the session log became unreadable while waiting for the turn: ${reason}`,
+              },
+              ...flag,
+              maxReplyChars: request.maxReplyChars,
+            },
+          )
+        }
         const location = locateTurn(events, requestId, request.mode)
         reportProgress(request.onProgress, events, location, startedAt, location.settled)
 
@@ -1891,6 +2175,35 @@ export class DshDriver {
             shapeToolCalls(summarizeTurn(events, location), request.toolCalls ?? 'summary', request.maxArgumentChars),
             { timedOut: false, aborted: true, partial: true, ...flag, maxReplyChars: request.maxReplyChars },
           )
+        }
+
+        // A turn can stop without a `turn/end`: the agent is disposed, or the loop
+        // that owned it dropped it. Waiting for the timeout would report a turn
+        // that no longer exists as merely slow, so an open turn whose agent is
+        // idle for longer than the grace period is reported as vanished.
+        const liveAgent = this.agentRegistry()?.get(request.sessionId)
+        if (location.owningTurn !== null && liveAgent !== undefined && liveAgent.status !== 'running') {
+          vanishedSince ??= Date.now()
+          if (Date.now() - vanishedSince >= VANISH_GRACE_MS) {
+            return await this.settledReply(
+              request.sessionId,
+              shapeToolCalls(summarizeTurn(events, location), request.toolCalls ?? 'summary', request.maxArgumentChars),
+              {
+                timedOut: false,
+                partial: true,
+                failure: {
+                  kind: 'vanished',
+                  message: `turn ${location.owningTurn} stopped without a turn/end event: `
+                    + `the session's agent has been idle for ${Math.round((Date.now() - vanishedSince) / 1_000)}s, `
+                    + 'so the turn will never settle',
+                },
+                ...flag,
+                maxReplyChars: request.maxReplyChars,
+              },
+            )
+          }
+        } else {
+          vanishedSince = undefined
         }
 
         const remaining = deadline - Date.now()
@@ -1931,6 +2244,8 @@ export class DshDriver {
       aborted?: boolean
       partial?: boolean
       replayed?: true
+      /** A failure the wait itself observed; overrides the turn's own ending. */
+      failure?: TurnFailure
       /** Character cap for the agent's reply, when the caller asked for one. */
       maxReplyChars?: number
     },
@@ -1947,6 +2262,9 @@ export class DshDriver {
     const usage = read?.ok === true ? usageOfTurn(read.report, summary.turn) : undefined
     const replyLimit = flags.maxReplyChars
     const replyTruncated = replyLimit !== undefined && summary.reply.length > replyLimit
+    // An ending the wait observed itself wins: it knows something the log cannot
+    // say (the log stopped being readable, or a turn stopped without an ending).
+    const failure = flags.failure ?? failureOfReason(summary.turnEndReason)
     return {
       accepted: true,
       ...(flags.replayed === true ? { replayed: true as const } : {}),
@@ -1957,6 +2275,7 @@ export class DshDriver {
         ...(replyTruncated ? { replyTruncated: true as const } : {}),
         timedOut: flags.timedOut,
         ...(flags.aborted === true ? { aborted: true } : {}),
+        ...(failure === undefined ? {} : { failure }),
         ...(usage === undefined ? {} : { usage }),
       },
       ...(read?.ok === true ? { session: read.envelope } : {}),
@@ -4437,8 +4756,10 @@ function reportProgress(
       if (event.type === 'tool/call') toolCalls += 1
     }
   }
+  const newest = events.at(-1)
+  const idleMs = newest === undefined ? 0 : Math.max(0, Date.now() - newest.time)
   try {
-    onProgress({ turn: location.owningTurn, toolCalls, elapsedMs: Date.now() - startedAt, settled })
+    onProgress({ turn: location.owningTurn, toolCalls, elapsedMs: Date.now() - startedAt, idleMs, settled })
   } catch {
     // A progress ping is advisory; never let it fail the prompt.
   }
@@ -4599,6 +4920,30 @@ function truncateText(text: string, limit: number): string {
 /** UTF-8 byte length without allocating a Buffer for ordinary ASCII. */
 function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8')
+}
+
+/** The reply shape for a wait that observed a failure instead of a turn. */
+function emptyTurnSummary(): Omit<TurnResult, 'timedOut' | 'usage'> {
+  return {
+    reply: '',
+    replyChars: 0,
+    models: [],
+    toolCalls: [],
+    turn: null,
+    turnEndReason: null,
+    aborted: false,
+  }
+}
+
+/** What a status long-poll treats as a change; timings and tokens are reports, not state. */
+function statusSignature(status: SessionStatus): string {
+  return [
+    status.running,
+    status.openTurn,
+    status.openStep,
+    status.lastEventSeq,
+    status.failure?.kind ?? '',
+  ].join('|')
 }
 
 function summarizeTurn(

@@ -2328,6 +2328,73 @@ async function secondEntryChecks() {
   }
 }
 
+// --- status reporting for work the caller started --------------------------
+
+/**
+ * `session_status` is the reporting channel for work a caller started without
+ * holding a call open. It answers "is a turn running, which one, how long has the
+ * log been quiet, and why did the last turn end" — and its `waitMs` form is the
+ * same question as a long-poll, so a supervisor hears about a change at once
+ * instead of on a guessed interval. The failure side (`turn.failure`) is asserted
+ * by absence here: a completed turn must not look like a failure, which is the
+ * half a shape-only check would miss.
+ */
+async function statusCheck() {
+  section('session status reporting (real turn)')
+  if (!has('session_status') || !has('session_prompt') || !has('session_list')) {
+    skip('status reporting checks', 'needs session_status, session_prompt and session_list')
+    return
+  }
+  const session = await callTool('session_create', { cwd: process.cwd() })
+  const queued = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Run the bash command: sleep 2; echo STATUS-WINDOW. Then reply exactly: STATUS DONE.',
+    wait: false,
+  })
+  check(queued.accepted === true, 'session_prompt { wait: false } admits without waiting', String(queued.accepted))
+
+  const held = await callTool('session_status', { sessionId: session.sessionId, waitMs: 10_000 })
+  check(typeof held.changed === 'boolean', 'session_status answers a change flag', String(held.changed))
+  check(
+    typeof held.running === 'boolean' && typeof held.stalled === 'boolean' && typeof held.logReadable === 'boolean',
+    'session_status reports running, stalled and logReadable',
+    `running=${held.running} stalled=${held.stalled} readable=${held.logReadable}`,
+  )
+
+  let settled = held
+  for (let attempt = 0; attempt < 40 && settled.running; attempt += 1) {
+    settled = await callTool('session_status', { sessionId: session.sessionId, waitMs: 1_000 })
+  }
+  check(settled.running === false, 'session_status reports the turn as no longer running', String(settled.running))
+  check(
+    settled.lastTurn?.reason?.kind === 'completed',
+    'session_status reports how the last turn ended',
+    JSON.stringify(settled.lastTurn?.reason),
+  )
+  check(settled.failure === null, 'a completed turn reports no failure', JSON.stringify(settled.failure))
+  check(
+    typeof settled.idleMs === 'number' && settled.idleMs >= 0,
+    'session_status reports how long the log has been quiet',
+    `${settled.idleMs}ms`,
+  )
+
+  const awaited = await callTool('session_prompt', {
+    sessionId: session.sessionId,
+    prompt: 'Reply with exactly: STATUS SECOND',
+    timeoutMs: 120_000,
+  })
+  check(
+    awaited.turn?.failure === undefined,
+    'a completed prompt reply carries no failure block',
+    JSON.stringify(awaited.turn?.failure),
+  )
+  check(
+    awaited.turn?.turnEndReason?.kind === 'completed',
+    'the prompt reply names the turn ending',
+    JSON.stringify(awaited.turn?.turnEndReason),
+  )
+}
+
 // --- truncation caps that the caller sets ----------------------------------
 
 /**
@@ -2897,6 +2964,7 @@ try {
       await idempotencyCheck()
       await promptImageCheck()
       await titleUsageCheck()
+      await statusCheck()
       await truncationCheck()
       await concurrentTurnsCheck()
       if (withSubagent) await subagentCheck()

@@ -138,7 +138,7 @@ describe('session_prompt progress notifications', () => {
   it('emits notifications/progress when the client sent a progress token', async () => {
     const endpoint = await boot(stubDriver({
       promptSession: async (request) => {
-        request.onProgress?.({ turn: 1, toolCalls: 2, elapsedMs: 1_500, settled: false })
+        request.onProgress?.({ turn: 1, toolCalls: 2, elapsedMs: 1_500, idleMs: 400, settled: false })
         return {
           accepted: true,
           turn: {
@@ -171,7 +171,7 @@ describe('session_prompt progress notifications', () => {
   it('sends nothing when the client asked for no progress', async () => {
     const endpoint = await boot(stubDriver({
       promptSession: async (request) => {
-        request.onProgress?.({ turn: 1, toolCalls: 0, elapsedMs: 10, settled: true })
+        request.onProgress?.({ turn: 1, toolCalls: 0, elapsedMs: 10, idleMs: 10, settled: true })
         return { accepted: true }
       },
     }))

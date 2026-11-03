@@ -3,6 +3,34 @@
 All notable changes to `dsh-as-mcp`, newest first. Versions follow SemVer; the
 plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 
+## 0.52.81
+
+- New `session_status` reports one session's live state: whether a turn is open right now, its turn
+  and step, the newest durable event (`lastEventSeq`/`lastEventAt`), how long the log has been quiet
+  (`idleMs`), `stalled` once a running turn has been silent for a minute, how the last turn ended,
+  and a normalized `failure` when it ended abnormally. Work started with `session_prompt { wait:
+  false }` previously had no reporting channel at all — a caller could only poll `session_list` /
+  `session_messages` and could not tell a finished task from a dead one. `waitMs` turns the call
+  into a long-poll: it returns as soon as anything changes or the bound elapses, so a supervisor is
+  told once per change instead of on a guessed interval. Read-only, one durable-log read.
+- `session_prompt` now says when a turn failed instead of returning it as an ordinary reply.
+  `turn.failure` carries `{kind, message}` for the harness's own failure endings (`error`,
+  `blocked`, `max-tokens`, `interrupted`) and for an ending this build does not recognize; it is
+  absent for `completed`, for a caller-requested `aborted`, and for a fork boundary. It also reports
+  two conditions the wait detects itself: `unreadable` — the session log stopped being readable
+  mid-wait, which used to surface as a bare ENOENT only after the caller's timeout — and `vanished`
+  — the turn stopped without a `turn/end` while its agent went idle, which used to sit out the whole
+  timeout and report `timedOut: true`, i.e. "still running". `tests/driver.test.ts` covers the
+  ending normalization, the error reply, the vanished turn and the unreadable log.
+- The wait's progress notification now separates the two numbers a heartbeat needs: `turn 3: 2 tool
+  call(s), 41s elapsed, log quiet for 12s`. A long turn and a dead one used to look identical.
+- `session_status` is covered in the live sweep (a `wait: false` prompt followed by a held status
+  call, then the settled ending and the absence of a failure block) and the forwarding test; both
+  README tables, the capability audit's tool count and `docs/LIVE-VERIFICATION.md` are updated.
+  Measured on 0.52.81, one boot with the search index open: live-checks **189/189**
+  (`--with-model --with-subagent`) and acceptance **166/166**; the status section's held call
+  reported `changed: true` while the turn ran and `idleMs` 3 ms after the newest event.
+
 ## 0.52.80
 
 - A cancellation that lands in the window *after* the harness opened the turn but *before* the

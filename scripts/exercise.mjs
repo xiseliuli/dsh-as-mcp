@@ -245,6 +245,7 @@ section('surface')
     'session_rename',
     'session_search',
     'session_set_model',
+    'session_status',
     'session_tool_result',
     ...(usageReported ? ['session_usage'] : []),
     'shell_kill',
@@ -258,7 +259,7 @@ section('surface')
   ]
   check(
     JSON.stringify(names) === JSON.stringify(expected),
-    usageReported ? 'tools/list exposes all 28 tools' : 'tools/list exposes all 27 tools (usage reporting off)',
+    usageReported ? 'tools/list exposes all 29 tools' : 'tools/list exposes all 28 tools (usage reporting off)',
     `${names.length} tools`,
   )
   check(
