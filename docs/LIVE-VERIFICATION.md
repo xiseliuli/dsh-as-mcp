@@ -73,6 +73,8 @@ behaviour, and an entry is only here if a real DSH process produced the stated r
 
 | `session_status` reports a running turn, its ending and the log silence | 0.52.81 | a `session_prompt { wait: false }` followed by a held `session_status { waitMs }`: the status call answered `changed: true` while the turn ran (`running: true`, an open turn, `idleMs` 3 ms after the newest event, `stalled: false`, `logReadable: true`), then — once the turn settled — `running: false`, `lastTurn.reason: {kind: "completed"}`, `failure: null`; the same turn's awaited reply carried `turnEndReason: {kind: "completed"}` and no `failure` block |
 
+| `session_status` works in the **desktop composition** after a reload | 0.52.82 | the app was restarted onto 0.52.82; `scripts/smoke.mjs` reported 29 tools with `session_status` in `tools/list`; a real desktop turn started with `session_prompt { wait: false }` was reported by a held `session_status { waitMs }` in 54 ms (`changed: true`, `running: true`, `openTurn: 1`, `openStep: 1`, `idleMs: 0`, `stalled: false`, `logReadable: true`), then settled as `running: false` with `lastTurn.reason: {kind: "completed"}` and `failure: null`; the awaited reply `DESKTOP SECOND OK` carried `turnEndReason: {kind: "completed"}` and no `failure` block. The probe session ran in a throwaway `/tmp` workspace and was moved to `~/.dsh/sessions-trash/2026-11-03T03-44-06-878Z` afterwards |
+
 ### Failure reporting (fault injection)
 
 Run against a throwaway profile (`fault-probe`, copies of the credentials, headless, `DSH_PERMISSION_MODE=danger-full-access`),
