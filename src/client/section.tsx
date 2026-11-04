@@ -27,6 +27,15 @@ export interface SectionProps {
   store: SectionStore
   /** Where the generated token lives, for the copyable client configuration. */
   tokenFile: string
+  /**
+   * Draw a panel heading.
+   *
+   * The settings shell titles its pages through its own nav, so the
+   * `settings.section` entry must not add a second one. The Plugins page renders
+   * a bundle's configuration inside a bare `section.detailSection` that draws no
+   * title at all, so that cell asks for one.
+   */
+  heading?: boolean
 }
 
 /**
@@ -395,7 +404,7 @@ function ClientConfig({
  * namespace the host registers — so what this panel shows is what the endpoint
  * will read on its next request, with no second copy to fall out of step.
  */
-export function McpSection({ t, store, tokenFile }: SectionProps) {
+export function McpSection({ t, store, tokenFile, heading }: SectionProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [writeError, setWriteError] = useState(false)
   const [status, setStatus] = useState<EndpointStatus>()
@@ -484,6 +493,7 @@ export function McpSection({ t, store, tokenFile }: SectionProps) {
 
   return (
     <div className="dshmcp">
+      {heading === true && <h2 className="dshmcp_heading">{t('page.title')}</h2>}
       <p className="dshmcp_intro">{t('intro')}</p>
 
       {snapshot.status === 'loading' && <p className="dshmcp_note">{t('state.loading')}</p>}

@@ -114,16 +114,39 @@ export interface SlotService {
    * @returns the disposer ending the injection.
    */
   inject(name: string, callback: () => unknown): () => void
-  /** Register into an already-declared slot. */
-  register(options: {
+  /**
+   * Register one entry into an already-declared slot.
+   *
+   * The kind of the target slot decides which identity option is required:
+   * a **list** slot (`settings.section`) keys an entry by `id` and takes
+   * `order`/`label`, while a **keyed** slot (`plugins.bundle.config`) is
+   * dispatched per occurrence and keys an entry by `key`. `ui-slots/src/index.ts`
+   * `KindOptions` is the exact shape; `locale` and `inject` are common to both
+   * (`BaseOptions`), and `locale` is what synthesizes the component's `t` seat.
+   */
+  register(options: SlotRegistration, component: unknown): unknown
+}
+
+/** One registration: a list slot's `id` arm or a keyed slot's `key` arm. */
+export type SlotRegistration =
+  | {
     readonly name: string
     readonly id: string
     readonly order?: number
     readonly label?: () => string
+    /** Dictionary namespace that puts the synthesized `t` seat on the props. */
     readonly locale?: string
+    /** Business face: the props the component receives beside its owner props. */
     readonly inject?: () => unknown
-  }, component: unknown): unknown
-}
+  }
+  | {
+    readonly name: string
+    readonly key: string
+    /** Dictionary namespace that puts the synthesized `t` seat on the props. */
+    readonly locale?: string
+    /** Business face: the props the component receives beside its owner props. */
+    readonly inject?: () => unknown
+  }
 
 /** The `locale` service, injected on the client context. */
 export interface LocaleService {

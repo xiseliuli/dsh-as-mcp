@@ -696,6 +696,12 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 **MCP 服务** 分组。它编辑的就是上面那段配置所在的 `dsh-as-mcp` 命名空间——面板和文件是同一个
 值的两种视图，不是两份副本。
 
+同一份面板也会出现在**插件页**：本 bundle 自己的详情页里，通过宿主的 `plugins.bundle.config`
+插槽（按包名作为 key）渲染。因此想改设置不必每次都打开 DSH 设置面板。两个入口渲染的是同一个
+组件、同一个共享配置表单和同一份快照，是同一个值的两扇门——在任一边写入，另一边无需刷新就能看到。
+插件页的单元格与设置页一样，只在宿主确实提供这一项的配置表单时才注册；宿主插件页没有这个插槽时
+什么都不显示，设置入口不受影响。
+
 面板覆盖全部设置，包括 `agentTools.allow` 与 `agentTools.deny` 这两份名单（用逗号分隔的文本
 编辑）。它们本质是 `string[]`，所以**名字里带逗号**的工具无法在面板里表达，那种情况请改配置
 文件。
@@ -723,8 +729,9 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 与浏览器 cookie 围栏**之内**，因此自动继承 DSH 自己的鉴权，绝不会暴露在一个裸端口上。`dsh_info`
 仍然只报告令牌来源：已经用这个令牌通过鉴权的调用方，没必要让它再被回显进对话记录里。
 
-面板是浏览器半边通过 `ctx.configForms.whileServed` 注册进 `settings.section` 的一页，因此只有宿主
-确实在提供这一项的配置表单时才会出现。这需要 `@deepseek-ai/schemastery`：DSH 0.2.0-rc.2 只给
+两个入口——`settings.section` 设置页，以及宿主声明了该插槽时的插件页 `plugins.bundle.config`
+单元格——都由浏览器半边通过 `ctx.configForms.whileServed` 注册，因此只有宿主确实在提供这一项的
+配置表单时才会出现。这需要 `@deepseek-ai/schemastery`：DSH 0.2.0-rc.2 只给
 `Config` 上带 `toJSON()` 的 entry 投影表单，而且只保留标了 `meta.volatile` 的字段。DSH 里没有
 免 schemastery 的面板路径，所以它作为 peer 直接 import——拿不到它插件根本无法被 import，这正是
 下面那条兼容范围要挡住的情况。
@@ -765,6 +772,10 @@ profile 推导同一份映射；不过配置 profile 的人应当能在一处读
   `configure({ auto: false }, ctx.fiber)`（本插件自带页面）。**面板需要 0.2 的设置模型**；在
   0.1.x 运行时上端点仍按配置文件正常运行，但没有面板——那种运行时只会为「插件通过已移除的那个
   调用注册过的命名空间」投影表单。
+- **插件页的入口同样是可选的。** 只有插件页声明了 `plugins.bundle.config` 插槽、并且这一项的配置
+  表单正在被提供时，浏览器半边才会注册那个单元格；宿主插件页没有该插槽时不显示配置单元格，设置页
+  入口照常工作。这个插槽按 bundle 的包名派发，所以 key 必须是包名——写成别的值不会报错，只是静默
+  地什么都不渲染。
 - **用量需要会话日志。** token 数字经 `sessionQuery`（优先）或 `sessionController.inspect` 从持久
   日志折出；`dsh_info` 把这一点报成 `tokenUsage`。两者都没有时，`session_prompt` 的回复会带
   `usageUnavailable` 和原因，而不是假装这一轮没花钱；会话工具照常可用；带 `sessionId` 的

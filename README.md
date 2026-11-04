@@ -784,6 +784,14 @@ contributes an **MCP server** section to the settings panel. It edits the same `
 namespace the configuration above fills, so the panel and the file are two views of one
 value, not two copies.
 
+The same panel is also contributed to the **Plugins page**, under this bundle's own page — the
+host's `plugins.bundle.config` seat, keyed by the package name — so a setting can be changed there
+without opening the settings panel at all. Both entries render the same component over the same
+shared configuration form and publish from one snapshot, so they are two doors onto one value: a
+write made in either is visible in the other without a reload. The Plugins-page cell is registered
+only while the host serves this entry's form, exactly like the settings section; a host whose
+Plugins page declares no such seat simply shows no cell, and the settings entry is unaffected.
+
 The panel covers every setting including the `agentTools.allow` and `agentTools.deny` lists,
 which are edited as comma-separated text. Both are ordinary `string[]` values, so an entry with a
 comma in it cannot be expressed here; use the configuration file for that.
@@ -816,9 +824,10 @@ layer — inside that layer's Host/Origin and browser-cookie fence, so it inheri
 authorization and is never exposed on a bare port. `dsh_info` still reports only the token's
 source: a caller that authenticated with the token does not need it echoed into its transcript.
 
-The panel is a `settings.section` page the browser half registers through
-`ctx.configForms.whileServed`, so it appears only while the host actually serves this entry's
-form. That needs `@deepseek-ai/schemastery`: DSH 0.2.0-rc.2 projects a form only for an entry
+Both seats — the `settings.section` page and, where the host declares it, the Plugins page's
+`plugins.bundle.config` cell — are registered through `ctx.configForms.whileServed`, so each
+appears only while the host actually serves this entry's form. That needs
+`@deepseek-ai/schemastery`: DSH 0.2.0-rc.2 projects a form only for an entry
 whose `Config` carries a `toJSON()`, and it keeps only fields marked `meta.volatile`. There is
 no schemastery-free path to a panel, so the module is a declared peer and imported directly —
 without it the plugin cannot be imported at all, which is why the compatibility range below is
@@ -867,6 +876,11 @@ but a deployment can switch the capability off.
   settings model**; on a 0.1.x runtime the endpoint still runs from the configuration file, but
   there is no panel, because that runtime only projects a form for a namespace a plugin
   registered through the removed call.
+- **The Plugins-page seat is optional too.** The browser half registers into
+  `plugins.bundle.config` only when the Plugins page declares that seat and the entry's form is
+  being served; a host whose Plugins page declares none shows no configuration cell there, and
+  the settings section keeps working unchanged. The seat is keyed by the bundle's package name,
+  which is what the page dispatches — a different key would render nothing, silently.
 - **Usage needs the session log.** Token figures are folded from the durable log through
   `sessionQuery` (preferred) or `sessionController.inspect`; `dsh_info` reports this as
   `tokenUsage`. Without either, a `session_prompt` reply says `usageUnavailable` with a reason

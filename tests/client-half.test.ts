@@ -94,6 +94,49 @@ describe('the client half is declared', () => {
   })
 })
 
+describe('the Plugins page renders the same configuration panel', () => {
+  it('registers into the bundle-configuration seat under this package name', async () => {
+    // The page dispatches `plugins.bundle.config` with `entryKey = pkg.name`
+    // (`ui-plugin-manager/src/client/PluginManagerPage.tsx`), so the key is the
+    // package name — not the row id, not a section id. A wrong key is invisible:
+    // the bundle page simply shows no configuration section, with nothing logged.
+    const source = await readFile(join(ROOT, 'src/client/index.tsx'), 'utf8')
+    const entry = /const SETTINGS_ENTRY = '([^']+)'/.exec(source)?.[1]
+    expect(entry).toBe(manifest.name)
+    expect(source).toContain("const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'")
+    expect(source).toContain('key: SETTINGS_ENTRY')
+    expect(bundle).toContain('"plugins.bundle.config"')
+  })
+
+  it('is gated on the host serving this entry, exactly like the settings section', () => {
+    // `configured` on the Plugins page is "a cell is registered for this bundle".
+    // Registering outside `whileServed` would leave a configuration section on a
+    // host that projects no form, with an unusable panel behind it.
+    const gates = bundle.match(/whileServed\(\[/g) ?? []
+    expect(gates.length).toBe(2)
+  })
+
+  it('shares one form between both doors, so neither can show a stale copy', async () => {
+    // Two surfaces, one `buildStore` result: a write from the Plugins page and a
+    // write from the settings panel land on the same shared form and the same
+    // snapshot, so there is no second copy to fall out of step.
+    const source = await readFile(join(ROOT, 'src/client/index.tsx'), 'utf8')
+    expect(source.match(/buildStore\(ctx\)/g)).toHaveLength(1)
+    expect(source.match(/inject: \(\) => \(\{ store, tokenFile: FALLBACK_TOKEN_FILE \}\)/g)).toHaveLength(2)
+  })
+
+  it('draws its own heading, because the page container supplies none', async () => {
+    // A bundle's configuration renders inside a bare `section.detailSection`
+    // (`PluginManagerPage.tsx`): no title, no border. The settings shell, by
+    // contrast, titles its page in the nav. So the cell asks for a heading and
+    // the settings entry must not get a second one.
+    const section = await readFile(join(ROOT, 'src/client/section.tsx'), 'utf8')
+    const index = await readFile(join(ROOT, 'src/client/index.tsx'), 'utf8')
+    expect(section).toContain("{heading === true && <h2 className=\"dshmcp_heading\">{t('page.title')}</h2>}")
+    expect(index).toContain('<McpSection {...props} heading />')
+  })
+})
+
 describe('the client bundle is self-contained', () => {
   it('requires only seeded specifiers', () => {
     const required = [...bundle.matchAll(/require\("([^"]+)"\)/g)].map((match) => match[1])

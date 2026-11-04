@@ -1,9 +1,11 @@
 /**
  * The browser half.
  *
- * Contributes one entry to the settings panel. It holds no state of its own: the
- * values it renders come from the same Host entry the endpoint reads, so what the
- * panel shows is what the endpoint will use on its next request.
+ * Contributes one entry to the settings panel and one cell to this bundle's own
+ * page on the Plugins page. It holds no state of its own: both surfaces render
+ * from the same shared configuration form the Host entry reads, so what either
+ * shows is what the endpoint will use on its next request — and a write from one
+ * is visible in the other.
  *
  * @module dsh-as-mcp/client
  */
@@ -12,7 +14,7 @@ import type { Config } from '../config.js'
 import { STATUS_ROUTE, type EndpointStatus } from '../status.js'
 import type { ClientContext } from './contract.js'
 import { NS, en, zh } from './locales.js'
-import { McpSection, type SectionStore } from './section.js'
+import { McpSection, type SectionProps, type SectionStore } from './section.js'
 import './styles.js'
 
 /**
@@ -39,6 +41,17 @@ const SETTINGS_ENTRY = 'dsh-as-mcp'
 
 /** Where the generated token lives, when the host has not told us otherwise. */
 const FALLBACK_TOKEN_FILE = '~/.dsh/dsh-as-mcp/token'
+
+/**
+ * The Plugins page's keyed seat for a bundle's own configuration.
+ *
+ * The page dispatches it with `entryKey = pkg.name` and `view: 'page'` under the
+ * bundle's description (`ui-plugin-manager/src/client/PluginManagerPage.tsx`, the
+ * bundle detail's `data-plugin-config` section). It appears only for a bundle
+ * whose package name is registered here, which is what makes the Plugins page a
+ * second door onto the same settings instead of a second copy of them.
+ */
+const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'
 
 /**
  * Build the bound store over the Host entry's shared configuration form.
@@ -79,6 +92,19 @@ function buildStore(ctx: ClientContext): SectionStore {
       }
     },
   }
+}
+
+/**
+ * The Plugins page's cell for this bundle.
+ *
+ * The page renders a bundle's configuration inside a bare `section.detailSection`
+ * with no title of its own (`ui-plugin-manager/src/client/PluginManagerPage.tsx`),
+ * so the cell asks the panel for a heading; the `settings.section` entry keeps
+ * relying on the settings shell's nav and passes none. Everything else is the same
+ * component, store and snapshot the settings page renders.
+ */
+function PluginsPageCell(props: SectionProps) {
+  return <McpSection {...props} heading />
 }
 
 /**
@@ -124,5 +150,26 @@ export function apply(ctx: ClientContext): void {
       )
     ))),
     'dsh-as-mcp: settings section',
+  )
+
+  // The same panel, on this bundle's page in the Plugins list, so changing a
+  // setting no longer requires opening the settings panel. It is deliberately
+  // the same `store`: one form and one snapshot back both doors, so a write made
+  // in one is visible in the other without a reload. Gated identically on the
+  // host serving the entry — a deployment that projects no form shows no cell,
+  // and a namespace that stops being served withdraws both.
+  ctx.effect(
+    () => ctx.configForms.whileServed([SETTINGS_ENTRY], () => ctx.slots.inject(BUNDLE_CONFIG_SLOT, () => (
+      ctx.slots.register(
+        {
+          name: BUNDLE_CONFIG_SLOT,
+          key: SETTINGS_ENTRY,
+          locale: NS,
+          inject: () => ({ store, tokenFile: FALLBACK_TOKEN_FILE }),
+        },
+        PluginsPageCell,
+      )
+    ))),
+    'dsh-as-mcp: plugins-page configuration',
   )
 }

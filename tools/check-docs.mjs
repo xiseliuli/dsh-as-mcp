@@ -623,7 +623,11 @@ const clientSources = [
 const referenced = new Set()
 const templatePrefixes = new Set()
 for (const { source } of clientSources) {
-  for (const match of source.matchAll(/'((?:nav|intro|group|field|client|state)(?:\.[A-Za-z0-9_]+)+)'/g)) {
+  // `page.*` is the panel's own heading, asked for only by the Plugins-page cell
+  // (the settings shell titles its page in the nav). The rest are the section's
+  // long-standing namespaces; the scan needs to know every one, or a live key
+  // looks unreferenced.
+  for (const match of source.matchAll(/'((?:nav|intro|page|group|field|client|state)(?:\.[A-Za-z0-9_]+)+)'/g)) {
     referenced.add(match[1])
   }
   // A few keys are composed at runtime, e.g. t(`client.tokenSource.${source}`):

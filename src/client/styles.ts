@@ -16,6 +16,7 @@ export const CLIENT_ID = 'dsh-as-mcp'
 /** Panel stylesheet. */
 export const CSS = `
 .dshmcp{display:flex;flex-direction:column;gap:20px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:18px}
+.dshmcp_heading{margin:0;font-size:15px;line-height:22px;font-weight:600}
 .dshmcp_intro{margin:0;color:var(--dsw-alias-label-secondary)}
 .dshmcp_group{display:flex;flex-direction:column;gap:10px}
 .dshmcp_groupTitle{margin:0;font-size:13px;font-weight:600}

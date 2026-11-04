@@ -6,6 +6,12 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.52.85
+
+- MCP 服务的设置面板现在也渲染在**插件页**：本 bundle 自己的详情页里。浏览器半边把同一个 `McpSection` 注册进宿主的 `plugins.bundle.config` keyed 插槽，key 就是 bundle 的包名（页面按 `entryKey = pkg.name` 派发），所以改设置不必每次都打开 DSH 设置。两个入口是同一个组件、同一个共享配置表单与同一份快照——一个值两扇门，任一边写入另一边无需刷新即可见；新单元格和设置页一样，只在宿主确实提供这一项配置表单时注册（`ctx.configForms.whileServed`）。插件页把 bundle 配置放在一个没有标题的裸 `section.detailSection` 里，所以这个单元格让面板自己画标题；设置页入口仍沿用设置外壳的导航标题，不重复画。宿主插件页没有该插槽时什么都不显示，设置入口不受影响。`src/client/contract.ts` 现在同时描述两种插槽（list 的 `id` 与 keyed 的 `key`），并引用了 harness 的 `KindOptions` 形状，不再假设只有 `settings.section`。
+- `tests/client-half.test.ts` 把新入口钉在构建产物与源码上：单元格以包名作 key（key 写错不会报错，只是静默不渲染，因为页面判断"有没有配置"就是已注册 key 的集合）、两个入口在同一道 `whileServed` 门后、且只有一个 store 同时支撑两者；构建出的 `lib/client.js` 仍然只 require 平台预置模块。
+- 除 MCP `initialize` 宣告的版本号外，端点、工具与宿主半边均无变化。
+
 ## 0.52.84
 
 - GitHub 安装指引改为先给「能长期有效的放行方式」：pnpm 按 `<name>@<git url>`（不带 `#<ref>`）匹配 git 依赖的构建，一条 `allowBuilds` 条目就能覆盖之后的所有 commit；原文先让读者抄 pnpm 打印的、钉在 commit 上的 key（`…/tar.gz/<sha>: true`），上游一 push 就失效，每更新一次都得重新手动放行。同时纠正本页两条命令的实际门槛：`github:…` 与 release `.tgz` 都按 tarball 拉取，所以按仓库 URL 放行需要 pnpm ≥11.19.0（11.11.0 只覆盖克隆形式的 git 依赖）；pnpm 10 上该开关叫 `onlyBuiltDependencies`。并新增「不放行构建」的通道：npm 与预构建的 Release 资产，两者都不执行 `prepare`。

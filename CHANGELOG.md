@@ -6,6 +6,29 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.52.85
+
+- The MCP server's settings panel now also renders on the **Plugins page**, under this bundle's own
+  page: the browser half registers the same `McpSection` into the host's `plugins.bundle.config`
+  keyed seat, keyed by the bundle's package name (the page dispatches `entryKey = pkg.name`), so a
+  setting can be changed without opening DSH Settings. Both entries render the same component over
+  the same shared configuration form and snapshot — one value, two doors; a write from either is
+  visible in the other without a reload — and the new cell is registered only while the host serves
+  this entry's form (`ctx.configForms.whileServed`), exactly like the settings section. Because the
+  Plugins page renders bundle configuration inside a bare `section.detailSection` with no title of
+  its own, the cell asks the panel for a heading; the settings entry keeps relying on the settings
+  shell's nav and adds none. A host whose Plugins page declares no such seat simply shows no cell,
+  and the settings entry is unaffected. `src/client/contract.ts` now types both slot kinds (a list
+  entry's `id` arm and a keyed entry's `key` arm) and cites the harness `KindOptions` shape, instead
+  of assuming `settings.section`.
+- `tests/client-half.test.ts` pins the new surface against the built bundle and the source: the cell
+  is keyed by the package name (a wrong key renders nothing, silently, because the page's
+  `configured` ledger is exactly the set of registered keys), both surfaces sit behind the same
+  `whileServed` gate, and exactly one store backs both doors. The built `lib/client.js` still
+  requires only the platform's seeded modules.
+- The endpoint, tools and host half are unchanged apart from the version the MCP `initialize`
+  result advertises.
+
 ## 0.52.84
 
 - The GitHub-install instructions now lead with the approval that keeps working. pnpm matches a

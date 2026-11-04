@@ -15,6 +15,7 @@ export const NS = 'dsh-as-mcp'
 /** Simplified Chinese dictionary. */
 export const zh: Record<string, string> = {
   nav: 'MCP 服务',
+  'page.title': 'MCP 服务设置',
   intro: '把当前 DSH 实例作为 MCP 服务释放出去，供其他 agent 创建工作区、新建会话、读写文件与执行命令。修改即时生效，无需重启。',
 
   'group.endpoint.title': '端点',
@@ -123,6 +124,7 @@ export const zh: Record<string, string> = {
 /** English dictionary. */
 export const en: Record<string, string> = {
   nav: 'MCP server',
+  'page.title': 'MCP server settings',
   intro: 'Expose this DSH instance as an MCP server, so other agents can create workspaces, start sessions, read and write files, and run commands. Changes apply immediately; no restart.',
 
   'group.endpoint.title': 'Endpoint',
