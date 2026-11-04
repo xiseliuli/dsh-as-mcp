@@ -5,6 +5,7 @@ import { McpServer, createMcpHandler } from '@modelcontextprotocol/server'
 
 import type { Config } from '../config.js'
 import type { DshLogger } from '../dsh/types.js'
+import { EndpointPushes } from './push.js'
 import { registerTools, type ToolDeps } from './tools.js'
 import { presentedToken, tokenMatches } from './token.js'
 import { SERVER_NAME, VERSION } from '../version.js'
@@ -48,6 +49,12 @@ export const SERVER_INSTRUCTIONS = [
   'waits already reports the same facts: its reply carries turn.failure for an abnormal ending, and a client that',
   'sends a progressToken gets progress notifications whose message includes the log silence.',
   '',
+  'Modern (2026-07-28) clients can be told when a fire-and-forget turn settles instead of polling. Open one',
+  'subscriptions/listen stream with notifications.resourceSubscriptions = ["dsh://session/<sessionId>/turn"] BEFORE',
+  'prompting; the server publishes notifications/resources/updated for that URI when the turn ends, and resources/read',
+  'on the same URI returns the session_status payload (failure included). A stream opened after the prompt may miss',
+  'the event, and clients that do not subscribe — including every 2025-era client — keep polling session_status.',
+  '',
   'To control queued work: session_queue lists the pending inbox and can remove, edit or steer one message before it',
   'runs; session_cancel stops the running turn. If session.scope is "owned", all of these are limited to sessions this',
   'endpoint created or forked.',
@@ -73,6 +80,15 @@ export interface RequestHandlerOptions {
    */
   readonly getToken: () => string
   readonly log: DshLogger
+  /**
+   * The endpoint's server-push surface.
+   *
+   * Supplied by the plugin so the driver, which arms the watchers, and the HTTP
+   * handler, which owns the subscription bus, share one object. Omitted in tests
+   * that do not exercise push; the handler then creates its own (still owned by
+   * no watcher, so nothing is ever published).
+   */
+  readonly pushes?: EndpointPushes
 }
 
 /** The guarded Node request handler plus the handler's own teardown. */
@@ -235,6 +251,7 @@ function queryToken(url: string | undefined): string | null {
  */
 export function createRequestHandler(options: RequestHandlerOptions): RequestHandler {
   const { deps, getToken, log } = options
+  const pushes = options.pushes ?? new EndpointPushes()
 
   // One server instance per request: `createMcpHandler` owns the modern leg's
   // per-request lifetime, and our tools are stateless beyond the driver.
@@ -248,6 +265,10 @@ export function createRequestHandler(options: RequestHandlerOptions): RequestHan
       return server
     },
     {
+      // The subscription bus is created once per handler (not per request), which
+      // is what lets a background watcher publish a turn-settlement event after
+      // the tool call that started the turn has already returned.
+      bus: pushes.eventBus,
       // `legacy: 'stateless'` answers every legacy request from a fresh server
       // instance, which is what makes this endpoint usable from a connectionless
       // caller. The default response mode is kept deliberately: forcing
@@ -258,6 +279,10 @@ export function createRequestHandler(options: RequestHandlerOptions): RequestHan
       onerror: (error) => log.warn('[dsh-as-mcp] request rejected:', error.message),
     },
   )
+  // The driver arms watchers before this handler exists, so the link is made
+  // here, once: publishes go through the handler's own bus and its per-stream
+  // filtering.
+  pushes.attach(handler.notify)
 
   const node = toNodeHandler(handler, {
     onerror: (error) => log.warn('[dsh-as-mcp] transport error:', error.message),

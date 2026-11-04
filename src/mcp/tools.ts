@@ -1,4 +1,4 @@
-import type { CallToolResult, McpServer, ServerContext } from '@modelcontextprotocol/server'
+import { ResourceTemplate, type CallToolResult, type McpServer, type ServerContext } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 
 import type { Config } from '../config.js'
@@ -407,6 +407,35 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
   }
 
   if (enabled.session) {
+    // The push feed a modern client subscribes to. `resources.subscribe` is what
+    // makes the SDK's `subscriptions/listen` ack honor `resourceSubscriptions`
+    // (`honoredSubset` drops the feed silently otherwise), and the template is
+    // what makes the announced URI readable: `resources/read` on it reports the
+    // same live state as `session_status`, including a failure block.
+    server.server.registerCapabilities({ resources: { subscribe: true } })
+    server.registerResource(
+      'session-turn',
+      new ResourceTemplate('dsh://session/{sessionId}/turn', { list: undefined }),
+      {
+        title: 'DSH session turn',
+        description:
+          'The live state of one DSH session\'s latest turn, the same payload as the session_status tool. '
+          + 'Subscribe to this URI with subscriptions/listen before calling session_prompt { wait: false }: the '
+          + 'endpoint publishes notifications/resources/updated here when that turn settles, including a failure.',
+        mimeType: 'application/json',
+      },
+      async (uri, variables) => {
+        const sessionId = String(variables.sessionId ?? '')
+        const state = await driver.sessionStatus({ sessionId })
+        return {
+          contents: [{
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(state),
+          }],
+        }
+      },
+    )
     server.registerTool(
       'session_create',
       {
@@ -754,7 +783,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .describe(
               'true (default) waits for the turn to settle. false returns as soon as the message is queued — '
               + 'follow it with session_status, which reports whether the session is running, how long its log '
-              + 'has been quiet, and how the turn ended (including a failure).',
+              + 'has been quiet, and how the turn ended (including a failure). A modern (2026-07-28) client that '
+              + 'opened a subscriptions/listen stream for dsh://session/<sessionId>/turn BEFORE this call gets '
+              + 'notifications/resources/updated when the turn settles, instead of polling.',
             ),
           timeoutMs: z
             .number()

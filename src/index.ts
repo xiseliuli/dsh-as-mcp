@@ -16,6 +16,7 @@ import {
   type WebServerLike,
 } from './mcp/http.js'
 import { maskToken, resolveToken } from './mcp/token.js'
+import { EndpointPushes } from './mcp/push.js'
 import type { ConnectionInfo, ToolDeps } from './mcp/tools.js'
 import { installSettingsPagePolicy } from './settings.js'
 import { STATUS_ROUTE, type EndpointStatus } from './status.js'
@@ -200,12 +201,19 @@ export function apply(ctx: Context, config: unknown): void {
     }
   }
 
-  const deps: ToolDeps = { driver: new DshDriver(ctx, getConfig), getConfig, connection, status, log }
+  // One push surface per plugin instance. The driver arms settlement watchers
+  // through it and the HTTP handler publishes on the same bus, so it is created
+  // before either: the driver needs the gating call at prompt time, and the
+  // handler attaches its notifier here, once.
+  const pushes = new EndpointPushes()
+  const driver = new DshDriver(ctx, getConfig, pushes)
+  const deps: ToolDeps = { driver, getConfig, connection, status, log }
 
   const requestHandler = createRequestHandler({
     deps,
     getToken: () => effectiveToken().token,
     log,
+    pushes,
   })
 
   /** Everything that decides *where* the endpoint lives. */
@@ -444,6 +452,7 @@ export function apply(ctx: Context, config: unknown): void {
       const current = listener
       listener = undefined
       await current?.dispose()
+      driver.disposeSettlementWatches()
       await requestHandler.close()
     }
   }, 'dsh-as-mcp endpoint')

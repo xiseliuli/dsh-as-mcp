@@ -6,6 +6,28 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.52.86
+
+- A fire-and-forget turn can now report its own ending to a modern (2026-07-28) MCP client
+  instead of leaving the caller to poll. The endpoint advertises `resources.subscribe`, registers a
+  readable synthetic resource `dsh://session/<id>/turn` (the `session_status` payload), and — when a
+  `session_prompt { wait: false }` is admitted while a `subscriptions/listen` stream is open —
+  watches that turn with the same wait a blocking call uses and publishes
+  `notifications/resources/updated` when it settles: completed, failed, cancelled, or gone without
+  an ending. The watch is armed only while someone is listening (an unsubscribed fire-and-forget
+  prompt still costs nothing), one watch per request id (an idempotent retry does not
+  double-publish), and bounded by the same `promptTimeoutMs` — a wait that timed out never observed
+  an ending, so it publishes nothing rather than claiming one. Clients that do not subscribe,
+  including every 2025-era client and the stdio bridge, are unaffected and keep polling
+  `session_status`; the listen stream must be open *before* the prompt is admitted.
+- The server instructions and the `session_prompt` `wait` option now state the subscription contract
+  where a client will actually read it. `src/mcp/push.ts` owns the per-endpoint subscription bus and
+  the publish call, the driver arms and tears down the watchers, and
+  `tests/push-notifications.test.ts` pins the URI encoding, the subscriber gate, the advertised
+  capability, the readable template, both instruction sentences, and publish-once against a fake
+  session log.
+- The tool surface, the legacy stateless transport and the rest of the endpoint are unchanged.
+
 ## 0.52.85
 
 - The MCP server's settings panel now also renders on the **Plugins page**, under this bundle's own

@@ -278,6 +278,28 @@ workspace_create { path: "/Users/me/project" }
 
 运维方可以通过 `agentTools.allow` 有意放宽，或用 `agentTools.deny` 从默认集合里减去。
 
+## 现代客户端的 turn 结束通知
+
+`session_prompt { wait: false }` 在消息被接收后立刻返回，所以通用的上报路径是轮询
+`session_status`（可带 `waitMs`）。而说现代 **2026-07-28** MCP 协议的客户端不必轮询：它可以
+用该协议的 `subscriptions/listen` 流被**主动告知**：
+
+1. **先订阅再发 prompt**：开一个保持打开的 `subscriptions/listen` 请求，声明要听的 feed：
+   `notifications: { resourceSubscriptions: ["dsh://session/<sessionId>/turn"] }`，服务端会在
+   该流上回 `notifications/subscriptions/acknowledged`。
+2. 用 `wait: false` 调 `session_prompt`。
+3. 这一轮结束时——完成、失败、被取消，或没有 `turn/end` 而消失——服务端在该流上推送
+   `notifications/resources/updated`（带这个 URI）。对同一 URI 调 `resources/read` 会返回与
+   `session_status` 相同的 JSON，包括 `failure` 与 `lastTurn`。
+
+有两条边界是有意为之。第一，流必须在 prompt 被接收**之前**打开：没有任何监听者时不会为
+fire-and-forget 的 prompt 安排 watcher，因此之后再订阅可能错过那一次事件。第二，推送只存在于
+现代协议里：2025 客户端（包括 `bin/mcp-stdio.mjs` 与仓库自带的 smoke/exercise 脚本）没有
+listen 方法。它们不受影响：轮询仍是通用路径，没有订阅者的 fire-and-forget prompt 仍然只多花
+一次持久日志读取。watcher 就是阻塞式 `session_prompt` 用的同一个等待（同样的
+`promptTimeoutMs` 上限、同样的取消行为），每个 request id 一个；等到超时的 watcher 什么也不推，
+不会宣称一个它没看见的结束。
+
 ## 用量统计
 
 DSH 没有「会话结束」事件，所以没有可订阅的钩子，也没有最后一个回调可以等。花费就报在调用方能问

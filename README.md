@@ -299,6 +299,30 @@ refused *and* hidden from `dsh_tool_list`. The omissions that matter:
 An operator can widen this deliberately with the `agentTools.allow` setting, or subtract from
 the default with `agentTools.deny`.
 
+## Turn notifications for modern clients
+
+`session_prompt { wait: false }` returns as soon as the message is admitted, so the universal
+reporting path is polling `session_status` (optionally with `waitMs`). A client speaking the modern
+**2026-07-28** MCP protocol can be *told* instead of polling, over that protocol's
+`subscriptions/listen` stream:
+
+1. **Before prompting**, open one `subscriptions/listen` request and keep it open, naming the feed
+   you want: `notifications: { resourceSubscriptions: ["dsh://session/<sessionId>/turn"] }`. The
+   server answers `notifications/subscriptions/acknowledged` on that stream.
+2. Call `session_prompt` with `wait: false`.
+3. When that turn settles — completed, failed, cancelled, or gone without an ending — the server
+   publishes `notifications/resources/updated` for that URI on the stream. `resources/read` on the
+   same URI returns the same payload as `session_status`, including `failure` and `lastTurn`.
+
+Two bounds are deliberate. The stream must be open **before** the prompt is admitted: a prompt
+admitted while nothing is listening arms no watcher, so a later subscription may miss that event.
+And push exists only in the modern protocol: 2025-era clients — including `bin/mcp-stdio.mjs` and
+the bundled smoke/exercise scripts — have no listen method. They are unaffected: polling stays the
+universal path, and a fire-and-forget prompt with no subscriber costs exactly one durable read, as
+before. The watcher is the same wait a blocking `session_prompt` performs (same `promptTimeoutMs`
+bound, same cancellation behaviour), one per request id, and a watch that timed out publishes
+nothing rather than claiming an ending it never saw.
+
 ## Usage accounting
 
 DSH has no "session ended" event, so there is no hook to subscribe to and no final callback to

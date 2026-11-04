@@ -6,6 +6,12 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.52.86
+
+- fire-and-forget 的 turn 现在能自己报告结束，现代（2026-07-28）MCP 客户端不必再轮询。端点宣布 `resources.subscribe`，注册一个可读的合成资源 `dsh://session/<id>/turn`（内容与 `session_status` 一致），并且当 `session_prompt { wait: false }` 被接收时若有打开着的 `subscriptions/listen` 流，就用与阻塞调用相同的等待去盯这一轮，结束时推送 `notifications/resources/updated`——完成、失败、取消，或没有 `turn/end` 而消失都算。watcher 只在有人监听时才会安排（没有订阅者的 fire-and-forget prompt 依旧零额外成本）、每个 request id 只一个（幂等重试不会重复推送），并且受同样的 `promptTimeoutMs` 约束：等待超时的 watcher 没有看见结束，就不推，而不是宣称一个假的结束。不订阅的客户端（包括所有 2025 客户端与 stdio 桥）不受影响，继续轮询 `session_status`；监听流必须在 prompt 被接收**之前**打开。
+- 服务端 instructions 与 `session_prompt` 的 `wait` 选项现在把订阅契约写在客户端真正会读的地方。`src/mcp/push.ts` 持有每端点的订阅总线和推送调用，driver 负责安排/清理 watcher；`tests/push-notifications.test.ts` 用假的会话日志固定住 URI 编码、订阅者门控、能力宣告、可读模板、两句 instructions，以及「只推一次」。
+- 工具面、旧的 stateless 传输与端点其余行为不变。
+
 ## 0.52.85
 
 - MCP 服务的设置面板现在也渲染在**插件页**：本 bundle 自己的详情页里。浏览器半边把同一个 `McpSection` 注册进宿主的 `plugins.bundle.config` keyed 插槽，key 就是 bundle 的包名（页面按 `entryKey = pkg.name` 派发），所以改设置不必每次都打开 DSH 设置。两个入口是同一个组件、同一个共享配置表单与同一份快照——一个值两扇门，任一边写入另一边无需刷新即可见；新单元格和设置页一样，只在宿主确实提供这一项配置表单时注册（`ctx.configForms.whileServed`）。插件页把 bundle 配置放在一个没有标题的裸 `section.detailSection` 里，所以这个单元格让面板自己画标题；设置页入口仍沿用设置外壳的导航标题，不重复画。宿主插件页没有该插槽时什么都不显示，设置入口不受影响。`src/client/contract.ts` 现在同时描述两种插槽（list 的 `id` 与 keyed 的 `key`），并引用了 harness 的 `KindOptions` 形状，不再假设只有 `settings.section`。

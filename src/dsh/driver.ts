@@ -47,6 +47,26 @@ import {
 } from './types.js'
 
 /**
+ * The endpoint's server-push surface, as the driver consumes it.
+ *
+ * Declared here rather than in the MCP layer so the dependency points one way:
+ * the transport implements this, the driver calls it. `hasSubscribers` gates
+ * whether a fire-and-forget turn is worth watching at all.
+ */
+export interface TurnPushes {
+  /**
+   * Whether any `subscriptions/listen` stream is currently open.
+   *
+   * Watchers are armed only when someone could receive the event: a
+   * fire-and-forget prompt otherwise costs a log read per second for nothing.
+   * The trade-off is documented for clients — subscribe before prompting.
+   */
+  hasSubscribers(): boolean
+  /** Publish one `notifications/resources/updated` for the session's turn resource. */
+  turnSettled(sessionId: string): void
+}
+
+/**
  * Upper bound between two durable-log reads while a prompt waits for its turn.
  *
  * The wait wakes on the `session/event` feed, so this is a safety net rather than
@@ -889,9 +909,26 @@ export class DshDriver {
   private readonly shellJobs = new Map<string, ShellJobState>()
   private shellJobSeq = 0
 
+  /**
+   * Fire-and-forget turns whose settlement is being watched for a push.
+   *
+   * One abort controller per admitted `session_prompt { wait: false }` while a
+   * subscription stream is open. Keyed by the request id so an idempotent retry
+   * of the same prompt does not arm a second watch, and aborted as a group when
+   * the endpoint is torn down.
+   */
+  private readonly settlementWatches = new Map<string, AbortController>()
+
   constructor(
     private readonly ctx: unknown,
     private readonly configSource: () => Config,
+    /**
+     * The endpoint's push surface, when the transport has one.
+     *
+     * Absent in stdio serving and in tests that do not exercise push; arming is
+     * skipped then, and nothing observes a settlement.
+     */
+    private readonly pushes?: TurnPushes,
   ) {
     this.log = loggerOf(ctx)
   }
@@ -2101,6 +2138,10 @@ export class DshDriver {
   }> {
     const flag = replayed ? { replayed: true as const } : {}
     if (!request.wait) {
+        // The caller asked not to wait, but a subscribed modern client can still be
+        // told when the turn settles. Arming before the usage read keeps the window
+        // between admission and the first log read as small as possible.
+        this.watchSettlement(request, requestId, cancelGenerationAtStart)
         // No turn to report on a queued message, but the session's spend so far
         // is still a useful answer and costs one durable read.
         const read = this.config.tools.usage
@@ -2224,6 +2265,84 @@ export class DshDriver {
           request.signal,
         )
     }
+  }
+
+  /**
+   * Watch one admitted fire-and-forget turn so its settlement can be pushed.
+   *
+   * `wait: false` returns as soon as the message is admitted, so a client has
+   * nothing to observe — the reason `session_status` polling is documented. A
+   * modern client that opened a `subscriptions/listen` stream naming this
+   * session's turn resource is told instead: the watcher runs the same wait a
+   * `wait: true` call would (no reply is built for anyone), then publishes one
+   * `notifications/resources/updated`.
+   *
+   * Three deliberate bounds:
+   * - armed only while a subscription stream is open ({@link TurnPushes.hasSubscribers}),
+   *   so a fire-and-forget caller with no listener costs nothing;
+   * - one watch per request id, so an idempotent retry does not double-publish;
+   * - the same `timeoutMs`/`promptTimeoutMs` bound as a waiting call. A wait that
+   *   timed out did not observe an ending, so it publishes nothing rather than
+   *   claiming one; the client can poll or ask again.
+   */
+  private watchSettlement(
+    request: {
+      sessionId: string
+      mode: 'queue' | 'steer'
+      timeoutMs?: number
+    },
+    requestId: string,
+    cancelGenerationAtStart: number,
+  ): void {
+    const pushes = this.pushes
+    if (pushes === undefined || !pushes.hasSubscribers()) return
+    if (this.settlementWatches.has(requestId)) return
+    const controller = new AbortController()
+    this.settlementWatches.set(requestId, controller)
+    this.log.debug(
+      '[dsh-as-mcp] watching session %s turn %s for a settlement push',
+      request.sessionId,
+      requestId,
+    )
+    void this.finishPrompt(
+      {
+        sessionId: request.sessionId,
+        mode: request.mode,
+        wait: true,
+        ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+        toolCalls: 'none',
+        signal: controller.signal,
+      },
+      requestId,
+      false,
+      cancelGenerationAtStart,
+    ).then((settled) => {
+      // An aborted controller means the endpoint is going away, not that the turn
+      // ended; `timedOut` means this watch ran out of bound and never saw an end.
+      if (controller.signal.aborted || settled.turn?.timedOut === true) return
+      pushes.turnSettled(request.sessionId)
+    }).catch((error: unknown) => {
+      // A lost notification is not a failed turn: the client can still poll.
+      this.log.warn(
+        '[dsh-as-mcp] settlement watch for session %s failed: %s',
+        request.sessionId,
+        error instanceof Error ? error.message : String(error),
+      )
+    }).finally(() => {
+      this.settlementWatches.delete(requestId)
+    })
+  }
+
+  /**
+   * Stop every settlement watch.
+   *
+   * Called when the endpoint is torn down (plugin unload, or the HTTP handler
+   * closing): the watchers read the durable log, so leaving them running after
+   * the transport is gone would spend reads for a notification nobody can get.
+   */
+  disposeSettlementWatches(): void {
+    for (const controller of this.settlementWatches.values()) controller.abort()
+    this.settlementWatches.clear()
   }
 
   /**
