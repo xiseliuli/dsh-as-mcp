@@ -47,6 +47,22 @@ export interface DshWorkspaceRegistry {
   list(): DshWorkspace[]
   delete(id: string): Promise<boolean>
   resolveByPath(path: string): Promise<DshWorkspace | undefined>
+  /**
+   * Archive / unarchive one session — the registry-global set the DSH sidebar's
+   * archive feature writes. Archiving also drops the session's pin; archiving a
+   * session with running work is refused unless `stopActivity` is set.
+   *
+   * Optional because this is 0.1.7+ surface: an older host simply cannot archive.
+   */
+  archiveSession?(sessionId: string, options?: { readonly stopActivity?: boolean }): Promise<void>
+  unarchiveSession?(sessionId: string): Promise<void>
+  /** Pin / unpin one session — the registry-global set behind the sidebar's pin. */
+  pinSession?(sessionId: string): Promise<void>
+  unpinSession?(sessionId: string): Promise<void>
+  /** Archived session ids, most recently archived first (0.1.7+). */
+  readonly archivedSessionIds?: readonly string[]
+  /** Pinned session ids, in pin order (0.1.7+). */
+  readonly pinnedSessionIds?: readonly string[]
 }
 
 /** One entry of `ctx.sessionController.list()`. */
@@ -58,6 +74,22 @@ export interface DshSessionSummary {
   readonly parentSessionId?: string
   readonly origin?: 'subagent'
   readonly cwd?: string
+  /** Whether a live agent currently holds this session (0.2.2+). */
+  readonly agentAvailable?: boolean
+  /**
+   * Summary projection hints folded into the listing — 0.2.2's `SessionSummary`.
+   *
+   * This is what makes `session_list { includeWorktree }` free: the listing
+   * already carries the summary projections, including `workingDirectory` and the
+   * forge bundle's `forgeWorktree`, so no per-session read is needed when they are
+   * present.
+   */
+  readonly projections?: {
+    readonly kind: 'cached' | 'sequenced'
+    readonly asOfSeq: number
+    /** `Partial<SessionProjectionSummaryValues>` — a partial map of projection views. */
+    readonly values: Readonly<Record<string, unknown>>
+  }
 }
 
 /** One durable session event as returned by `ctx.sessionQuery.readSession()`. */
@@ -283,13 +315,59 @@ export interface DshSessionController {
     readonly hasMore: boolean
   }>
 
-  inspect(
+  /**
+   * Read one session's current projection values without resuming its agent —
+   * `@Remote('projections')` in DSH 0.2.2.
+   *
+   * Cold-safe and activation-free, which is why it is the preferred exact read for
+   * the live working directory and the forge worktree record. `null` means the
+   * session's projections are absent; `migration-required` carries cached hints.
+   */
+  projections?(
+    request: { readonly sessionId: string },
+    signal: AbortSignal,
+  ): Promise<
+    | { readonly kind: 'sequenced'; readonly asOfSeq: number; readonly values: Readonly<Record<string, unknown>> }
+    | { readonly kind: 'migration-required'; readonly values: Readonly<Record<string, unknown>> }
+    | null
+  >
+
+  /**
+   * Read one session's durable log through the controller.
+   *
+   * **Removed in DSH 0.2.2** (together with `page`); declared optional for the
+   * older versions this plugin still loads on. 0.2.2's replacement,
+   * {@link events}, serves one message-aligned history page rather than the whole
+   * log, so it is a UI-facing read and is used only where a page is enough.
+   */
+  inspect?(
     sessionId: string,
     signal?: AbortSignal,
   ): Promise<{
     readonly meta: { readonly id: string; readonly cwd?: string; readonly agentPreset?: string }
     readonly inheritedEventCount: number
     readonly events: readonly DshSessionEvent[]
+  }>
+
+  /**
+   * Read one cold-safe, message-aligned history page — `@Remote('events')` in
+   * 0.2.2's session controller.
+   *
+   * The page carries `records: [{type: 'event', event}]`; it is bounded by the
+   * harness's page budget, so it is not a whole-log reader.
+   */
+  events?(
+    request: {
+      readonly address: { readonly kind: 'session'; readonly sessionId: string }
+      readonly throughSeq?: number
+      readonly beforeSeq?: number
+      readonly maxMessages?: number
+    },
+    signal: AbortSignal,
+  ): Promise<{
+    readonly records: readonly { readonly type: string; readonly event?: DshSessionEvent }[]
+    readonly hasMore?: boolean
+    readonly cursor?: number
   }>
 }
 
@@ -580,6 +658,86 @@ export interface DshAgentHandle {
 }
 declare const brand: unique symbol
 
+/**
+ * One created worktree — `CreatedWorktree` in
+ * `packages/tool/worktree/src/index.ts` (harness 0.2.2-rc.1).
+ *
+ * The four fields are the canonical identity of the checkout: where it lives,
+ * which branch was created for it, the local commit it was pinned to, and the
+ * source checkout root it belongs to. They are also exactly what
+ * {@link DshWorktreeService.restore} needs, which is why a caller that may need
+ * to recover a removed worktree should keep the record it was given.
+ */
+export interface DshWorktreeRecord {
+  /** Canonical absolute checkout path. */
+  readonly path: string
+  /** The new branch checked out there. */
+  readonly branch: string
+  /** Full commit object name the checkout was pinned to. */
+  readonly baseCommit: string
+  /** Canonical top level of the source checkout the worktree belongs to. */
+  readonly repositoryRoot: string
+}
+
+/** One restored worktree — `RestoredWorktree` in the same package. */
+export interface DshRestoredWorktree {
+  /** The recorded checkout path that now exists again. */
+  readonly path: string
+  /** Whether the branch itself had to be recreated at `baseCommit`. */
+  readonly branchRecreated: boolean
+}
+
+/**
+ * `ctx.worktrees` — packages/tool/worktree/src/index.ts (harness 0.2.2-rc.1).
+ *
+ * Mounted by the forge bundle (DSH Desktop / Web enable it as "变更请求与工作树");
+ * a profile without it has no worktree capability at all. Both methods take the
+ * **live agent** as their scope: the agent's session selects the source
+ * repository and its sandbox policy confines the Git commands, and `create`
+ * commits the new checkout as that session's working directory. There is no
+ * agentless form, which is why the plugin resolves one through
+ * `sessionController.resolveAgent` before calling either.
+ */
+export interface DshWorktreeService {
+  /**
+   * Create a fresh branch and checkout at a pinned local revision, then enter it.
+   *
+   * Existing branches and existing checkout paths fail; uncommitted files stay in
+   * the source checkout. The returned record is the canonical one the harness
+   * itself reports. `onPhase` receives each stage (`prepare`, `checkout`) before
+   * it begins and must not throw.
+   */
+  create(
+    agent: DshAgentHandle,
+    request?: {
+      /** New branch name, also the checkout directory name; generated when omitted. */
+      readonly name?: string
+      /** Local commit, branch, or tag; defaults to the source checkout's HEAD. */
+      readonly from?: string
+    },
+    signal?: AbortSignal,
+    onPhase?: (phase: 'prepare' | 'checkout') => void,
+  ): Promise<DshWorktreeRecord>
+
+  /**
+   * Check out a removed worktree again at its recorded directory.
+   *
+   * The session's own working directory is not changed, and uncommitted changes
+   * that were lost with the directory cannot be recovered.
+   */
+  restore(
+    agent: DshAgentHandle,
+    request: {
+      readonly path: string
+      readonly branch: string
+      readonly baseCommit: string
+      readonly repositoryRoot: string
+    },
+    signal?: AbortSignal,
+    onPhase?: (phase: 'prepare' | 'checkout') => void,
+  ): Promise<DshRestoredWorktree>
+}
+
 /** One tool as a scope sees it — the model-facing schema, no callbacks. */
 export interface DshToolSchema {
   readonly name: string
@@ -604,22 +762,72 @@ export interface DshToolFailure {
 export type DshToolExecutionResult = DshToolSuccess | DshToolFailure
 
 /**
+ * One raw call in the 0.2.2+ batch contract — `ToolCallBlock` in
+ * `packages/core/tools/src/types.ts`.
+ *
+ * `arguments` is the model-facing JSON **string**; the executor parses it and
+ * preserves invalid JSON as text, which is why a caller passing structured
+ * arguments must serialize them.
+ */
+export interface DshToolCallBlock {
+  readonly type: 'tool-call'
+  readonly id: string
+  readonly name: string
+  readonly arguments: string
+}
+
+/** The 0.2.2+ `ctx.tools.execute` input — `ToolBatchInput`. */
+export interface DshToolBatchInput {
+  readonly calls: readonly DshToolCallBlock[]
+  readonly signal: AbortSignal
+  readonly agent?: DshAgentHandle
+  readonly maxParallelToolCalls?: number
+}
+
+/** The 0.2.2+ `ctx.tools.execute` output — `ToolBatchResult`. */
+export interface DshToolBatchOutput {
+  readonly results: readonly { readonly callId: string; readonly result: DshToolExecutionResult }[]
+  readonly concluded?: boolean
+}
+
+/** The ≤0.1.7 `ctx.tools.execute` input — `ToolExecutionInput`. */
+export interface DshToolExecutionInput {
+  readonly callId: string
+  readonly name: string
+  readonly arguments: unknown
+  readonly agent?: DshAgentHandle
+  readonly signal: AbortSignal
+}
+
+/**
  * `ctx.tools` — packages/core/tools/src/index.ts
  *
  * `execute` runs the full production pipeline: pre-policy, guards, around-dispatch,
  * post-policy and final notification. That is the point of routing through it
  * rather than calling a service directly — the permission model travels with the
  * call, so an external caller gets exactly the decisions the agent would get.
+ *
+ * **The `execute` contract changed in DSH 0.2.2**: `ToolExecutionInput` (one call,
+ * one result) became `ToolBatchInput` (a batch of raw calls) with a
+ * `ToolBatchResult` answer. The member is therefore declared `unknown` in and out —
+ * the plugin speaks whichever shape the running registry implements, detected by
+ * {@link DshToolRegistry.resolve}, which shipped in the same release as the batch
+ * executor. Declaring a single shape would be a lie on one of the two versions.
  */
 export interface DshToolRegistry {
   schemas(scope?: unknown): DshToolSchema[]
-  execute(exec: {
-    readonly callId: string
-    readonly name: string
-    readonly arguments: unknown
-    readonly agent?: DshAgentHandle
-    readonly signal: AbortSignal
-  }): Promise<DshToolExecutionResult>
+  execute(input: unknown): Promise<unknown>
+  /** 0.2.2+: resolve a step's admitted tool set. The batch-contract marker. */
+  resolve?(context: unknown): Promise<unknown>
+  /** 0.2.2+: resolve one executable definition. */
+  executable?(name: string, scope?: unknown, toolSet?: unknown): DshToolDefinition | undefined
+  /** 0.2.2+: read visible definitions. */
+  definitions?(scope?: unknown, toolSet?: unknown): readonly DshToolDefinition[]
+}
+
+/** One registered definition, as `ctx.tools.definitions` reports it. */
+export interface DshToolDefinition extends DshToolSchema {
+  readonly output?: unknown
 }
 
 export interface DshLogger {

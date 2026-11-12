@@ -232,18 +232,24 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | `workspace_create` | Register a directory as a DSH workspace (creating it if needed; pass `createDirectory: false` to require that it already exists). |
 | `workspace_list` | Every registered workspace with id, path, title, directory status, and the sessions **attached to the registration** (created with `workspaceId`) — that count is not the number of sessions whose `cwd` happens to be the directory; `session_list { cwd }` answers that. |
 | `workspace_delete` | Unregister a workspace (files and session history untouched); idempotent. |
-| `session_create` | Start a DSH agent session bound to a workspace or bare directory. |
+| `session_create` | Start a DSH agent session bound to a workspace or bare directory, optionally with its own Git checkout. Model selection falls back to this DSH instance's default route (`provider` and `model` must be given together — a half pair is refused before the session exists — and an unroutable pair still creates the session but reports `modelSelectionError`). Pass `worktree: true` (or `{ name, from }`) to create a Git branch and checkout from the workspace after the session exists and make it the session's live working directory: a session created with `workspaceId` keeps that workspace group (its durable directory stays the workspace), while a cwd-only session stays ungrouped. The reply carries the `worktree` record and the new `workingDirectory`; a failed worktree request leaves the session usable in the workspace and reports `worktreeError` (retry with `worktree_create`), and a profile with no worktrees service is refused before the session is created. |
+| `worktree_create` | Create a Git branch and checkout from a session's current checkout and make it that session's working directory — the DSH UI's "New worktree" option, for a session that already exists (refused while a turn is running; concurrent worktree calls on one session are serialized). `name` is the new branch and the directory under the source checkout's `.agents/worktrees/`; `from` is a local commit, branch or tag (default the checkout's `HEAD`); uncommitted files stay in the source checkout, and an existing branch or checkout name fails. The reply carries `path`, `branch`, `baseCommit`, `repositoryRoot` and `from` — keep it for `worktree_restore`. Needs the worktrees service. |
+| `worktree_restore` | Check a session's worktree out again at the recorded `path` after it was removed outside the session: the `branch` is checked out when it still exists, otherwise recreated at `baseCommit`, under the recorded `repositoryRoot`. The session's working directory is not changed, and uncommitted changes lost with the directory cannot be recovered. Pass the record `worktree_create` (or `session_status.worktree`) returned. Needs the worktrees service. |
 | `session_fork` | Branch a session (live or restored from disk) into a child that inherits its event prefix, optionally up to `atSeq` (event position) or `atTurn` (turn boundary); with no boundary the harness picks the latest completed turn. Continuing from that point costs one turn, not a replay, and `session_usage` reports the inherited prefix separately. |
 | `session_set_model` | Change the provider route and model later turns use: start cheap, escalate for a hard turn, or fall back when a route is unavailable. `reasoningEffort` optionally raises the thinking budget for the same route. The reply's per-model usage shows which route spent what. |
 | `session_rename` | Set an explicit user title on a session, so what an external harness names a task stays the name a human sees in the DSH UI (and automatic title generation stops). A session currently held open by another DSH process is refused by the harness. |
 | `session_search` | Search session **message content** (FTS tokens/phrases), returning `sessionId`, a snippet, and (when the session listing is readable) the match's `cwd`/`updatedAt`/`running` plus `parentSessionId`/`origin` for subagent sessions; the harness caps a search at 20 and reports `hasMore`. Matching is FTS tokens/phrases (not arbitrary substrings), and multiple terms must all match. **Opt-in:** shipped compositions configure `session-query` with `openAt: "never"`, in which case the tool explains how to enable the index instead of searching. |
-| `session_list` | Live session summaries, most recently updated first; `includeTitle` also folds each session's latest title (one log read per session), and `cwd`/`running` filter before the limit applies. A subagent session carries `parentSessionId` and `origin: "subagent"`, and `origin` (`root` / `subagent`) filters before the limit, so the flat list becomes a tree view. The reply carries `total` (matches before the cut) and `truncated` when the limit hid some. |
-| `session_status` | One session's live state, for work started with `session_prompt { wait: false }`: `running`, the open `turn`/`step`, the newest event (`lastEventSeq`/`lastEventAt`), `idleMs` (how long the log has been quiet), `stalled` (running but silent for a minute — a symptom, not a verdict), how the last turn ended (`lastTurn.reason`), and `failure` when it ended abnormally. `waitMs` holds the call until something changes or the bound elapses (capped at 60 s), so a supervisor polls once per change instead of on a guessed interval. Read-only. |
+| `session_list` | Live session summaries, most recently updated first; `includeTitle` also folds each session's latest title (one log read per session), `includeWorktree` folds each row's live `workingDirectory` and the forge panel's `worktree` record (one projection read per session — how rows of one workspace are told apart when each works in its own checkout), and `cwd`/`running` filter before the limit applies. Rows carry `archived` and `pinned` flags read from the same registry sets the DSH sidebar's archive and pin actions write. A subagent session carries `parentSessionId` and `origin: "subagent"`, and `origin` (`root` / `subagent`) filters before the limit, so the flat list becomes a tree view. The reply carries `total` (matches before the cut) and `truncated` when the limit hid some. |
+| `session_status` | One session's live state, for work started with `session_prompt { wait: false }`: `running`, the open `turn`/`step`, the newest event (`lastEventSeq`/`lastEventAt`), `idleMs` (how long the log has been quiet), `stalled` (running but silent for a minute — a symptom, not a verdict), how the last turn ended (`lastTurn.reason`), and `failure` when it ended abnormally. When the profile can read session projections it also reports `workingDirectory` (the directory the session currently works in — a worktree checkout after it entered one) and `worktree` (the forge panel's record for a worktree it created); a change in either counts as a change for `waitMs`, so a held call reports entering a worktree instead of sleeping to its bound. `waitMs` holds the call until something changes or the bound elapses (capped at 60 s), so a supervisor polls once per change instead of on a guessed interval. Read-only. |
 | `session_prompt` | Send one task to a DSH session; by default waits for the turn and returns the reply, the tool calls the agent made, that turn's wall-clock duration (`turn.durationMs`), and its token usage plus the session's running total. `toolCalls` controls how much of each call is echoed: `summary` (default) gives name/id/argument size, `full` also the arguments (bounded by `maxArgumentChars`), `none` just counts. Attach screenshots with `images` (png/jpeg/webp/gif, at most 4; the harness decodes them, so a header-only file that `file_read_image` would sniff is refused as malformed). Pass an `idempotencyKey` and a retried call returns the existing turn instead of sending the task twice — with `wait: true` that retry *waits* for the turn, which is how a caller awaits work it queued with `wait: false`. If the client sends a `progressToken`, the wait reports `notifications/progress` at most once a second, and its message separates the elapsed wait from the log silence (`turn 3: 2 tool call(s), 41s elapsed, log quiet for 12s`). `maxReplyChars` optionally caps the agent's final reply (a cut reply reports `replyTruncated` and its original `replyChars`), and `turn.models` lists the `provider/model` routes that answered. An abnormal ending is reported, not returned as an ordinary reply: `turn.failure` carries `{kind, message}` for the harness's `error`/`blocked`/`max-tokens`/`interrupted` endings, and for the two conditions the wait detects itself — `unreadable` (the log stopped being readable mid-wait) and `vanished` (the turn stopped without a `turn/end`); a completed turn carries no failure block, and `aborted: true` keeps meaning "the caller cancelled". A client cancellation (`notifications/cancelled` for this call) stops the turn and settles the wait with `turn.aborted: true` — the endpoint routes that notification itself, because the SDK version in use only acknowledges it. The usage snapshot carries `partial: true` only when it was taken while the turn was still running; a turn that settled on cancellation has final numbers. A second prompt **from this connection** while a turn is running waits behind it (the endpoint runs one turn at a time per session) instead of entering the harness inbox; a second MCP client is what queues a message behind a running turn, and `mode: "steer"` folds one into the running turn. |
 | `session_messages` | Read a session's user/assistant transcript; `sinceSeq`/`role` make it an incremental poll, `maxCharsPerMessage` caps each message (a cut message reports `truncated` and its original `chars`), each message carries the `id` that queue mutations address (and user messages carry the admission `requestId` that `idempotencyKey` derives), `includeToolCalls` folds each assistant message's tool calls (name, call id, argument JSON length, and — once the tool has answered — the result's length and error flag) into the transcript, `includeToolResults` adds each tool result as its own `role: "tool"` row (callId, text, error) so one read covers the whole timeline (`"errors"` keeps only the failed ones); assistant and tool rows carry `turn`/`step`, and `turn: N` (or `fromTurn`/`toTurn`) narrows a read to one turn or a phase, and `beforeSeq` pages backwards so a transcript longer than the window stays reachable (pass the oldest seq you hold; the tail of the older window comes back). The reply carries `total` (messages matched by the filters) and `truncated` when the limit window hid older ones. |
 | `session_queue` | Without `messageId`/`action`, list the session's **pending** inbox with the ids queue mutations address (a queued message has no transcript event yet, so `session_messages` cannot show it); each row carries its text, image count, and the harness's inbox `source` kind (a message queued through this endpoint reports `user` — it is the harness's classification, not a client identity). With `messageId` + `action`, mutate one: `remove` (it never runs), `edit` (replace its text; the id is preserved), or `steer` (deliver it into the running turn). `session_cancel` stops the running turn; this changes the work waiting behind it. |
 | `session_tool_result` | Read one recorded tool result, addressed by `callId` (from `session_messages { includeToolCalls: true }`) or by `toolName` (the most recent completed call of that tool): the text, its original length, whether the harness marked it an error, `maxChars` to cap it, and `from: "end"` to keep the tail (a stack trace ends with the error). Debug a failing tool without re-reading the transcript. |
 | `session_cancel` | Ask the agent to stop its current turn. |
+| `session_archive` | Archive a session — the same registry-global archive the DSH sidebar's archive action writes. An archived session leaves the UI's grouping and its future turns are refused, but its log is kept, so `session_unarchive` restores it. Archiving a session that still has running work is refused unless `stopActivity: true` is passed, which also asks that work to stop; that flag is deliberately something the caller must ask for. Nothing is deleted. |
+| `session_unarchive` | Return an archived session to its recorded position in the DSH UI. Idempotent: an id that is not archived is not an error, and the log was never touched, so the session is visible and promptable again. |
+| `session_pin` | Pin a session to the top of the DSH UI's session list (the same pin set the sidebar writes). The session must exist and must not be archived; pinning is idempotent. |
+| `session_unpin` | Remove a session from the DSH UI's pin set. Idempotent: an id that is not pinned is not an error. |
 | `session_usage` | Token usage per session (its subagents included by default): exact bucket counts, a per-model breakdown, optional per-turn detail, and money when a price plugin is installed. Pass `sessionIds` to tally several known sessions in one receipt, or `cwd` to total every session that ran in one workspace directory. |
 | `file_read` | Read a UTF-8 file through DSH's filesystem service. Bounded by a byte limit; `offset`/`nextOffset` page through a larger file (both are **byte** offsets, so an offset at or past EOF is an empty complete read), `maxBytes` asks for a smaller window so reading a slice costs less, and `sha256: true` returns the whole file's hash as the compare-and-swap value for a later write/edit. |
 | `file_read_image` | Read an image (png/jpeg/gif/webp/bmp, detected from the bytes) and return it as an MCP image block, preceded by a metadata block (path, mimeType, bytes), so you can look at a screenshot or chart instead of guessing. Capped at 8 MiB. |
@@ -295,9 +301,57 @@ refused *and* hidden from `dsh_tool_list`. The omissions that matter:
 - **`ask_user_question` and `present`** reach the human at the keyboard.
 - **`workflow`, `ralph`, `send_message`, `spawn_teammate`, `schedule_create`** start work that
   outlives the call; **`create_goal` and `update_goal`** sustain unattended execution.
+- **`create_worktree`** (DSH 0.2.2+) changes the calling session's working directory. The same
+  operation is exposed as the first-class `worktree_create`, which scopes it to a session this
+  endpoint may address and reports the retained branch and checkout; admitting the model-facing
+  tool would let an agent move whatever session it happens to be in and hide the record.
 
 An operator can widen this deliberately with the `agentTools.allow` setting, or subtract from
 the default with `agentTools.deny`.
+
+## Worktrees
+
+A session can work in its own Git checkout of the same repository. The operation is the one the
+DSH UI's "New worktree" option performs: a new branch is created from a revision, checked out under
+the source checkout's `.agents/worktrees/`, and made the session's live working directory. This is
+how several sessions in one workspace group each isolate their work.
+
+The ordering is what keeps the sidebar grouping intact. `session_create { worktree: true }` creates
+the session **first**, bound to the workspace (or bare directory) the caller named, then creates the
+worktree from that checkout. The session's durable directory stays the workspace, so a session
+created with `workspaceId` stays in that workspace group in the DSH UI; a session created with a
+bare `cwd` was never in a group and stays ungrouped. Its tools, commands and prompts run in the
+worktree. For a session that already exists, `worktree_create { sessionId, name?, from? }` performs
+the same move and is refused while the session has a running turn (concurrent calls on one session
+are serialized).
+
+Typical flow:
+
+```
+session_create { workspaceId: "...", worktree: true }
+  -> session_prompt { sessionId: "...", prompt: "Implement the feature here; main stays clean." }
+  -> session_status { sessionId: "..." }          # workingDirectory is the new checkout
+```
+
+The reply of `session_create` (and of `worktree_create`) carries the record `worktree_restore`
+needs: `path`, `branch`, `baseCommit`, `repositoryRoot` (plus the `from` revision, `null` for
+`HEAD`). Keep it: if the checkout directory is removed outside the session, `worktree_restore`
+checks that branch out again — recreating it at `baseCommit` when the branch was deleted too — and
+does not change the session's current working directory. Uncommitted changes lost with the directory
+cannot be recovered.
+
+Two limits are worth stating. **The tools need a worktrees service**, shipped by the forge bundle
+in DSH Desktop/Web; `dsh_info.harnessServices.worktrees` reports it, and `toolAvailability` names the
+tools a profile cannot serve. On a profile without it, `session_create { worktree }` is refused
+before a session is created and the rest of the endpoint is unchanged. **The worktree is not a
+commit**: it is a branch plus a checkout, so uncommitted files stay in the source checkout and are
+not copied, and an existing branch or checkout name fails rather than being reused.
+
+`session_status` reports `workingDirectory` and the forge panel's `worktree` record when the profile
+can read session projections, and `session_list { includeWorktree: true }` folds the same two fields
+into its rows. The full host-side contract — service signatures, grouping proof, failure matrix and
+the recommended order of operations — is `docs/WORKTREE-INTEGRATION-CONTRACT.md`; the capability
+audit behind this release is `docs/NEW-CAPABILITIES-0.2.2.md`.
 
 ## Turn notifications for modern clients
 
@@ -867,13 +921,16 @@ but a deployment can switch the capability off.
 
 | Tool group | Requires | Notes |
 | --- | --- | --- |
-| `dsh_info`, `session_usage` (by id) | nothing beyond the durable log | `session_usage` by id works as long as the log is readable (`sessionQuery`, or the controller's `inspect` fallback) |
+| `dsh_info`, `session_usage` (by id) | nothing beyond the durable log | `session_usage` by id works as long as a whole-log reader is present (`sessionQuery`, or the controller's `inspect` on ≤0.1.7; 0.2.2 removed `inspect`, and usage deliberately does not fall back to the bounded `events` page because it would under-count) |
 | `session_create` / `session_list` / `session_prompt` / `session_messages` / `session_cancel` / `session_fork` / `session_rename` / `session_set_model` | `sessionController` | the bridge waits for it only where it must (`session_create`/`prompt`); elsewhere the tool reports the missing service |
 | `session_search` | `sessionController.search` **and** a session-query index that is open | `session-query-sqlite` ships with `openAt: "never"`; set it to `startup` or `first-search` to enable search |
+| `worktree_create` / `worktree_restore` / `session_create { worktree }` | `worktrees` **and** `sessionController.resolveAgent` | the forge bundle in DSH Desktop/Web provides the service (`@deepseek-ai/dsh-experimental-forge-bundle`); a bare profile has none, `dsh_info.toolAvailability` reports the tools unavailable, and `session_create { worktree }` is refused before the session exists. Git and Node must exist in the session's execution world |
+| `session_status.workingDirectory` / `session_status.worktree` / `session_list { includeWorktree }` | readable session projections (`sessionController.projections` or `sessionQuery.observeSession`) | optional: without them both replies omit those two fields and the rest is unchanged |
+| `session_archive` / `session_unarchive` / `session_pin` / `session_unpin` | `workspaceRegistry.archiveSession` / `pinSession` | the same registry sets the DSH sidebar's actions write; if the methods are missing the tools are reported unavailable |
 | `workspace_*` | `workspaceRegistry` | provided by the base bundle in normal profiles |
 | `file_*` | `fs` | the deployment's sandbox policy still applies; `file_read_image` additionally needs a supported image format |
 | `shell_*` | `shell` | `shell_run` uses `run()` when present and `execute()` otherwise; background jobs need `start()` or `execute()` |
-| `dsh_tool_list` / `dsh_tool_call` | `tools` **and** `sessionController.resolveAgent` | the allow-list is applied on top of the session's own policy |
+| `dsh_tool_list` / `dsh_tool_call` | `tools` **and** `sessionController.resolveAgent` | `dsh_tool_call` auto-detects the host's tool-execution contract (single-call ≤0.1.7, batch on 0.2.2+); the allow-list is applied on top of the session's own policy |
 | money in usage replies | `costMeter` | a third-party price plugin (`dsh-cost-meter`); absent by default, and the reply says so |
 | `approval.policy: "allow"` | `approval` **and** a resolvable agent | absent service or agent means the create/fork reply reports `approvalPolicyError` |
 | `http.mountOnWebServer` | `webServer` | the plugin waits for it and mounts; `dsh_info.mountNote` says while it is still waiting |
@@ -905,8 +962,33 @@ but a deployment can switch the capability off.
   being served; a host whose Plugins page declares none shows no configuration cell there, and
   the settings section keeps working unchanged. The seat is keyed by the bundle's package name,
   which is what the page dispatches — a different key would render nothing, silently.
+- **0.2.2's tool-execution contract is auto-detected.** DSH 0.2.2 replaced
+  `ctx.tools.execute`'s single-call input/output with a batch contract (raw calls with JSON-string
+  arguments in, a `{ results }` batch out), which made `dsh_tool_call` fail with "Tool batch
+  execution failed" while `dsh_tool_list` kept working. The driver now tells the two shapes apart
+  by `tools.resolve` (shipped together with the batch executor), sends one call in the right
+  envelope, and unwraps its result, so the same build works on ≤0.1.7 and 0.2.2+; the allow-list
+  and scope checks run before either path.
+- **0.2.2 removed `sessionController.inspect`.** Log reads now prefer `sessionQuery`, keep using
+  `inspect` on ≤0.1.7, and on 0.2.2 fall back to the controller's `events` message-aligned pages —
+  enough for "what is open now" and for the transcript, though a bounded page can cover less of a
+  very long log. Usage needs the whole log and deliberately does not use the paged reader, because
+  it would silently under-count: without `sessionQuery` (or `inspect` on ≤0.1.7) it reports an
+  explicit capability error instead of the `TypeError` a missing method used to produce.
+  `session_search` remains disabled on shipped Desktop profiles regardless: the `session-query`
+  index is configured with `openAt: "never"`, and the tool explains that instead of searching.
+- **Worktrees (Git).** `worktree_create`, `worktree_restore` and `session_create { worktree }`
+  need `ctx.worktrees`, first verified in DSH `0.2.2-rc.1` and provided by the experimental forge
+  bundle (`@deepseek-ai/dsh-experimental-forge-bundle`) that Desktop/Web compose. On an older or
+  bare profile the worktree tools are reported unavailable in `dsh_info.toolAvailability` and
+  `session_create { worktree }` is refused before a session is created; the rest of the endpoint
+  is unchanged. `session_status.workingDirectory` and `session_list { includeWorktree }` also work
+  without the forge bundle when a projections reader is available; without one the two fields are
+  omitted rather than guessed.
 - **Usage needs the session log.** Token figures are folded from the durable log through
-  `sessionQuery` (preferred) or `sessionController.inspect`; `dsh_info` reports this as
+  `sessionQuery` (preferred) or, on ≤0.1.7, `sessionController.inspect`; 0.2.2 removed `inspect`,
+  and its bounded `events` page is deliberately not used for usage because it would under-count, so
+  a 0.2.2 profile without `sessionQuery` reports `tokenUsage: false`. `dsh_info` reports this as
   `tokenUsage`. Without either, a `session_prompt` reply says `usageUnavailable` with a reason
   instead of pretending the turn was free, the session tools keep working, and `session_usage` with
   a `sessionId` returns an `error` row (its totals exclude it). Without a `sessionId` it reports the
@@ -950,7 +1032,10 @@ but a deployment can switch the capability off.
   write goes through `ctx.fs`, so the same path rules and sandboxing the DSH agent lives
   under apply to the caller.
 - **No session deletion.** The harness offers `archiveSession`/`unarchiveSession` but no
-  delete, so neither does this plugin.
+  delete, so neither does this plugin. `session_archive`/`session_unarchive` and
+  `session_pin`/`session_unpin` write the same registry sets the DSH sidebar's actions write, and
+  `session_list` reports each row's `archived`/`pinned` flags. Archiving keeps the log and is
+  reversible; nothing here removes a transcript.
 
 ## Development
 
@@ -996,10 +1081,14 @@ build:
 
 | Tool groups enabled | Tools advertised | Last result |
 | --- | --- | --- |
-| all six | 29 | live-checks 195/195 with `--with-model --with-subagent` and acceptance 166/166 — one boot, search index open |
-| `session`, `usage` only | 14 | live-checks 95/95 with `--with-model` (file/shell/workspace sections skip) |
-| `workspace`, `session`, `agentTools`, `usage` | 19 | live-checks 64/64 (a disabled group's reason names its `tools.<group>` switch) |
+| all six | 35 | live-checks 195/195 with `--with-model --with-subagent` and acceptance 166/166 — one boot, search index open |
+| `session`, `usage` only | 20 | live-checks 95/95 with `--with-model` (file/shell/workspace sections skip) |
+| `workspace`, `session`, `agentTools`, `usage` | 25 | live-checks 64/64 (a disabled group's reason names its `tools.<group>` switch) |
 | `files`, `shell` only | 11 | live-checks 68/68 (session/usage/queue/search sections skip) |
+
+The advertised counts are the current surface (0.53.0: 18 session-group tools and 35 overall); the
+last-result column records runs made against 0.52.86, before the six new tools, and has not been
+re-measured for this release.
 
 A fifth shape, `mountonly`, boots with `http.enabled: false` and `mountOnWebServer: true` and
 checks the endpoint over DSH's own web server: 109/109, all cheap, including the assertions that

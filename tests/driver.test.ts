@@ -2066,3 +2066,87 @@ describe('DshDriver.sessionStatus', () => {
     expect(status.lastTurn).toMatchObject({ turn: 1 })
   })
 })
+
+describe('the session log reader across versions', () => {
+  // `sessionController.inspect` was removed in DSH 0.2.2 (with `page`) and
+  // replaced by `events`, one message-aligned history page. The plugin still loads
+  // on ≤0.1.7, so `readEvents` has to serve both without the caller caring which
+  // one is mounted — and say so plainly when neither is.
+
+  it('falls back to controller.inspect on a pre-0.2.2 profile', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', {
+      list: async () => ({ items: [] }),
+      inspect: async () => ({ meta: { id: 's' }, inheritedEventCount: 0, events: turn(0, 1, 'done') }),
+    })
+    const driver = new DshDriver(ctx, () => testConfig())
+
+    const status = await driver.sessionStatus({ sessionId: 's' })
+
+    expect(status.logReadable).toBe(true)
+    expect(status.lastTurn).toMatchObject({ turn: 1, reason: { kind: 'completed' } })
+  })
+
+  it('flattens the 0.2.2 events page when inspect is gone', async () => {
+    const requests: { request: unknown; signal: AbortSignal }[] = []
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', {
+      list: async () => ({ items: [] }),
+      events: async (request: unknown, signal: AbortSignal) => {
+        requests.push({ request, signal })
+        return {
+          records: [
+            { type: 'event', event: event('turn/start', { turn: 4 }, 10) },
+            // A page can carry non-event records; only events belong in the log.
+            { type: 'meta' },
+            { type: 'event', event: event('turn/end', { turn: 4, reason: { kind: 'completed' } }, 11) },
+          ],
+          hasMore: false,
+        }
+      },
+    })
+    const driver = new DshDriver(ctx, () => testConfig())
+
+    const status = await driver.sessionStatus({ sessionId: 's' })
+
+    expect(status.logReadable).toBe(true)
+    expect(status.lastTurn).toMatchObject({ turn: 4, reason: { kind: 'completed' } })
+    expect(status.lastEventSeq).toBe(11)
+    // The page is addressed the way the harness's Remote expects, with a signal.
+    expect(requests[0]?.request).toEqual({ address: { kind: 'session', sessionId: 's' } })
+    expect(requests[0]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('names the capability error instead of a TypeError when no reader survives 0.2.2', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('sessionController', { list: async () => ({ items: [] }) })
+    const driver = new DshDriver(ctx, () => testConfig())
+
+    const error = await driver.readTranscript('s', 10).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).name).toBe('DshCapabilityError')
+    // The message must name the version that removed inspect and the service that
+    // replaces it, or an operator reads this as a plugin bug.
+    expect((error as Error).message).toMatch(/sessionQuery/)
+    expect((error as Error).message).toMatch(/0\.2\.2/)
+    expect((error as Error).message).toMatch(/inspect/)
+  })
+
+  it('does not advertise tokenUsage on an inspect-less profile', () => {
+    // A bounded events page would silently under-count tokens, so it is not a
+    // usage reader: the capability must stay false rather than lie.
+    const eventsOnly = new Context()
+    contexts.push(eventsOnly)
+    eventsOnly.provide('sessionController', { events: async () => ({ records: [] }) })
+    expect(new DshDriver(eventsOnly, () => testConfig()).describeCapabilities().tokenUsage).toBe(false)
+
+    const legacy = new Context()
+    contexts.push(legacy)
+    legacy.provide('sessionController', { inspect: async () => ({ events: [] }) })
+    expect(new DshDriver(legacy, () => testConfig()).describeCapabilities().tokenUsage).toBe(true)
+  })
+})

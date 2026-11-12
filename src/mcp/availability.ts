@@ -38,9 +38,9 @@ export interface ToolAvailability {
 const GROUP_TOOLS: Record<keyof ToolToggles, readonly string[]> = {
   workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
   session: [
-    'session_create', 'session_search', 'session_status', 'session_list', 'session_prompt', 'session_messages',
-    'session_tool_result', 'session_queue', 'session_cancel', 'session_fork', 'session_rename',
-    'session_set_model',
+    'session_create', 'worktree_create', 'worktree_restore', 'session_search', 'session_status', 'session_list',
+    'session_prompt', 'session_messages', 'session_tool_result', 'session_queue', 'session_cancel', 'session_fork',
+    'session_rename', 'session_set_model', 'session_archive', 'session_unarchive', 'session_pin', 'session_unpin',
   ],
   files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
   shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -70,6 +70,12 @@ const REQUIRED_CAPABILITIES: Record<string, readonly string[]> = {
   workspace_list: ['workspaceRegistry'],
   workspace_delete: ['workspaceRegistry'],
   session_create: ['sessionController'],
+  worktree_create: ['sessionController', 'agentResolve', 'worktrees'],
+  worktree_restore: ['sessionController', 'agentResolve', 'worktrees'],
+  session_archive: ['sessionController', 'sessionArchive'],
+  session_unarchive: ['sessionController', 'sessionArchive'],
+  session_pin: ['sessionController', 'sessionPin'],
+  session_unpin: ['sessionController', 'sessionPin'],
   session_search: ['sessionController', 'sessionSearch'],
   session_list: ['sessionController'],
   session_status: ['sessionController'],
@@ -105,6 +111,11 @@ const CAPABILITY_LABEL: Record<string, string> = {
   sessionFork: 'sessionController.fork()',
   sessionRename: 'sessionController.rename()',
   sessionModel: 'sessionController.selectModel()',
+  worktrees: 'a worktree service (the forge bundle in DSH Desktop/Web)',
+  agentResolve: 'sessionController.resolveAgent()',
+  sessionViews: 'readable session projections',
+  sessionArchive: 'workspaceRegistry.archiveSession()',
+  sessionPin: 'workspaceRegistry.pinSession()',
   tokenUsage: 'a readable session log',
   fs: 'a filesystem service',
   shell: 'a shell service',
@@ -156,6 +167,24 @@ export function describeToolAvailability(
     notes.push(
       'session_search also needs an open session-query index; dsh_info { probeSearch: true } reports whether this '
         + 'deployment has one.',
+    )
+  }
+  if (enabled.session && capabilities['worktrees'] !== true) {
+    notes.push(
+      'Without a worktrees service, session_create { worktree } is refused before the session is created, and '
+        + 'worktree_create/worktree_restore are unavailable; sessions still work in the workspace directory itself.',
+    )
+  }
+  if (enabled.session && capabilities['sessionViews'] !== true) {
+    notes.push(
+      'Without readable session projections, session_status and session_list cannot report workingDirectory or '
+        + 'the forge worktree record; the rest of both replies is unchanged.',
+    )
+  }
+  if (enabled.session && (capabilities['sessionArchive'] !== true || capabilities['sessionPin'] !== true)) {
+    notes.push(
+      'Archive/pin tools need the workspace registry\'s archive and pin operations; without them the sidebar '
+        + 'sets cannot be written from this endpoint.',
     )
   }
   if (enabled.agentTools && capabilities['tools'] === true && capabilities['agents'] === true

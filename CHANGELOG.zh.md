@@ -6,6 +6,12 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.53.0
+
+- 新增 6 个 MCP 工具（`worktree_create`、`worktree_restore`、`session_archive`、`session_unarchive`、`session_pin`、`session_unpin`），工具面从 29 增至 35。`session_create` 新增 `worktree: true | { name, from }`：先在 workspace（或裸目录）里建好会话，因此带 `workspaceId` 创建的会话保持原工作区分组（只用 cwd 创建的会话不在任何组），然后再建 Git 分支、检出并设为会话的实时工作目录——与 DSH 界面「New worktree」选项同一套顺序；worktree 创建失败不回滚会话，回复用 `worktreeError` 说明（可用 `worktree_create` 重试），profile 没有 worktrees 服务时则在创建会话**之前**拒绝。`session_status` 报 `workingDirectory` 与 forge 面板的 `worktree` 记录（任一变化都会唤醒挂着的 `waitMs`），`session_list` 新增 `includeWorktree`，行上还带 `archived`/`pinned`。归档/置顶写的是 DSH 侧边栏动作所用的同一组 registry 集合：归档运行中的会话需要 `stopActivity: true`，日志保留，harness 依然没有删除会话。
+- 修复 0.2.2 带来的回归：`dsh_tool_call` 曾以 "Tool batch execution failed" 失败，而 `dsh_tool_list` 正常——0.2.2 把 `ctx.tools.execute` 从单调用输入/输出改成了批量契约。驱动现在靠 `tools.resolve` 区分两种形状（≤0.1.7 单调用、0.2.2+ 批量），同一份构建两边都能用；allow-list 与会话作用域检查仍在执行之前。
+- 0.2.2 移除了 `sessionController.inspect`：日志读取优先 `sessionQuery`，≤0.1.7 上仍用 `inspect`，0.2.2 上回退到控制器 `events` 的消息对齐分页——对"现在开着什么"和对话记录够用，只是有界分页在很长的日志上覆盖得少一些；用量需要整份日志，刻意不用分页读取（会少算），因此没有 `sessionQuery`（或 ≤0.1.7 的 `inspect`）时改为明确的能力错误而不是 `TypeError`。`session_search` 在随包 Desktop profile 上仍不可用（`session-query` 配的是 `openAt: "never"`）。Worktree 工具需要 forge bundle 提供的 `worktrees` 服务（`dsh_info.harnessServices.worktrees` 会报出）。两份 README 新增工作树章节与 35 行工具表，`docs/CAPABILITY-GAPS.md` 的工具数与探针数更新为 35/27；能力审计见 `docs/NEW-CAPABILITIES-0.2.2.md`，宿主侧契约见 `docs/WORKTREE-INTEGRATION-CONTRACT.md`。
+
 ## 0.52.86
 
 - fire-and-forget 的 turn 现在能自己报告结束，现代（2026-07-28）MCP 客户端不必再轮询。端点宣布 `resources.subscribe`，注册一个可读的合成资源 `dsh://session/<id>/turn`（内容与 `session_status` 一致），并且当 `session_prompt { wait: false }` 被接收时若有打开着的 `subscriptions/listen` 流，就用与阻塞调用相同的等待去盯这一轮，结束时推送 `notifications/resources/updated`——完成、失败、取消，或没有 `turn/end` 而消失都算。watcher 只在有人监听时才会安排（没有订阅者的 fire-and-forget prompt 依旧零额外成本）、每个 request id 只一个（幂等重试不会重复推送），并且受同样的 `promptTimeoutMs` 约束：等待超时的 watcher 没有看见结束，就不推，而不是宣称一个假的结束。不订阅的客户端（包括所有 2025 客户端与 stdio 桥）不受影响，继续轮询 `session_status`；监听流必须在 prompt 被接收**之前**打开。

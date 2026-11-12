@@ -119,6 +119,11 @@ describe('MCP Streamable HTTP endpoint', () => {
     expect(instructions).toContain('waitMs')
     expect(instructions).toContain('turn.failure')
     expect(instructions).toContain('token')
+    // The worktree and archive features are new surface a client must be able to
+    // discover from the handshake alone, like the fire-and-forget contract above.
+    expect(instructions).toContain('worktree')
+    expect(instructions).toContain('worktree_restore')
+    expect(instructions).toContain('archive')
   })
 
   // The tool surface is the only thing a client sees when it ignores the
@@ -149,7 +154,9 @@ describe('MCP Streamable HTTP endpoint', () => {
 
     // And the status tool must advertise the fields a supervisor acts on.
     const statusFields = Object.keys(status?.outputSchema?.properties ?? {})
-    expect(statusFields).toEqual(expect.arrayContaining(['failure', 'stalled', 'idleMs', 'lastTurn', 'changed', 'waitedMs']))
+    expect(statusFields).toEqual(expect.arrayContaining([
+      'failure', 'stalled', 'idleMs', 'lastTurn', 'changed', 'waitedMs', 'workingDirectory', 'worktree',
+    ]))
   })
 
   it('lists the enabled tools and hides a disabled group', async () => {
@@ -159,6 +166,10 @@ describe('MCP Streamable HTTP endpoint', () => {
     expect(names).toContain('dsh_info')
     expect(names).toContain('workspace_create')
     expect(names).toContain('session_prompt')
+    expect(names).toContain('worktree_create')
+    expect(names).toContain('worktree_restore')
+    expect(names).toContain('session_archive')
+    expect(names).toContain('session_pin')
     expect(names).toContain('file_read')
     expect(names).toContain('file_edit')
     expect(names).not.toContain('shell_run')
@@ -318,9 +329,10 @@ describe('MCP Streamable HTTP endpoint', () => {
     const groups: Record<string, string[]> = {
       workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
       session: [
-        'session_create', 'session_list', 'session_search', 'session_status', 'session_fork', 'session_rename',
-        'session_set_model', 'session_prompt', 'session_messages', 'session_tool_result', 'session_queue',
-        'session_cancel',
+        'session_create', 'worktree_create', 'worktree_restore', 'session_search', 'session_status', 'session_list',
+        'session_prompt', 'session_messages', 'session_tool_result', 'session_queue', 'session_cancel',
+        'session_fork', 'session_rename', 'session_set_model', 'session_archive', 'session_unarchive',
+        'session_pin', 'session_unpin',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -336,7 +348,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(29)
+      expect(all).toHaveLength(35)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {
@@ -1076,6 +1088,206 @@ describe('MCP Streamable HTTP endpoint', () => {
         { path: '/a.txt', maxBytes: 200 },
         { path: '/a.txt', maxBytes: 1024 },
       ])
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('forwards worktree_create arguments and the request abort signal', async () => {
+    const seen: Record<string, unknown>[] = []
+    const own = await boot(stubDriver({
+      createWorktree: async (request) => {
+        seen.push(request as unknown as Record<string, unknown>)
+        return {
+          sessionId: request.sessionId,
+          path: '/repo/.agents/worktrees/wt-1',
+          branch: 'wt-1',
+          baseCommit: 'a'.repeat(40),
+          repositoryRoot: '/repo',
+          from: 'main',
+        }
+      },
+    }), testConfig({ session: true }))
+    try {
+      const { isError, text } = await callTool(own.url, 'worktree_create', {
+        sessionId: 'session-1',
+        name: 'wt-1',
+        from: 'main',
+      })
+      expect(isError).toBe(false)
+      expect(seen[0]).toMatchObject({ sessionId: 'session-1', name: 'wt-1', from: 'main' })
+      // A Git command must stop when the MCP request is cancelled, so the tool has
+      // to hand the driver the request's signal.
+      expect(seen[0]?.signal).toBeInstanceOf(AbortSignal)
+      expect(JSON.parse(text)).toMatchObject({ branch: 'wt-1', from: 'main' })
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('forwards the recorded worktree to worktree_restore', async () => {
+    const seen: Record<string, unknown>[] = []
+    const own = await boot(stubDriver({
+      restoreWorktree: async (request) => {
+        seen.push(request as unknown as Record<string, unknown>)
+        return { sessionId: request.sessionId, path: request.path, branchRecreated: true }
+      },
+    }), testConfig({ session: true }))
+    const record = {
+      path: '/repo/.agents/worktrees/wt-1',
+      branch: 'wt-1',
+      baseCommit: 'b'.repeat(40),
+      repositoryRoot: '/repo',
+    }
+    try {
+      const { isError, text } = await callTool(own.url, 'worktree_restore', {
+        sessionId: 'session-1',
+        ...record,
+      })
+      expect(isError).toBe(false)
+      expect(seen[0]).toMatchObject({ sessionId: 'session-1', ...record })
+      expect(seen[0]?.signal).toBeInstanceOf(AbortSignal)
+      expect(JSON.parse(text)).toMatchObject({ branchRecreated: true })
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('normalizes session_create worktree: true to {} and leaves false/absent unset', async () => {
+    const seen: Record<string, unknown>[] = []
+    const own = await boot(stubDriver({
+      createSession: async (request) => {
+        seen.push(request as unknown as Record<string, unknown>)
+        return { sessionId: 'session-new' }
+      },
+    }), testConfig({ session: true }))
+    try {
+      await callTool(own.url, 'session_create', { workspaceId: 'ws-1', worktree: true })
+      await callTool(own.url, 'session_create', { workspaceId: 'ws-1', worktree: false })
+      await callTool(own.url, 'session_create', {
+        workspaceId: 'ws-1',
+        worktree: { name: 'wt-1', from: 'main' },
+      })
+      await callTool(own.url, 'session_create', { workspaceId: 'ws-1' })
+
+      // `true` means "create one with generated names" and reaches the driver as an
+      // empty options object; `false` and absence must not look like a request.
+      expect(seen.map((request) => ('worktree' in request ? request.worktree : '<absent>')))
+        .toEqual([{}, '<absent>', { name: 'wt-1', from: 'main' }, '<absent>'])
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('forwards session_list includeWorktree and passes the folded rows through', async () => {
+    const seen: unknown[] = []
+    const own = await boot(stubDriver({
+      listSessions: async (limit, options) => {
+        seen.push({ limit, options })
+        return {
+          sessions: [{
+            sessionId: 'a',
+            running: false,
+            blank: false,
+            updatedAt: 1,
+            workingDirectory: '/repo/.agents/worktrees/a',
+          }],
+          total: 1,
+        }
+      },
+    }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_list', { includeWorktree: true })
+      expect(isError).toBe(false)
+      expect(seen[0]).toEqual({ limit: 20, options: { includeWorktree: true } })
+      expect(JSON.parse(text)).toMatchObject({
+        sessions: [{ sessionId: 'a', workingDirectory: '/repo/.agents/worktrees/a' }],
+      })
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('returns the working directory and worktree a status read folded in', async () => {
+    const own = await boot(stubDriver({
+      sessionStatus: async ({ sessionId }) => ({
+        sessionId,
+        running: false,
+        openTurn: null,
+        openStep: null,
+        lastEventSeq: 3,
+        lastEventAt: '2026-11-03T00:00:00.000Z',
+        idleMs: 1_000,
+        lastTurn: null,
+        failure: null,
+        stalled: false,
+        logReadable: true,
+        waitedMs: 0,
+        workingDirectory: '/repo/.agents/worktrees/wt-1',
+        worktree: {
+          path: '/repo/.agents/worktrees/wt-1',
+          branch: 'wt-1',
+          baseCommit: 'c'.repeat(40),
+          repositoryRoot: '/repo',
+          from: 'main',
+        },
+      }),
+    }), testConfig({ session: true }))
+    try {
+      const { isError, text } = await callTool(own.url, 'session_status', { sessionId: 's' })
+      expect(isError).toBe(false)
+      const payload = JSON.parse(text) as {
+        workingDirectory?: string
+        worktree?: { branch?: string; from?: string }
+      }
+      expect(payload.workingDirectory).toBe('/repo/.agents/worktrees/wt-1')
+      expect(payload.worktree).toMatchObject({ branch: 'wt-1', from: 'main' })
+    } finally {
+      await own.stop()
+    }
+  })
+
+  it('forwards archive and pin calls to the driver', async () => {
+    const calls: unknown[] = []
+    const own = await boot(stubDriver({
+      archiveSession: async (request) => {
+        calls.push({ tool: 'archive', ...request })
+        return { sessionId: request.sessionId, archived: true }
+      },
+      unarchiveSession: async (request) => {
+        calls.push({ tool: 'unarchive', ...request })
+        return { sessionId: request.sessionId, archived: false }
+      },
+      pinSession: async (request) => {
+        calls.push({ tool: 'pin', ...request })
+        return { sessionId: request.sessionId, pinned: true }
+      },
+      unpinSession: async (request) => {
+        calls.push({ tool: 'unpin', ...request })
+        return { sessionId: request.sessionId, pinned: false }
+      },
+    }), testConfig({ session: true }))
+    try {
+      const archived = await callTool(own.url, 'session_archive', {
+        sessionId: 'session-1',
+        stopActivity: true,
+      })
+      expect(archived.isError).toBe(false)
+      const plain = await callTool(own.url, 'session_archive', { sessionId: 'session-1' })
+      expect(plain.isError).toBe(false)
+      await callTool(own.url, 'session_unarchive', { sessionId: 'session-1' })
+      await callTool(own.url, 'session_pin', { sessionId: 'session-1' })
+      await callTool(own.url, 'session_unpin', { sessionId: 'session-1' })
+
+      expect(calls).toEqual([
+        { tool: 'archive', sessionId: 'session-1', stopActivity: true },
+        // `stopActivity` is omitted, not false: stopping work is a deliberate ask.
+        { tool: 'archive', sessionId: 'session-1' },
+        { tool: 'unarchive', sessionId: 'session-1' },
+        { tool: 'pin', sessionId: 'session-1' },
+        { tool: 'unpin', sessionId: 'session-1' },
+      ])
+      expect(JSON.parse(archived.text)).toEqual({ sessionId: 'session-1', archived: true })
     } finally {
       await own.stop()
     }

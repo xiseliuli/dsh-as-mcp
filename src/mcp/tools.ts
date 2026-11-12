@@ -54,12 +54,18 @@ export type McpDriver = Pick<
   | 'listWorkspaces'
   | 'deleteWorkspace'
   | 'createSession'
+  | 'createWorktree'
+  | 'restoreWorktree'
   | 'forkSession'
   | 'renameSession'
   | 'setSessionModel'
   | 'listSessions'
   | 'searchSessions'
   | 'sessionStatus'
+  | 'archiveSession'
+  | 'unarchiveSession'
+  | 'pinSession'
+  | 'unpinSession'
   | 'updateQueue'
   | 'readQueue'
   | 'probeSessionSearch'
@@ -339,6 +345,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         },
         notes: [
           'workspace_* and session_* drive this DSH instance directly; work appears live in the DSH UI.',
+          'session_create { worktree } and worktree_create/worktree_restore need a worktrees service (the forge bundle in DSH Desktop/Web); harnessServices.worktrees reports it. A workspaceId-created session that enters a worktree keeps its workspace group and works in the new checkout (a cwd-only session stays ungrouped); session_status.workingDirectory and session_list { includeWorktree } show where each session is working.',
+          'session_archive/unarchive and session_pin/unpin write the same registry sets the DSH sidebar uses; session_list reports each row\'s archived and pinned flags. The harness has no session delete, and these tools do not add one.',
           'session_prompt waits for the turn to settle by default and returns the agent reply plus its tool calls.',
           'DSH has no "session ended" event; call session_usage after your last prompt to collect the final tally.',
           'catalog.providers and catalog.agentPresets are the values session_create accepts; a field that could not be read is named in catalog.unavailable.',
@@ -445,13 +453,44 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           + 'its session id. Pass that id to session_prompt to make the DSH agent do work. Sessions are visible '
           + 'live in the DSH UI. Model selection falls back to this DSH instance\'s default route; provider and '
           + 'model must be given together (a half pair is refused before the session is created), and an '
-          + 'unroutable pair still creates the session but says why in `modelSelectionError`.',
+          + 'unroutable pair still creates the session but says why in `modelSelectionError`. '
+          + 'Pass `worktree: true` (or { name, from }) to also create a Git worktree from the workspace checkout '
+          + 'and make it the session\'s live working directory: this is how several sessions in the same '
+          + 'workspace group each work in an isolated checkout. A session created with workspaceId keeps that '
+          + 'group membership (its durable directory stays the workspace); a cwd-only session stays outside every '
+          + 'group, as before. The reply carries the created `worktree` record; '
+          + 'a failed worktree request leaves the session usable in the workspace and reports `worktreeError` '
+          + '(retry with worktree_create). Needs a profile with a worktrees service — dsh_info '
+          + 'harnessServices.worktrees says whether this one has it.',
         inputSchema: z.object({
           workspaceId: z.string().optional().describe('Workspace id from workspace_list or workspace_create.'),
           cwd: z.string().optional().describe('Bare directory to bind the session to; use instead of workspaceId.'),
           agentPreset: z.string().optional().describe('Agent preset id; defaults to the harness default.'),
           provider: z.string().optional().describe('Model provider route. Must be paired with model.'),
           model: z.string().optional().describe('Model id. Must be paired with provider.'),
+          worktree: z
+            .union([
+              z.boolean(),
+              z.object({
+                name: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'New branch name, also the checkout directory name under the source checkout\'s '
+                    + '.agents/worktrees/. Omit to let the harness generate dsh-<session uuid8>-<4 hex>.',
+                  ),
+                from: z
+                  .string()
+                  .optional()
+                  .describe('Local commit, branch, or tag to start from; defaults to the checkout\'s HEAD.'),
+              }),
+            ])
+            .optional()
+            .describe(
+              'Create a Git worktree for the session and enter it: true with generated names, or '
+              + '{ name, from } to choose the branch and base revision. The session is created in the '
+              + 'workspace/directory first, so a workspaceId-created session keeps its workspace group.',
+            ),
         }),
         annotations: { openWorldHint: false },
       },
@@ -461,14 +500,109 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         ...(args.agentPreset === undefined ? {} : { agentPreset: args.agentPreset }),
         ...(args.provider === undefined ? {} : { provider: args.provider }),
         ...(args.model === undefined ? {} : { model: args.model }),
+        ...(args.worktree === undefined || args.worktree === false
+          ? {}
+          : { worktree: args.worktree === true ? {} : args.worktree }),
       }))),
+    )
+
+    server.registerTool(
+      'worktree_create',
+      {
+        title: 'Create and enter a Git worktree for a session',
+        description:
+          'Create a new Git branch and checkout from the session\'s current checkout, then make that checkout '
+          + 'the session\'s working directory — the same operation the DSH UI\'s "New worktree" option performs, '
+          + 'for a session that already exists. Use it after `session_create` when you want several sessions in '
+          + 'one workspace group to work in isolated checkouts: a session created with workspaceId keeps that '
+          + 'group membership (its durable directory does not change) while its tools, commands and prompts run '
+          + 'in the worktree; a cwd-only session stays outside every group, as before. '
+          + 'Uncommitted files stay in the source checkout; existing branch or checkout names fail. The reply '
+          + 'carries `path`, `branch`, `baseCommit`, `repositoryRoot` and the `from` revision (null for HEAD) — '
+          + 'keep it if you may need worktree_restore. Requires the session\'s agent to resolve and a profile '
+          + 'with a worktrees service (dsh_info harnessServices.worktrees).',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id from session_create or session_list.'),
+          name: z
+            .string()
+            .optional()
+            .describe(
+              'New branch name, also the checkout directory name under the source checkout\'s '
+              + '.agents/worktrees/. Omit to let the harness generate dsh-<session uuid8>-<4 hex>.',
+            ),
+          from: z
+            .string()
+            .optional()
+            .describe('Local commit, branch, or tag to start from; defaults to the checkout\'s HEAD.'),
+        }),
+        outputSchema: outputSchema({
+          sessionId: z.string().optional(),
+          path: z.string().optional(),
+          branch: z.string().optional(),
+          baseCommit: z.string().optional(),
+          repositoryRoot: z.string().optional(),
+          from: z.string().nullable().optional(),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('worktree_create', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.createWorktree({
+          sessionId: args.sessionId,
+          ...(args.name === undefined ? {} : { name: args.name }),
+          ...(args.from === undefined ? {} : { from: args.from }),
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
+    )
+
+    server.registerTool(
+      'worktree_restore',
+      {
+        title: 'Restore a removed worktree for a session',
+        description:
+          'Check a session\'s Git worktree out again at its recorded directory after it was removed outside the '
+          + 'session. Pass the record worktree_create (or session_status.worktree) returned. The branch is '
+          + 'checked out when it still exists, otherwise recreated at baseCommit; uncommitted changes that were '
+          + 'lost with the directory cannot be recovered, and the session\'s working directory is not changed. '
+          + 'Requires a profile with a worktrees service (dsh_info harnessServices.worktrees).',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id whose worktree is being restored.'),
+          path: z.string().describe('Recorded checkout path (worktree_create reply: path).'),
+          branch: z.string().describe('Recorded branch name (worktree_create reply: branch).'),
+          baseCommit: z.string().describe('Recorded full commit object name (worktree_create reply: baseCommit).'),
+          repositoryRoot: z
+            .string()
+            .describe('Recorded source checkout root (worktree_create reply: repositoryRoot).'),
+        }),
+        outputSchema: outputSchema({
+          sessionId: z.string().optional(),
+          path: z.string().optional(),
+          branchRecreated: z.boolean().optional(),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('worktree_restore', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.restoreWorktree({
+          sessionId: args.sessionId,
+          path: args.path,
+          branch: args.branch,
+          baseCommit: args.baseCommit,
+          repositoryRoot: args.repositoryRoot,
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
     )
 
     server.registerTool(
       'session_list',
       {
         title: 'List DSH sessions',
-        description: 'List sessions known to this DeepSeek Harness, most recently updated first.',
+        description:
+          'List sessions known to this DeepSeek Harness, most recently updated first. Rows carry each '
+          + 'session\'s archived and pinned flags — the same registry sets the DSH sidebar\'s archive and pin '
+          + 'actions write — and includeWorktree folds in where each session is currently working.',
         inputSchema: z.object({
           limit: z.number().int().positive().max(200).optional().describe('Maximum sessions to return. Defaults to 20.'),
           includeTitle: z
@@ -477,6 +611,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             .describe(
               'Also fold each session\'s latest title. Costs one durable-log read per session, so it is '
               + 'off by default; useful when picking a session by what it was about.',
+            ),
+          includeWorktree: z
+            .boolean()
+            .optional()
+            .describe(
+              'Also fold each session\'s live working directory and the worktree record the forge panel created '
+              + 'for it (workingDirectory, worktree). Costs one projection read per session, so it is off by '
+              + 'default; with several sessions of one workspace each working in its own checkout, this is how '
+              + 'a caller tells which checkout a session is in.',
             ),
           cwd: z
             .string()
@@ -502,6 +645,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       guard('session_list', log, async (args) => {
         const listed = await driver.listSessions(args.limit ?? 20, {
           ...(args.includeTitle === undefined ? {} : { includeTitle: args.includeTitle }),
+          ...(args.includeWorktree === undefined ? {} : { includeWorktree: args.includeWorktree }),
           ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
           ...(args.running === undefined ? {} : { running: args.running }),
           ...(args.origin === undefined ? {} : { origin: args.origin }),
@@ -554,7 +698,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           + 'nothing has been written for a minute — a symptom worth reporting, not a verdict, because a model '
           + 'call may legitimately think for a long time. A turn that disappeared without a turn/end (the wait '
           + 'reports it as failure kind "vanished") also shows up here as not running with no fresh ending, so '
-          + 'a supervisor never has to assume a silent session is healthy.',
+          + 'a supervisor never has to assume a silent session is healthy. When the profile can read session '
+          + 'projections, the report also carries `workingDirectory` (the directory the session currently works '
+          + 'in — a worktree checkout when it entered one) and `worktree` (the forge panel\'s record for a '
+          + 'worktree it created).',
         inputSchema: z.object({
           sessionId: z.string().describe('Session id from session_create or session_list.'),
           waitMs: z
@@ -590,6 +737,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           failure: z.looseObject({ kind: z.string(), message: z.string() }).nullable().optional(),
           stalled: z.boolean().optional(),
           logReadable: z.boolean().optional(),
+          workingDirectory: z.string().nullable().optional(),
+          worktree: z.looseObject({}).nullable().optional(),
           changed: z.boolean().optional(),
           waitedMs: z.number().optional(),
         }),
@@ -1056,6 +1205,74 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         annotations: { openWorldHint: false },
       },
       guard('session_cancel', log, async (args) => ok(await driver.cancelSession(args.sessionId))),
+    )
+
+    server.registerTool(
+      'session_archive',
+      {
+        title: 'Archive a DSH session',
+        description:
+          'Archive a session in this DSH instance — the same registry-global archive the sidebar\'s archive '
+          + 'action writes. An archived session disappears from the DSH UI\'s grouping and its future turns are '
+          + 'refused, but its log is kept, so session_unarchive restores it to its recorded position. Archiving '
+          + 'a session that still has running work is refused unless `stopActivity: true` is passed, which also '
+          + 'asks that work to stop; that flag is deliberately something a caller must ask for. Nothing is '
+          + 'deleted. session_list reports each session\'s archived flag.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id from session_create or session_list.'),
+          stopActivity: z
+            .boolean()
+            .optional()
+            .describe(
+              'Stop the session\'s running work (turn, subagents, jobs) before archiving. Required when the '
+              + 'session is active; without it an active session is refused.',
+            ),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_archive', log, async (args) => ok(await driver.archiveSession({
+        sessionId: args.sessionId,
+        ...(args.stopActivity === undefined ? {} : { stopActivity: args.stopActivity }),
+      }))),
+    )
+
+    server.registerTool(
+      'session_unarchive',
+      {
+        title: 'Unarchive a DSH session',
+        description:
+          'Return an archived session to its recorded position in the DSH UI. Idempotent: an id that is not '
+          + 'archived is not an error. The session log was never touched, so this makes it visible and '
+          + 'promptable again.',
+        inputSchema: z.object({ sessionId: z.string() }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_unarchive', log, async (args) => ok(await driver.unarchiveSession({ sessionId: args.sessionId }))),
+    )
+
+    server.registerTool(
+      'session_pin',
+      {
+        title: 'Pin a DSH session',
+        description:
+          'Pin a session to the top of the DSH UI\'s session list (the same pin set the sidebar writes). A '
+          + 'pinned session must exist and must not be archived; pinning is idempotent. session_list reports '
+          + 'each session\'s pinned flag.',
+        inputSchema: z.object({ sessionId: z.string() }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_pin', log, async (args) => ok(await driver.pinSession({ sessionId: args.sessionId }))),
+    )
+
+    server.registerTool(
+      'session_unpin',
+      {
+        title: 'Unpin a DSH session',
+        description: 'Remove a session from the DSH UI\'s pin set. Idempotent: an id that is not pinned is not an error.',
+        inputSchema: z.object({ sessionId: z.string() }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_unpin', log, async (args) => ok(await driver.unpinSession({ sessionId: args.sessionId }))),
     )
   }
 

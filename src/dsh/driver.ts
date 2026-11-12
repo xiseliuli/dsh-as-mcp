@@ -44,6 +44,12 @@ import {
   type DshShellProcess,
   type DshShellRunResult,
   type DshWorkspaceRegistry,
+  type DshRestoredWorktree,
+  type DshWorktreeRecord,
+  type DshWorktreeService,
+  type DshToolBatchInput,
+  type DshToolExecutionInput,
+  type DshToolExecutionResult,
 } from './types.js'
 
 /**
@@ -277,6 +283,17 @@ export interface SessionInfo {
   readonly parentSessionId?: string
   /** `subagent` when the harness created this session as an agent's child. */
   readonly origin?: 'subagent'
+  /**
+   * The session's live working directory, when the caller opted in and the
+   * profile can report it. A session working in a worktree shows that checkout.
+   */
+  readonly workingDirectory?: string | null
+  /** The forge-created worktree record, when the caller opted in and one exists. */
+  readonly worktree?: WorktreeInfo | null
+  /** Whether the session is archived (hidden from the DSH UI's grouping), when readable. */
+  readonly archived?: boolean
+  /** Whether the session is pinned in the DSH UI, when readable. */
+  readonly pinned?: boolean
 }
 
 /** One tool invocation the agent made while answering. */
@@ -533,6 +550,48 @@ export interface SessionStatus {
   /** Only on a `waitMs` call: whether anything changed while waiting. */
   readonly changed?: boolean
   readonly waitedMs: number
+  /**
+   * The session's live working directory, when the profile can report it.
+   *
+   * This is the harness's committed working directory, not the `cwd` the session
+   * was created with: a session that entered a worktree reports that checkout
+   * here while its durable header keeps the directory it was created in — which is
+   * what keeps a `workspaceId`-created session in its workspace group (a cwd-only
+   * session was never in one). Absent when the profile provides no projection read.
+   */
+  readonly workingDirectory?: string | null
+  /**
+   * The worktree record the forge panel created for this session, when one exists.
+   *
+   * Only worktrees requested through the DSH UI's "New worktree" option carry this
+   * record; one created by {@link DshDriver.createWorktree} is reported in that
+   * call's own reply and is visible as {@link workingDirectory} afterwards.
+   */
+  readonly worktree?: WorktreeInfo | null
+}
+
+/**
+ * One worktree as reported to MCP callers.
+ *
+ * {@link DshWorktreeRecord} plus the revision the checkout was created from —
+ * `null` means the source checkout's `HEAD`, the same convention the harness's
+ * own `forgeWorktree` projection uses.
+ */
+export interface WorktreeInfo extends DshWorktreeRecord {
+  readonly from: string | null
+}
+
+/** The `worktree_create` reply. */
+export interface WorktreeReply extends WorktreeInfo {
+  readonly sessionId: string
+}
+
+/** The `worktree_restore` reply. */
+export interface RestoreWorktreeReply {
+  readonly sessionId: string
+  readonly path: string
+  /** True when the branch itself was gone and had to be recreated at `baseCommit`. */
+  readonly branchRecreated: boolean
 }
 
 /** One background shell job, as listed to a caller. */
@@ -875,6 +934,15 @@ export class DshDriver {
   /** Per-session promise chain: one driver-initiated turn runs at a time. */
   private readonly turnQueues = new Map<string, Promise<unknown>>()
   /**
+   * Per-session promise chains for worktree creation/restoration.
+   *
+   * The harness's worktree service does not serialize its callers: two concurrent
+   * creates on one session race Git's own locks and the working-directory commit,
+   * and a failed creation retains whatever it already wrote. One chain per session
+   * makes the second call wait instead of racing the first.
+   */
+  private readonly worktreeQueues = new Map<string, Promise<unknown>>()
+  /**
    * Per-session cancellation generations.
    *
    * A cancel can land after the harness opened the turn but before the prompt was
@@ -1076,10 +1144,11 @@ export class DshDriver {
       tools: this.toolRegistry() !== undefined,
       events: typeof eventsOf(this.ctx).on === 'function',
       // Usage reporting needs the session log, which is `sessionQuery` (or the
-      // controller's own `inspect` fallback). Reported separately from
-      // `sessionQuery` because "sessions work but their usage cannot be read" is
-      // a real profile shape a caller should be able to see.
-      tokenUsage: query !== undefined || this.sessionController() !== undefined,
+      // controller's `inspect` fallback on ≤0.1.7; 0.2.2 removed that method).
+      // Reported separately from `sessionQuery` because "sessions work but their
+      // usage cannot be read" is a real profile shape a caller should be able to see.
+      tokenUsage: query !== undefined
+        || typeof (this.sessionController() as { inspect?: unknown } | undefined)?.inspect === 'function',
       // Money needs a third-party price ledger; the harness has none.
       costMeter: typeof serviceOf<DshCostMeter>(this.ctx, 'costMeter')?.getSessionCost === 'function',
       // Catalog surfaces, so a caller can tell "no providers listed" from
@@ -1103,6 +1172,22 @@ export class DshDriver {
         const shell = this.shellExecutor()
         return typeof shell?.start === 'function' || typeof shell?.execute === 'function'
       })(),
+      // Git worktrees ship in the harness's experimental worktree package, which
+      // the forge bundle composes into Desktop/Web. A profile without it still
+      // creates sessions; it just cannot isolate one in a checkout.
+      worktrees: this.worktreeService() !== undefined,
+      // Creating or restoring a worktree needs the session's live agent as its
+      // scope, the same bridge `dsh_tool_call` uses.
+      agentResolve: typeof (this.sessionController() as { resolveAgent?: unknown } | undefined)?.resolveAgent
+        === 'function',
+      // The archive/pin sets the DSH sidebar writes, from the workspace registry.
+      sessionArchive: typeof this.workspaceRegistry()?.archiveSession === 'function',
+      sessionPin: typeof this.workspaceRegistry()?.pinSession === 'function',
+      // The projection read that reports a session's live working directory and
+      // the worktree the forge panel created for it. Optional: `session_status`
+      // and `session_list { includeWorktree }` omit those fields without it.
+      sessionViews: typeof (this.sessionController() as { projections?: unknown } | undefined)?.projections
+        === 'function' || typeof query?.observeSession === 'function',
     }
   }
 
@@ -1297,6 +1382,31 @@ export class DshDriver {
 
   private sessionQuery(): DshSessionQuery | undefined {
     return serviceOf<DshSessionQuery>(this.ctx, 'sessionQuery')
+  }
+
+  /**
+   * `ctx.worktrees`, when the profile mounts one.
+   *
+   * The service ships in the harness's experimental worktree package, which the
+   * forge bundle composes into DSH Desktop and Web ("变更请求与工作树"); a bare
+   * profile may not have it at all, so every caller here degrades explicitly
+   * rather than assuming it exists.
+   */
+  private worktreeService(): DshWorktreeService | undefined {
+    return serviceOf<DshWorktreeService>(this.ctx, 'worktrees')
+  }
+
+  private requireWorktreeService(): DshWorktreeService {
+    const service = this.worktreeService()
+    if (service === undefined) {
+      throw new DshCapabilityError(
+        'worktrees',
+        'this DSH profile provides no worktrees service, so Git worktrees cannot be created. '
+          + 'DSH Desktop and Web provide it through the forge bundle ("变更请求与工作树"); enable that bundle, '
+          + 'or use session_create { cwd } to bind a session to an existing checkout.',
+      )
+    }
+    return service
   }
 
   private approvalService(): DshApprovalService | undefined {
@@ -1556,6 +1666,112 @@ export class DshDriver {
     return await Promise.all(workspaces.map(async (workspace) => await this.toWorkspaceInfo(workspace)))
   }
 
+  /**
+   * Archive one session in the registry-global archive set the DSH sidebar uses.
+   *
+   * Archiving hides the session from the UI's grouping and gates its future turns,
+   * but keeps the log — it is the reversible counterpart to the delete the harness
+   * does not offer. Archiving a session with running work is refused unless
+   * `stopActivity` is set: stopping work is the part a caller has to ask for
+   * explicitly, and the registry then asks the session's work to stop.
+   */
+  async archiveSession(request: {
+    sessionId: string
+    stopActivity?: boolean
+  }): Promise<{ sessionId: string; archived: true }> {
+    await this.assertSessionVisible(request.sessionId, 'session_archive')
+    const registry = this.requireWorkspaceRegistry()
+    const archive = registry.archiveSession
+    if (typeof archive !== 'function') {
+      throw new DshCapabilityError(
+        'workspaceArchive',
+        'this DSH profile cannot archive sessions (workspaceRegistry.archiveSession is missing).',
+      )
+    }
+    try {
+      await archive.call(
+        registry,
+        request.sessionId,
+        request.stopActivity === true ? { stopActivity: true } : {},
+      )
+    } catch (error) {
+      throw new Error(
+        `could not archive session ${request.sessionId}: ${error instanceof Error ? error.message : String(error)}`
+          + (request.stopActivity === true
+            ? ''
+            : '. If it still has running work, archive with stopActivity: true to stop that work and archive'),
+        { cause: error instanceof Error ? error : undefined },
+      )
+    }
+    return { sessionId: request.sessionId, archived: true }
+  }
+
+  /** Return an archived session to its recorded position in the DSH UI. */
+  async unarchiveSession(request: { sessionId: string }): Promise<{ sessionId: string; archived: false }> {
+    await this.assertSessionVisible(request.sessionId, 'session_unarchive')
+    const registry = this.requireWorkspaceRegistry()
+    const unarchive = registry.unarchiveSession
+    if (typeof unarchive !== 'function') {
+      throw new DshCapabilityError(
+        'workspaceArchive',
+        'this DSH profile cannot unarchive sessions (workspaceRegistry.unarchiveSession is missing).',
+      )
+    }
+    try {
+      await unarchive.call(registry, request.sessionId)
+    } catch (error) {
+      throw new Error(
+        `could not unarchive session ${request.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error instanceof Error ? error : undefined },
+      )
+    }
+    return { sessionId: request.sessionId, archived: false }
+  }
+
+  /** Pin one session to the top of the DSH UI's session list. */
+  async pinSession(request: { sessionId: string }): Promise<{ sessionId: string; pinned: true }> {
+    await this.assertSessionVisible(request.sessionId, 'session_pin')
+    const registry = this.requireWorkspaceRegistry()
+    const pin = registry.pinSession
+    if (typeof pin !== 'function') {
+      throw new DshCapabilityError(
+        'workspacePin',
+        'this DSH profile cannot pin sessions (workspaceRegistry.pinSession is missing).',
+      )
+    }
+    try {
+      await pin.call(registry, request.sessionId)
+    } catch (error) {
+      throw new Error(
+        `could not pin session ${request.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error instanceof Error ? error : undefined },
+      )
+    }
+    return { sessionId: request.sessionId, pinned: true }
+  }
+
+  /** Remove one session from the DSH UI's pin set. */
+  async unpinSession(request: { sessionId: string }): Promise<{ sessionId: string; pinned: false }> {
+    await this.assertSessionVisible(request.sessionId, 'session_unpin')
+    const registry = this.requireWorkspaceRegistry()
+    const unpin = registry.unpinSession
+    if (typeof unpin !== 'function') {
+      throw new DshCapabilityError(
+        'workspacePin',
+        'this DSH profile cannot unpin sessions (workspaceRegistry.unpinSession is missing).',
+      )
+    }
+    try {
+      await unpin.call(registry, request.sessionId)
+    } catch (error) {
+      throw new Error(
+        `could not unpin session ${request.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error instanceof Error ? error : undefined },
+      )
+    }
+    return { sessionId: request.sessionId, pinned: false }
+  }
+
   private async toWorkspaceInfo(
     workspace: ReturnType<DshWorkspaceRegistry['list']>[number],
   ): Promise<WorkspaceInfo> {
@@ -1646,6 +1862,26 @@ export class DshDriver {
     agentPreset?: string
     provider?: string
     model?: string
+    /**
+     * Also create a Git worktree for the new session and enter it.
+     *
+     * The session is created first, bound to the workspace/directory the caller
+     * named, then the worktree is created from that checkout and becomes the
+     * session's live working directory. Its durable header keeps the directory it
+     * was created in: a session created with `workspaceId` therefore stays in that
+     * workspace group (only sessions created that way are in one), while a
+     * cwd-only session stays ungrouped. This is the same sequence the DSH UI's
+     * "New worktree" option performs, and it lets several sessions in one
+     * workspace group each isolate their work.
+     *
+     * `name` is the new branch and checkout name (`.agents/worktrees/<name>` under
+     * the source checkout); omitted, the harness generates one. `from` is a local
+     * commit, branch, or tag; omitted, the source checkout's HEAD.
+     */
+    worktree?: {
+      name?: string
+      from?: string
+    }
   }): Promise<{
     sessionId: string
     cwd?: string
@@ -1657,6 +1893,18 @@ export class DshDriver {
     approvalPolicy?: 'never'
     /** Why `approval.policy: "allow"` could not be applied, if it could not. */
     approvalPolicyError?: string
+    /** The worktree created for the session and entered, when one was requested. */
+    worktree?: WorktreeInfo
+    /** The live working directory after creation, when it could be read. */
+    workingDirectory?: string
+    /**
+     * Why a requested worktree was not created.
+     *
+     * The session itself exists and works in the directory it was created in: a
+     * failed worktree request is reported here rather than failing the whole call,
+     * the same policy `modelSelectionError` follows. Retry with `worktree_create`.
+     */
+    worktreeError?: string
   }> {
     const controller = this.requireSessionController()
 
@@ -1695,12 +1943,39 @@ export class DshDriver {
             : `provider "${requestedProvider}"`}.`,
       )
     }
+    // A worktree request against a profile that has no worktree service is refused
+    // before the session exists. The alternative — create the session and report
+    // `worktreeError` — would leave an orphan session and a UI row behind for a
+    // request that was impossible from the start.
+    if (request.worktree !== undefined) this.requireWorktreeService()
 
     const created = await controller.create({
       ...(workspaceId === undefined ? { cwd: cwd as string } : { workspaceId }),
       ...(agentPreset === undefined ? {} : { agentPreset }),
     })
     this.rememberOwnedSession(created.sessionId)
+
+    // The worktree is created after the session exists — it needs a live agent as
+    // its scope — and before the model is selected, so the session is already in
+    // its final directory when any route is installed. A failure here does not
+    // undo the session: the caller gets a usable session plus the reason, and can
+    // retry with `worktree_create`.
+    let worktree: WorktreeInfo | undefined
+    let worktreeError: string | undefined
+    if (request.worktree !== undefined) {
+      try {
+        const reply = await this.createWorktree({
+          sessionId: created.sessionId,
+          ...(request.worktree.name === undefined ? {} : { name: request.worktree.name }),
+          ...(request.worktree.from === undefined ? {} : { from: request.worktree.from }),
+        })
+        worktree = worktreeInfoOf(reply)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        worktreeError = `the session was created, but its worktree was not: ${reason}`
+        this.log.warn('[dsh-as-mcp] session %s was created without its requested worktree: %s', created.sessionId, reason)
+      }
+    }
 
     // A request pair is used whole; otherwise the configured pair is. Never one from
     // each source, which is how a request provider could end up with a config model.
@@ -1750,7 +2025,169 @@ export class DshDriver {
       ...(modelSelectionError === undefined ? {} : { modelSelectionError }),
       ...(approval.approvalPolicy === undefined ? {} : { approvalPolicy: approval.approvalPolicy }),
       ...(approval.approvalPolicyError === undefined ? {} : { approvalPolicyError: approval.approvalPolicyError }),
+      ...(worktree === undefined ? {} : { worktree }),
+      // After a successful worktree create the checkout IS the working directory;
+      // reporting it saves the caller a follow-up read.
+      ...(worktree === undefined ? {} : { workingDirectory: worktree.path }),
+      ...(worktreeError === undefined ? {} : { worktreeError }),
     }
+  }
+
+  /**
+   * Create a Git worktree for an existing session and enter it there.
+   *
+   * The worktree is created from the checkout the session is currently working in,
+   * on a brand-new branch, and becomes the session's live working directory. The
+   * session's durable header keeps the directory it was created in, so a session
+   * created with `workspaceId` keeps that workspace group (a cwd-only session was
+   * never in one); the worktree is what its tools, commands, and prompts then
+   * operate in.
+   *
+   * The session must be resolvable to a live agent: the agent is the scope the
+   * harness uses to pick the source repository and enforce the session's file
+   * policy, so there is no agentless form (and no way for an external caller to
+   * sidestep the sandbox by asking for a path it could not otherwise write).
+   */
+  async createWorktree(request: {
+    sessionId: string
+    name?: string
+    from?: string
+    signal?: AbortSignal
+  }): Promise<WorktreeReply> {
+    await this.assertSessionVisible(request.sessionId, 'worktree_create')
+    return await this.withWorktreeLock(request.sessionId, async () => {
+      const worktrees = this.requireWorktreeService()
+      const agent = await this.agentForSession(request.sessionId)
+      // The harness does not check this: it would switch the directory under the
+      // open turn and queue the change notice mid-flight. Refusing is the honest
+      // answer, and it names the two ways out.
+      if (this.agentRegistry()?.get(request.sessionId)?.status === 'running') {
+        throw new Error(
+          `session ${request.sessionId} has a running turn; wait for it to settle (session_status { waitMs }) `
+            + 'or cancel it (session_cancel) before moving the session into a worktree',
+        )
+      }
+      let created: DshWorktreeRecord
+      try {
+        created = await worktrees.create(agent, {
+          ...(request.name === undefined ? {} : { name: request.name }),
+          ...(request.from === undefined ? {} : { from: request.from }),
+        }, request.signal)
+      } catch (error) {
+        throw new Error(
+          `could not create a worktree for session ${request.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error instanceof Error ? error : undefined },
+        )
+      }
+      return {
+        sessionId: request.sessionId,
+        path: created.path,
+        branch: created.branch,
+        baseCommit: created.baseCommit,
+        repositoryRoot: created.repositoryRoot,
+        // The harness resolves the revision but does not echo it back; the caller's
+        // spelling is the honest answer, and null means the source HEAD.
+        from: request.from ?? null,
+      }
+    })
+  }
+
+  /**
+   * Restore a worktree that was removed outside the session.
+   *
+   * The session may still be working in that directory (or was moved away); the
+   * harness recreates the checkout at the recorded path from the recorded branch,
+   * recreating the branch at `baseCommit` when it was deleted too. Uncommitted
+   * changes that were lost with the directory cannot be recovered.
+   */
+  async restoreWorktree(request: {
+    sessionId: string
+    path: string
+    branch: string
+    baseCommit: string
+    repositoryRoot: string
+    signal?: AbortSignal
+  }): Promise<RestoreWorktreeReply> {
+    await this.assertSessionVisible(request.sessionId, 'worktree_restore')
+    return await this.withWorktreeLock(request.sessionId, async () => {
+      const worktrees = this.requireWorktreeService()
+      const agent = await this.agentForSession(request.sessionId)
+      if (this.agentRegistry()?.get(request.sessionId)?.status === 'running') {
+        throw new Error(
+          `session ${request.sessionId} has a running turn; wait for it to settle (session_status { waitMs }) `
+            + 'or cancel it (session_cancel) before restoring its worktree',
+        )
+      }
+      let restored: DshRestoredWorktree
+      try {
+        restored = await worktrees.restore(agent, {
+          path: request.path,
+          branch: request.branch,
+          baseCommit: request.baseCommit,
+          repositoryRoot: request.repositoryRoot,
+        }, request.signal)
+      } catch (error) {
+        throw new Error(
+          `could not restore the worktree of session ${request.sessionId}: `
+            + `${error instanceof Error ? error.message : String(error)}`,
+          { cause: error instanceof Error ? error : undefined },
+        )
+      }
+      return { sessionId: request.sessionId, path: restored.path, branchRecreated: restored.branchRecreated }
+    })
+  }
+
+  /**
+   * Run one worktree operation after the previous one on the same session settles.
+   *
+   * The harness's worktree service has no lock of its own: concurrent calls on one
+   * session race Git's locks and the working-directory commit, and a failed creation
+   * retains whatever it already wrote (its own error says so). This chain is per
+   * session, so different sessions still create worktrees concurrently.
+   */
+  private async withWorktreeLock<T>(sessionId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.worktreeQueues.get(sessionId) ?? Promise.resolve()
+    // `then(action, action)`: a failed predecessor still lets this operation run —
+    // this is a queue, not a circuit breaker.
+    const operation = previous.then(action, action)
+    const settled = operation.then(() => undefined, () => undefined)
+    this.worktreeQueues.set(sessionId, settled)
+    try {
+      return await operation
+    } finally {
+      if (this.worktreeQueues.get(sessionId) === settled) this.worktreeQueues.delete(sessionId)
+    }
+  }
+
+  /**
+   * Resolve the live agent that scopes a worktree operation.
+   *
+   * An already-live agent is preferred: `resolveAgent` on a cold session is not a
+   * read. It opens the log, mounts the session's preset and takes the
+   * single-writer handle, so it can fail with `session/writer-held` or
+   * `session/agent-busy` while another client holds the session (the DSH UI's own
+   * forge panel is exactly such a client). Falling back to it is still correct for
+   * a session this endpoint created and then parked.
+   */
+  private async agentForSession(sessionId: string): Promise<DshAgentHandle> {
+    const live = this.agentRegistry()?.get(sessionId)
+    if (live !== undefined) return live as DshAgentHandle
+    const controller = this.requireSessionController()
+    if (typeof controller.resolveAgent !== 'function') {
+      throw new DshCapabilityError(
+        'agents',
+        'this DSH profile cannot resolve a session to an agent (sessionController.resolveAgent is missing), '
+          + 'and a worktree is created under a session\u2019s own file policy, so there is no scope to run it in.',
+      )
+    }
+    const found = await controller.resolveAgent(sessionId)
+    if ('error' in found) {
+      throw new Error(
+        `session "${sessionId}" could not be scoped to an agent: `
+          + `${found.error instanceof Error ? found.error.message : String(found.error)}`,
+      )
+    }
+    return found.agent
   }
 
   /**
@@ -1769,7 +2206,6 @@ export class DshDriver {
     }
   }
 
-  /** Live session summaries, most recently updated first. */
   /**
    * Session summaries, newest first.
    *
@@ -1777,11 +2213,17 @@ export class DshDriver {
    * title — cheap for a handful of sessions and pointless for a page of 200, which
    * is why it is off by default. A title that cannot be read is omitted rather
    * than failing the listing.
+   *
+   * `includeWorktree` opts into one projection read per session, reporting the
+   * live working directory and any worktree record the forge panel created. That
+   * is how a caller tells two sessions of the same workspace apart when each is
+   * working in its own checkout — also off by default, for the same cost reason.
    */
   async listSessions(
     limit: number,
     options: {
       includeTitle?: boolean
+      includeWorktree?: boolean
       /** Only sessions whose workspace directory is this one (canonicalised). */
       cwd?: string
       /** Only sessions that are currently running (`true`) or idle (`false`). */
@@ -1813,6 +2255,26 @@ export class DshDriver {
     })
     const items = filtered.slice(0, limit)
     const titles = options.includeTitle === true ? await this.readTitles(items.map((item) => item.sessionId)) : new Map()
+    // The listing already carries summary projection hints on 0.2.2+, so the
+    // common case costs nothing extra. Only a row from an older profile (no
+    // `projections` hint) pays one exact per-session read.
+    const views = new Map<string, SessionViews>()
+    if (options.includeWorktree === true) {
+      for (const item of items) {
+        views.set(
+          item.sessionId,
+          item.projections === undefined
+            ? await this.readSessionViews(item.sessionId)
+            : viewsOfProjectionValues(item.projections.values),
+        )
+      }
+    }
+    // Archive and pin state is registry-global and cheap to read, so the flags are
+    // reported whenever the registry exposes its sets — a caller listing sessions
+    // should not have to guess why one disappeared from the DSH UI's view.
+    const registry = this.workspaceRegistry()
+    const archived = registry?.archivedSessionIds
+    const pinned = registry?.pinnedSessionIds
     // `total` counts what the filter matched, not what was returned: without it a
     // caller cannot tell "these are all my sessions" from "the first page of them".
     return {
@@ -1824,11 +2286,20 @@ export class DshDriver {
         blank: item.blank,
         updatedAt: item.updatedAt,
         ...(titles.get(item.sessionId) === undefined ? {} : { title: titles.get(item.sessionId) as string }),
+        ...(views.get(item.sessionId) === undefined ? {} : views.get(item.sessionId) as SessionViews),
         // Parentage is what turns a flat list into an agent tree: a caller can
         // see which sessions are subagents of the one it started, without reading
         // each transcript.
         ...(item.parentSessionId === undefined ? {} : { parentSessionId: item.parentSessionId }),
         ...(item.origin === 'subagent' ? { origin: 'subagent' as const } : {}),
+        // Only reported when the registry exposes its sets: older hosts have no
+        // archive feature at all, and claiming `false` there would be a guess.
+        ...(archived === undefined && pinned === undefined
+          ? {}
+          : {
+            archived: archived?.includes(item.sessionId) ?? false,
+            pinned: pinned?.includes(item.sessionId) ?? false,
+          }),
       })),
     }
   }
@@ -1935,6 +2406,11 @@ export class DshDriver {
     const newest = events.at(-1)
     const idleMs = newest === undefined ? null : Math.max(0, Date.now() - newest.time)
     const running = await this.liveRunning(sessionId)
+    // Read after the log, from the projection snapshot the log computed: the two
+    // describe different things (durable activity vs the directory the session
+    // currently works in), and a profile that cannot report projections simply
+    // omits both fields instead of failing a status read.
+    const views = await this.readSessionViews(sessionId)
     return {
       sessionId,
       running,
@@ -1948,6 +2424,54 @@ export class DshDriver {
       stalled: running && idleMs !== null && idleMs >= STALL_MS,
       logReadable,
       waitedMs: 0,
+      ...views,
+    }
+  }
+
+  /**
+   * Read the projection values reported beside a session's live state.
+   *
+   * Two rungs, cheapest first: `sessionController.projections` is cold-safe and
+   * does not activate the session, so it is the preferred exact read; the
+   * `sessionQuery.observeSession` lease is the fallback for a profile without that
+   * controller method, and is disposed immediately because not releasing it pins
+   * the prepared-session cache. Both fields are additive diagnostics: a profile
+   * without either reader reports neither rather than failing the read that
+   * actually mattered.
+   */
+  private async readSessionViews(sessionId: string): Promise<SessionViews> {
+    const controller = this.sessionController()
+    const projections = controller?.projections
+    if (typeof projections === 'function') {
+      try {
+        const value = await projections.call(controller as DshSessionController, { sessionId }, new AbortController().signal)
+        return viewsOfProjectionValues(value?.values)
+      } catch (error) {
+        this.log.debug(
+          '[dsh-as-mcp] could not read the projections of session %s: %s',
+          sessionId,
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+    }
+    const query = this.sessionQuery()
+    const read = query?.observeSession
+    if (typeof read !== 'function') return {}
+    let observation
+    try {
+      observation = await read.call(query, sessionId, { projectionMode: 'all' })
+    } catch (error) {
+      this.log.debug(
+        '[dsh-as-mcp] could not observe session %s for its projections: %s',
+        sessionId,
+        error instanceof Error ? error.message : String(error),
+      )
+      return {}
+    }
+    try {
+      return viewsOfProjectionValues(observation.projections?.values)
+    } finally {
+      observation[Symbol.dispose]?.()
     }
   }
 
@@ -3023,8 +3547,13 @@ export class DshDriver {
   /**
    * The durable session log.
    *
-   * `sessionQuery` is the purpose-built reader; `sessionController.inspect` is
-   * the fallback for a composition that mounts the controller without it.
+   * `sessionQuery` is the purpose-built whole-log reader. Two controller fallbacks
+   * cover compositions that mount the controller without it: ≤0.1.7's
+   * `inspect(sessionId)` returns the events directly, and 0.2.2 removed that
+   * method in favour of `events(request, signal)`, whose message-aligned page is
+   * flattened here (a page is enough for "what is open now", which is what the
+   * callers of this method need). A composition with neither gets an explicit
+   * capability error instead of a `TypeError` for a method that no longer exists.
    */
   private async readEvents(sessionId: string): Promise<readonly DshSessionEvent[]> {
     const query = this.sessionQuery()
@@ -3032,8 +3561,29 @@ export class DshDriver {
       const snapshot = await query.readSession(sessionId)
       return snapshot.events
     }
-    const inspected = await this.requireSessionController().inspect(sessionId)
-    return inspected.events
+    const controller = this.requireSessionController()
+    const inspect = controller.inspect
+    if (typeof inspect === 'function') {
+      const inspected = await inspect.call(controller, sessionId)
+      return inspected.events
+    }
+    const events = controller.events
+    if (typeof events === 'function') {
+      const page = await events.call(
+        controller,
+        { address: { kind: 'session', sessionId } },
+        new AbortController().signal,
+      )
+      return (page.records ?? [])
+        .filter((record) => record.type === 'event' && record.event !== undefined)
+        .map((record) => record.event as DshSessionEvent)
+    }
+    throw new DshCapabilityError(
+      'sessionQuery',
+      'this DSH profile provides no session log reader: sessionQuery is absent and this harness no longer '
+        + 'exposes sessionController.inspect() (removed in DSH 0.2.2). The @deepseek-ai/dsh-web-app bundle '
+        + 'provides sessionQuery.',
+    )
   }
 
   // ---------------------------------------------------------------------------
@@ -3053,7 +3603,9 @@ export class DshDriver {
    * 2. `sessionQuery.readSession` — the same events for a harness without
    *    `observeSession`, and the same inherited-prefix count, but no projection.
    * 3. `sessionController.inspect` — the older controller path, for a
-   *    composition that mounts the controller without the query service.
+   *    composition that mounts the controller without the query service on
+   *    versions before DSH 0.2.2 (which removed `inspect`; its `events` page is
+   *    deliberately not used here, because a bounded page would under-count).
    *
    * The log is authoritative; the projection is a cross-check. That ordering is
    * deliberate: the fold decomposes per turn and per model, and a projection that
@@ -3117,9 +3669,10 @@ export class DshDriver {
     }
 
     const controller = this.sessionController()
-    if (controller !== undefined) {
+    const inspect = controller?.inspect
+    if (controller !== undefined && typeof inspect === 'function') {
       try {
-        const inspected = await controller.inspect(sessionId)
+        const inspected = await inspect.call(controller, sessionId)
         return {
           sessionId,
           events: inspected.events,
@@ -3134,8 +3687,10 @@ export class DshDriver {
     if (failures.length > 0) throw failures[failures.length - 1]
     throw new DshCapabilityError(
       'sessionQuery',
-      'this DSH profile provides no session log reader (sessionQuery or sessionController), '
-        + 'so token usage cannot be read for any session.',
+      'this DSH profile provides no session log reader, so token usage cannot be read for any session. '
+        + 'sessionQuery is absent and sessionController.inspect() was removed in DSH 0.2.2; its replacement, '
+        + 'sessionController.events(), serves one bounded history page, which would silently under-count '
+        + 'tokens. The @deepseek-ai/dsh-web-app bundle provides sessionQuery.',
     )
   }
 
@@ -3752,8 +4307,7 @@ export class DshDriver {
     if (typeof timer === 'object' && 'unref' in timer) timer.unref()
 
     try {
-      const result = await registry.execute({
-        callId: `dsh-as-mcp-${randomUUID()}`,
+      const result = await this.executeAgentTool(registry, {
         name: request.name,
         arguments: request.args ?? {},
         agent,
@@ -3797,6 +4351,55 @@ export class DshDriver {
       clearTimeout(timer)
       request.signal?.removeEventListener('abort', relay)
     }
+  }
+
+  /**
+   * Run one tool call on whichever `ctx.tools.execute` contract the host implements.
+   *
+   * DSH 0.2.2 replaced the single-call input/output with a batch
+   * (`packages/core/tools/src/pipeline.ts`): a caller sends raw calls —
+   * `{calls: [{type: 'tool-call', id, name, arguments: <JSON string>}], signal, agent}`
+   * — and receives `{results: [{callId, result}]}`. Through 0.1.x the same member
+   * took one `ToolExecutionInput` and answered one `ToolExecutionResult`.
+   *
+   * The two shapes are told apart by `tools.resolve`, which shipped in the same
+   * release as the batch executor. Without that marker the legacy path runs, so
+   * both versions reach this method's single return type. This is the difference
+   * that made `dsh_tool_call` fail outright on 0.2.2 ("Tool batch execution
+   * failed") while its listing kept working: only the execution shape changed.
+   */
+  private async executeAgentTool(
+    registry: DshToolRegistry,
+    call: {
+      name: string
+      arguments: unknown
+      agent: DshAgentHandle
+      signal: AbortSignal
+    },
+  ): Promise<DshToolExecutionResult> {
+    const callId = `dsh-as-mcp-${randomUUID()}`
+    if (typeof registry.resolve !== 'function') {
+      return await registry.execute({
+        callId,
+        name: call.name,
+        arguments: call.arguments,
+        agent: call.agent,
+        signal: call.signal,
+      } satisfies DshToolExecutionInput) as DshToolExecutionResult
+    }
+    const output = await registry.execute({
+      calls: [{
+        type: 'tool-call',
+        id: callId,
+        name: call.name,
+        // The executor parses model-facing JSON and preserves invalid JSON as
+        // text; structured arguments therefore have to be serialized here.
+        arguments: JSON.stringify(call.arguments ?? {}),
+      }],
+      signal: call.signal,
+      agent: call.agent,
+    } satisfies DshToolBatchInput)
+    return toolBatchResultOf(output)
   }
 
   /** The tool names this configuration exposes. */
@@ -5062,7 +5665,81 @@ function statusSignature(status: SessionStatus): string {
     status.openStep,
     status.lastEventSeq,
     status.failure?.kind ?? '',
+    // Entering (or leaving) a worktree changes what the next turn works on, so a
+    // held `session_status { waitMs }` must report it as a change.
+    status.workingDirectory ?? '',
+    status.worktree?.path ?? '',
   ].join('|')
+}
+
+/**
+ * Unwrap the single result of a 0.2.2+ tool batch.
+ *
+ * This plugin sends a batch of exactly one call, so exactly one result is
+ * expected. Anything else is a contract violation and is reported as one rather
+ * than silently answering "no result" for a call that may have run.
+ */
+function toolBatchResultOf(output: unknown): DshToolExecutionResult {
+  const results = (output as { readonly results?: unknown } | undefined)?.results
+  if (!Array.isArray(results) || results.length === 0) {
+    throw new Error('the harness tool executor answered without a result for the call')
+  }
+  const result = (results[0] as { readonly result?: unknown } | undefined)?.result
+  if (typeof result !== 'object' || result === null
+    || typeof (result as { readonly isError?: unknown }).isError !== 'boolean') {
+    throw new Error('the harness tool executor answered with an unrecognized result shape')
+  }
+  return result as DshToolExecutionResult
+}
+
+/**
+ * Pick the two session views this plugin reports out of a projection value map.
+ *
+ * `workingDirectory` is a base-bundle projection (a string or null);
+ * `forgeWorktree` only exists when the forge bundle registers it, hence the
+ * tolerant record parse. An absent key means "not reported", never "not in a
+ * worktree", so an unknown profile shape degrades silently instead of claiming a
+ * directory.
+ */
+function viewsOfProjectionValues(values: Readonly<Record<string, unknown>> | undefined): SessionViews {
+  if (values === undefined) return {}
+  const directory = values['workingDirectory']
+  const worktree = worktreeInfoOf(values['forgeWorktree'])
+  return {
+    ...(directory === null || typeof directory === 'string' ? { workingDirectory: directory } : {}),
+    ...(worktree === undefined ? {} : { worktree }),
+  }
+}
+
+/** Projection values this plugin reports beside a session's live state. */
+interface SessionViews {
+  readonly workingDirectory?: string | null
+  readonly worktree?: WorktreeInfo | null
+}
+
+/**
+ * Validate the harness's `forgeWorktree` projection value.
+ *
+ * That projection is written by the DSH UI's forge panel (it records the worktree
+ * *the panel created* for a session) and is absent from profiles whose UI never
+ * offers the option, so this is deliberately a tolerant parse: anything that is
+ * not a complete record means "no worktree record", never an error.
+ */
+function worktreeInfoOf(value: unknown): WorktreeInfo | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const { path, branch, baseCommit, repositoryRoot } = record
+  if (typeof path !== 'string' || typeof branch !== 'string'
+    || typeof baseCommit !== 'string' || typeof repositoryRoot !== 'string') {
+    return undefined
+  }
+  return {
+    path,
+    branch,
+    baseCommit,
+    repositoryRoot,
+    from: typeof record.from === 'string' ? record.from : null,
+  }
 }
 
 function summarizeTurn(

@@ -218,18 +218,24 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建；传 `createDirectory: false` 则要求它已存在）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、目录是否还在，以及**挂在该注册下**的会话数（用 `workspaceId` 创建的会话）——这不是"cwd 恰好是该目录"的会话数，后者由 `session_list { cwd }` 回答。 |
 | `workspace_delete` | 注销一个工作区（文件与会话历史不受影响）；幂等。 |
-| `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话。 |
+| `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话，可同时给它一个独立的 Git 检出。不指定模型时沿用本 DSH 实例的默认路由（`provider` 与 `model` 必须成对出现——只给一半会在会话创建之前被拒绝；给了不可路由的一对仍会创建会话，但会在 `modelSelectionError` 里说明）。传 `worktree: true`（或 `{ name, from }`）会在会话建成后从工作区创建 Git 分支与检出，并把它设为该会话的实时工作目录：带 `workspaceId` 创建的会话保持所在工作区分组（持久目录仍是工作区），只用 cwd 创建的会话则不在任何分组里。回复带 `worktree` 记录和新的 `workingDirectory`；worktree 创建失败不会回滚会话——它仍能在工作区使用，回复用 `worktreeError` 说明原因（可再用 `worktree_create` 重试）；profile 没有 worktrees 服务时，整个调用在创建会话之前就被拒绝。 |
+| `worktree_create` | 从会话当前的检出创建 Git 分支与检出，并把它设为该会话的工作目录——即 DSH 界面「New worktree」选项对新会话做的事，但用于已存在的会话（会话有正在跑的 turn 时拒绝；同一会话上的并发 worktree 调用会被串行化）。`name` 是新分支名，也是源检出 `.agents/worktrees/` 下的目录名；`from` 是本地 commit、分支或 tag（默认取检出的 `HEAD`）；未提交的文件留在源检出里，分支或检出名已存在则失败。回复带 `path`、`branch`、`baseCommit`、`repositoryRoot` 与 `from`——保存它，`worktree_restore` 要用。需要 worktrees 服务。 |
+| `worktree_restore` | 当 worktree 目录被会话之外的操作删除后，按记录在 `path` 的位置重新检出：`branch` 还在就检出该分支，否则在 `baseCommit` 上重建，仓库根用记录的 `repositoryRoot`。会话当前的工作目录不变；随目录一起丢掉的未提交修改无法恢复。传入 `worktree_create`（或 `session_status.worktree`）返回的那条记录。需要 worktrees 服务。 |
 | `session_fork` | 把一个会话（存活的，或从磁盘恢复的）分叉成继承其事件前缀的子会话（可用 `atSeq` 指定事件位置，或用 `atTurn` 指定轮次边界；不指定时 harness 取最近一个完整轮次）。从该点继续只需一轮，不用重放历史；`session_usage` 会单独报出继承前缀的用量。 |
 | `session_set_model` | 切换后续轮次使用的 provider 路由与模型：先用便宜模型、难任务时升级、或某路由不可用时回退；`reasoningEffort` 可为同一路由提高思考预算。回复里的按模型用量会显示每条路由各花了多少。 |
 | `session_rename` | 给会话设置显式的用户标题，让外部 harness 为任务起的名字在 DSH 界面里保持不变（同时停止自动生成标题）。若该会话正被另一个 DSH 进程持有写句柄，harness 会拒绝并在错误里说明。 |
 | `session_search` | 对会话**消息内容**做搜索（FTS 词/短语），每条命中返回 `sessionId`、一段 snippet，以及（会话列表可读时）该匹配的 `cwd`/`updatedAt`/`running`，subagent 会话还带 `parentSessionId`/`origin`；harness 单次上限 20 条并给 `hasMore`。匹配的是词/短语（不是任意子串），多个词须同时命中。**需要开启**：随包组合把 `session-query` 配成 `openAt: "never"`，此时该工具会说明如何启用索引，而不是假装搜索过。 |
-| `session_list` | 存活会话摘要，按最近更新排序；`includeTitle` 附加每个会话的最新标题（每会话一次日志读取），`cwd`/`running` 会在 limit 生效前过滤。subagent 会话会带 `parentSessionId` 与 `origin: "subagent"`；`origin`（`root`/`subagent`）在 limit 之前过滤，因此扁平列表可当树视图用。回复带 `total`（截断前匹配数）以及 limit 有隐藏时的 `truncated`。 |
-| `session_status` | 单个会话的实时状态，供 `session_prompt { wait: false }` 这类"先启动、后观察"的用法：`running`、当前 `turn`/`step`、最新事件（`lastEventSeq`/`lastEventAt`）、`idleMs`（日志安静了多久）、`stalled`（在运行但已静默一分钟——是症状，不是结论）、最后一场轮次的结束方式（`lastTurn.reason`），以及异常结束时的 `failure`。`waitMs` 会把调用挂起到"状态发生变化"或超时（上限 60 秒），上游因此可以每次变化报一次，而不必猜轮询间隔。只读。 |
+| `session_list` | 存活会话摘要，按最近更新排序；`includeTitle` 附加每个会话的最新标题（每会话一次日志读取），`includeWorktree` 附加每行的实时 `workingDirectory` 与 forge 面板的 `worktree` 记录（每会话一次 projection 读取——同一工作区的多个会话各在自己的检出里工作时，靠它区分）；`cwd`/`running` 会在 limit 生效前过滤。每行还带 `archived` 与 `pinned`，读自 DSH 侧边栏归档/置顶动作写入的同一组 registry 集合。subagent 会话会带 `parentSessionId` 与 `origin: "subagent"`；`origin`（`root`/`subagent`）在 limit 之前过滤，因此扁平列表可当树视图用。回复带 `total`（截断前匹配数）以及 limit 有隐藏时的 `truncated`。 |
+| `session_status` | 单个会话的实时状态，供 `session_prompt { wait: false }` 这类"先启动、后观察"的用法：`running`、当前 `turn`/`step`、最新事件（`lastEventSeq`/`lastEventAt`）、`idleMs`（日志安静了多久）、`stalled`（在运行但已静默一分钟——是症状，不是结论）、最后一场轮次的结束方式（`lastTurn.reason`），以及异常结束时的 `failure`。profile 能读 session projection 时还会报 `workingDirectory`（会话当前实际工作的目录——进入 worktree 后就是那个检出）和 `worktree`（forge 面板为它创建的 worktree 记录）；两者任一变化都算 `waitMs` 眼中的一次变化，因此挂着等的调用会在会话进入 worktree 时立即返回，而不是睡到上限。`waitMs` 会把调用挂起到"状态发生变化"或超时（上限 60 秒），上游因此可以每次变化报一次，而不必猜轮询间隔。只读。 |
 | `session_prompt` | 给 DSH 会话下发一个任务；默认等待本轮结束，返回回复、agent 调过的工具调用，以及本轮的 token 用量和该会话的累计量。`toolCalls` 控制每次调用的回显量：`summary`（默认）只给名称/id/参数字节数，`full` 附带参数（受 `maxArgumentChars` 限制），`none` 只留计数。可用 `images` 附带截图（png/jpeg/webp/gif，最多 4 张；harness 会真正解码，因此只有文件头、能被 `file_read_image` 嗅探识别的文件会被判为 malformed）。带 `idempotencyKey` 时可安全重试：重复调用会返回已有轮次，而不是把任务再发一遍；若重试带 `wait: true`，它会**等待**那一轮结束——这正是"先用 `wait: false` 排队、之后再来等它的结果"的做法。客户端带 `progressToken` 时，等待期间最多每秒一次 `notifications/progress`。`maxReplyChars` 可选地限制 agent 最终回复长度（被截断时带 `replyTruncated` 和原始 `replyChars`），`turn.models` 列出实际作答的 `provider/model`。客户端对该调用发出 `notifications/cancelled` 时，会中止对应轮次，等待以 `turn.aborted: true` 收尾——这条通知由端点自己路由，因为所用 SDK 版本只确认、不处理它。用量快照只有在轮次仍在运行时才带 `partial: true`；取消后已结算的轮次给出的是最终数字。 **同一连接**在轮次运行中再次 prompt 会排在其后（本端点对每个会话一次只跑一个轮次），而不是进入 harness 收件箱；要让消息真正排在运行中的轮次后面，需要第二个 MCP 客户端，或用 `mode: "steer"` 把它并入当前轮次。 |
 | `session_messages` | 读取会话的用户/助手对话记录；`sinceSeq`/`role` 让它成为增量轮询，`maxCharsPerMessage` 限制每条消息长度（被截断的消息带 `truncated` 与原始 `chars`），每条消息还带队列操作要用的 `id`（用户消息另带 `requestId`，即 `idempotencyKey` 派生出的准入 id），`includeToolCalls` 会把每条助手消息里的工具调用（名称、call id、参数 JSON 长度，以及工具答完后结果的长度与是否出错）折叠进记录，`includeToolResults` 则把每个工具结果作为独立的 `role: "tool"` 行（callId、文本、error）加入，让一次读取覆盖完整时间线（传 `"errors"` 只保留失败的结果）；助手行与工具行还带 `turn`/`step`，用 `turn: N` 或 `fromTurn`/`toTurn` 可把读取收窄到某一轮或某个阶段，`beforeSeq` 可向前翻页：传入你手上最老的 seq，返回更早窗口的尾部，因此长于窗口的完整记录也能读完。回复带 `total`（过滤器匹配到的消息数）以及在 limit 窗口隐藏了更早消息时的 `truncated`。 |
 | `session_queue` | 只传 `sessionId` 时列出**待执行队列**（排队消息还没有对话事件，所以 `session_messages` 看不到它）；带 `messageId` + `action` 时修改其中一条：`remove`（不再执行）、`edit`（替换文本，消息 id 保持不变，无需重新列队）、`steer`（插入正在运行的轮次——它会作为用户消息出现在对话记录里，该轮次会据此行动）。`session_cancel` 停的是当前轮次，这个工具改的是它后面排队的活。 |
 | `session_tool_result` | 读取某次工具调用的结果，可用 `callId`（来自 `session_messages { includeToolCalls: true }`）或 `toolName`（该工具最近一次已完成的调用）定位：返回文本、原始长度、harness 是否标记为错误；`maxChars` 截断，`from: "end"` 保留尾部（堆栈与错误通常在末尾）。调试失败的工具而不必重读整段记录。 |
 | `session_cancel` | 让 agent 停下当前这一轮。 |
+| `session_archive` | 归档一个会话——与 DSH 侧边栏的归档动作写入同一个 registry 全局归档集。归档后会话从界面分组中消失、后续轮次被拒绝，但日志仍保留，可用 `session_unarchive` 恢复。会话还有正在运行的工作时，除非传 `stopActivity: true` 否则拒绝归档；那个开关同时也要求停掉这些工作，因此必须由调用方显式请求。不删除任何东西。 |
+| `session_unarchive` | 把归档的会话放回它在 DSH 界面里记录的位置。幂等：对未归档的 id 不算错误；日志从未被动过，因此会话重新可见、可继续 prompt。 |
+| `session_pin` | 把会话置顶到 DSH 界面的会话列表（与侧边栏置顶写入同一个 pin 集合）。会话必须存在且未归档；置顶幂等。 |
+| `session_unpin` | 把会话从 DSH 界面的 pin 集合里移除。幂等：对未置顶的 id 不算错误。 |
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。传 `sessionIds` 可一次结算多个已知会话，传 `cwd` 可汇总某个工作目录里跑过的所有会话。 |
 | `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件（两者都是**字节**偏移，因此 EOF 处或之后的偏移是空的完整读取），`maxBytes` 用更小的窗口降低单次开销；`sha256: true` 返回整个文件的哈希，作为后续写入/编辑的比较并交换值。 |
 | `file_read_image` | 读取图片（png/jpeg/gif/webp/bmp，按字节嗅探）并以 MCP image block 返回，让你直接看截图或图表而不是靠猜。上限 8 MiB。 |
@@ -275,8 +281,47 @@ workspace_create { path: "/Users/me/project" }
 - **`ask_user_question` 与 `present`** 会直接触达键盘前的人。
 - **`workflow`、`ralph`、`send_message`、`spawn_teammate`、`schedule_create`** 会启动比本次调用活得更久的
   工作；**`create_goal`、`update_goal`** 会维持无人值守的持续执行。
+- **`create_worktree`**（DSH 0.2.2+）会改变调用方会话的工作目录。同一个操作以一等工具 `worktree_create`
+  暴露：它把操作限定在本端点有权寻址的会话上，并报出保留的分支与检出；把面向模型的这个工具放进白名单，
+  会让 agent 移动它碰巧所在的任意会话，而且把记录藏起来。
 
 运维方可以通过 `agentTools.allow` 有意放宽，或用 `agentTools.deny` 从默认集合里减去。
+
+## 工作树
+
+一个会话可以在一份自己的、来自同一仓库的 Git 检出里工作。这正是 DSH 界面「New worktree」选项做的事：
+从某个 revision 新建分支，检出到源检出的 `.agents/worktrees/` 下，并把它设为会话的实时工作目录。
+同一工作区组里的多个会话因此可以各自隔离地干活。
+
+保持侧边栏分组的是创建顺序：`session_create { worktree: true }` 会**先**把会话建在调用方指定的工作区
+（或裸目录）上，再从那份检出创建 worktree。会话的持久目录始终是工作区，所以带 `workspaceId` 创建的
+会话在 DSH 界面里仍属于同一个工作区分组；只用裸 `cwd` 创建的会话本来就不在任何组里，也不会因为进入
+worktree 而进组。它的工具、命令和 prompt 则在 worktree 里运行。对已存在的会话，
+`worktree_create { sessionId, name?, from? }` 做同样的移动；会话有正在运行的 turn 时拒绝（同一会话上的
+并发调用会被串行化）。
+
+典型流程：
+
+```
+session_create { workspaceId: "...", worktree: true }
+  -> session_prompt { sessionId: "...", prompt: "在这个检出里实现功能；别动 main。" }
+  -> session_status { sessionId: "..." }          # workingDirectory 已是新检出
+```
+
+`session_create`（以及 `worktree_create`）的回复带着 `worktree_restore` 需要的记录：`path`、`branch`、
+`baseCommit`、`repositoryRoot`（外加 `from` revision，来自 `HEAD` 时为 `null`）。保存它：如果检出目录被
+会话之外的操作用删掉，`worktree_restore` 会把那个分支重新检出——分支也被删了就在 `baseCommit` 上重建
+——并且不改会话当前的工作目录。随目录一起丢掉的未提交修改无法恢复。
+
+有两条限制需要讲清楚。**这些工具需要 worktrees 服务**，它由 DSH Desktop/Web 里的 forge bundle 提供；
+`dsh_info.harnessServices.worktrees` 报出它，`toolAvailability` 会点名当前 profile 服务不了的工具。没有该服务时，`session_create { worktree }` 在创建会话之前就被拒绝，端点其余部分不变。**worktree 不是
+commit**：它是一个分支加一份检出，未提交的文件留在源检出、不会被复制，分支或检出名已存在时直接失败而
+不是复用。
+
+profile 能读 session projection 时，`session_status` 会报 `workingDirectory` 与 forge 面板的 `worktree`
+记录，`session_list { includeWorktree: true }` 把同样的两个字段折进每一行。完整的宿主侧契约——服务签名、
+分组证明、失败矩阵与推荐操作顺序——见 `docs/WORKTREE-INTEGRATION-CONTRACT.md`；本次发布背后的能力审计是
+`docs/NEW-CAPABILITIES-0.2.2.md`。
 
 ## 现代客户端的 turn 结束通知
 
@@ -766,13 +811,16 @@ profile 推导同一份映射；不过配置 profile 的人应当能在一处读
 
 | 工具组 | 需要 | 说明 |
 | --- | --- | --- |
-| `dsh_info`、按 id 的 `session_usage` | 只需可读的会话日志 | 只要有 `sessionQuery`（或控制器的 `inspect` 回退）就能按 id 读用量 |
+| `dsh_info`、按 id 的 `session_usage` | 只需可读的会话日志 | 只要有能读整份日志的来源（`sessionQuery`，或 ≤0.1.7 上控制器的 `inspect` 回退）就能按 id 读用量；0.2.2 移除了 `inspect`，而用量刻意不退回有界 `events` 分页，因为那会少算 |
 | `session_create` / `session_list` / `session_prompt` / `session_messages` / `session_cancel` / `session_fork` / `session_rename` / `session_set_model` | `sessionController` | 只有必须等待的地方才等待（`session_create`/`prompt`）；其余工具会明确报缺失服务 |
 | `session_search` | `sessionController.search` **且** 会话查询索引已打开 | `session-query-sqlite` 默认 `openAt: "never"`；改为 `startup` 或 `first-search` 才启用搜索 |
+| `worktree_create` / `worktree_restore` / `session_create { worktree }` | `worktrees` **且** `sessionController.resolveAgent` | 服务由 DSH Desktop/Web 的 forge bundle（`@deepseek-ai/dsh-experimental-forge-bundle`）提供；裸 profile 没有它，`dsh_info.toolAvailability` 会把这些工具报成不可用，`session_create { worktree }` 在创建会话之前就被拒绝。会话的执行环境里还需要 Git 与 Node |
+| `session_status.workingDirectory` / `session_status.worktree` / `session_list { includeWorktree }` | 可读的 session projection（`sessionController.projections` 或 `sessionQuery.observeSession`） | 可选：没有它时两个回复都省略这两个字段，其余内容不变 |
+| `session_archive` / `session_unarchive` / `session_pin` / `session_unpin` | `workspaceRegistry.archiveSession` / `pinSession` | 与 DSH 侧边栏动作写入同一组 registry 集合；方法缺失时这些工具被报成不可用 |
 | `workspace_*` | `workspaceRegistry` | 常规 profile 由 base bundle 提供 |
 | `file_*` | `fs` | 部署的沙箱策略照样生效；`file_read_image` 还需要受支持的图片格式 |
 | `shell_*` | `shell` | `shell_run` 有 `run()` 用 `run()`、否则 `execute()`；后台任务需要 `start()` 或 `execute()` |
-| `dsh_tool_list` / `dsh_tool_call` | `tools` **且** `sessionController.resolveAgent` | allow-list 叠加在会话自身策略之上 |
+| `dsh_tool_list` / `dsh_tool_call` | `tools` **且** `sessionController.resolveAgent` | `dsh_tool_call` 会自动识别宿主的工具执行契约（≤0.1.7 的单调用、0.2.2+ 的批量）；allow-list 叠加在会话自身策略之上 |
 | 用量里的金额 | `costMeter` | 第三方价格插件（`dsh-cost-meter`）；默认没有，回复会说明 |
 | `approval.policy: "allow"` | `approval` **且** 能解析出 agent | 缺失时 create/fork 回复带 `approvalPolicyError` |
 | `http.mountOnWebServer` | `webServer` | 插件等待它出现再挂载；等待期间 `dsh_info.mountNote` 会说明 |
@@ -798,8 +846,28 @@ profile 推导同一份映射；不过配置 profile 的人应当能在一处读
   表单正在被提供时，浏览器半边才会注册那个单元格；宿主插件页没有该插槽时不显示配置单元格，设置页
   入口照常工作。这个插槽按 bundle 的包名派发，所以 key 必须是包名——写成别的值不会报错，只是静默
   地什么都不渲染。
-- **用量需要会话日志。** token 数字经 `sessionQuery`（优先）或 `sessionController.inspect` 从持久
-  日志折出；`dsh_info` 把这一点报成 `tokenUsage`。两者都没有时，`session_prompt` 的回复会带
+- **0.2.2 的工具执行契约会自动识别。** DSH 0.2.2 把 `ctx.tools.execute` 从"单调用输入/输出"换成了
+  批量契约（输入是带 JSON 字符串参数的原始调用，输出是一个 `{ results }` 批），这会让
+  `dsh_tool_call` 直接以 "Tool batch execution failed" 失败，而 `dsh_tool_list` 一直正常。驱动现在
+  靠 `tools.resolve`（与批量执行器同版发布）区分两种形状，按对应信封发送一次调用并解包结果，因此
+  同一份构建在 ≤0.1.7 与 0.2.2+ 上都能用；allow-list 与作用域检查在这两条路径之前执行。
+- **0.2.2 移除了 `sessionController.inspect`。** 日志读取优先用 `sessionQuery`，≤0.1.7 上仍用
+  `inspect`，0.2.2 上回退到控制器的 `events` 消息对齐分页——这对"现在开着什么"和对话记录都够用，
+  只是有界分页在很长的日志上覆盖得少一些。用量需要整份日志，并且刻意不用分页读取，因为那会悄悄
+  少算：没有 `sessionQuery`（或 ≤0.1.7 的 `inspect`）时，它会报明确的能力错误，而不是 `TypeError`。
+  `session_search` 在随包发布的 Desktop profile 上依旧不可用：`session-query` 索引配的是
+  `openAt: "never"`，工具会解释这一点而不是假装搜索过。
+- **Worktree（Git）。** `worktree_create`、`worktree_restore` 与 `session_create { worktree }` 需要
+  `ctx.worktrees`，首次验证于 DSH `0.2.2-rc.1`，由 Desktop/Web 组合的 experimental forge bundle
+  （`@deepseek-ai/dsh-experimental-forge-bundle`）提供。更老或更裸的 profile 上，worktree 工具会在
+  `dsh_info.toolAvailability` 里被报成不可用，`session_create { worktree }` 在创建会话之前就被拒绝；
+  端点其余部分不变。只要有 projection 读取来源，`session_status.workingDirectory` 与
+  `session_list { includeWorktree }` 在没有 forge bundle 时也能用；没有读取来源时这两个字段会被
+  省略，而不是猜一个值。
+- **用量需要会话日志。** token 数字经 `sessionQuery`（优先）或 ≤0.1.7 上的 `sessionController.inspect`
+  从持久日志折出；0.2.2 移除了 `inspect`，并且刻意不用它那个有界 `events` 分页来算用量（会少算），
+  所以没有 `sessionQuery` 的 0.2.2 profile 会报 `tokenUsage: false`。`dsh_info` 把这一点报成
+  `tokenUsage`。两者都没有时，`session_prompt` 的回复会带
   `usageUnavailable` 和原因，而不是假装这一轮没花钱；会话工具照常可用；带 `sessionId` 的
   `session_usage` 会返回一行 `error`（其总量不含它）；不带 `sessionId` 时只报本端点自己创建的
   会话（或给出解释的空报告），而 `all: true` 因为需要枚举会话，仍会报能力缺失错误。钱还需要
@@ -832,7 +900,9 @@ profile 推导同一份映射；不过配置 profile 的人应当能在一处读
   harness 的文件系统服务有意不暴露 `mkdir`。其余读写一律走 `ctx.fs`，所以 DSH agent 所处的
   路径规则与沙箱同样约束调用方。
 - **没有删除会话。** harness 只有 `archiveSession`/`unarchiveSession`，没有 delete，本插件
-  同样不提供。
+  同样不提供。`session_archive`/`session_unarchive` 与 `session_pin`/`session_unpin` 写入的正是
+  DSH 侧边栏动作写入的那组 registry 集合，`session_list` 会报出每行的 `archived`/`pinned` 标志；
+  归档保留日志且可逆，这里没有任何操作会删掉对话记录。
 
 ## 开发
 
@@ -864,10 +934,13 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 
 | 启用的工具组 | 公布工具数 | 最近结果 |
 | --- | --- | --- |
-| 全部六组 | 29 | `--with-model --with-subagent` 下 live-checks 195/195；验收 166/166，同一轮启动、搜索索引开启 |
-| 仅 `session`、`usage` | 14 | `--with-model` 下 live-checks 95/95（文件/shell/工作区段落跳过） |
-| `workspace`、`session`、`agentTools`、`usage` | 19 | live-checks 64/64（被关闭的组会在原因里点名 `tools.<group>` 开关） |
+| 全部六组 | 35 | `--with-model --with-subagent` 下 live-checks 195/195；验收 166/166，同一轮启动、搜索索引开启 |
+| 仅 `session`、`usage` | 20 | `--with-model` 下 live-checks 95/95（文件/shell/工作区段落跳过） |
+| `workspace`、`session`、`agentTools`、`usage` | 25 | live-checks 64/64（被关闭的组会在原因里点名 `tools.<group>` 开关） |
 | 仅 `files`、`shell` | 11 | live-checks 68/68（会话/用量/队列/搜索段落跳过） |
+
+"公布工具数"一列是当前工具面（0.53.0：session 组 18 个、总计 35 个）；"最近结果"一列记录的是
+针对 0.52.86（尚无这六个新工具）的实测，本次发布没有重测。
 
 第五个形态 `mountonly` 以 `http.enabled: false` + `mountOnWebServer: true` 启动，经 DSH 自己的
 web 服务器验证端点：109/109，全部廉价，其中包含 `dsh_info` 必须报 `listening: false`、

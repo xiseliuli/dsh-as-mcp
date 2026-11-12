@@ -91,6 +91,56 @@ function fakeTools(options: {
 }
 
 /**
+ * A `ctx.tools` double speaking the 0.2.2+ batch contract.
+ *
+ * `resolve` is the marker the driver uses to tell the contracts apart: it shipped
+ * in the same release as the batch executor, and the single-call input no longer
+ * exists there. `arguments` is a JSON string because the real executor parses
+ * model-facing JSON and preserves invalid JSON as text.
+ */
+function fakeBatchTools(options: { visible?: string[]; fail?: boolean; text?: string } = {}) {
+  const visible = options.visible ?? [
+    'read', 'write', 'edit', 'glob', 'grep', 'bash',
+  ]
+  const batches: {
+    calls: { type: string; id: string; name: string; arguments: string }[]
+    agent: unknown
+    signal: AbortSignal
+  }[] = []
+  return {
+    batches,
+    tools: {
+      resolve: async () => ({}),
+      schemas: () => visible.map((name) => schema(name)),
+      execute: async (input: {
+        calls: { type: string; id: string; name: string; arguments: string }[]
+        agent?: unknown
+        signal: AbortSignal
+      }) => {
+        batches.push({ calls: input.calls, agent: input.agent, signal: input.signal })
+        const call = input.calls[0] as { id: string; name: string }
+        return {
+          results: [{
+            callId: call.id,
+            result: options.fail === true
+              ? {
+                isError: true as const,
+                error: { message: 'refused: batch policy' },
+                content: [{ type: 'text' as const, text: 'denied' }],
+              }
+              : {
+                isError: false as const,
+                value: { ran: call.name },
+                content: [{ type: 'text' as const, text: options.text ?? `ran ${call.name}` }],
+              },
+          }],
+        }
+      },
+    },
+  }
+}
+
+/**
  * A driver over doubles.
  *
  * A session resolver is always present: every tool call needs a scope, so a test
@@ -430,5 +480,135 @@ describe('callAgentTool', () => {
     const driver = new DshDriver(ctx, () => testConfig())
     await expect(driver.callAgentTool({ name: 'read', sessionId: SESSION, timeoutMs: 1_000 }))
       .rejects.toThrow(/provides no tools service/)
+  })
+})
+
+describe('callAgentTool on the DSH 0.2.2 batch contract', () => {
+  it('sends one raw call with JSON-string arguments and unwraps its batch result', async () => {
+    const tools = fakeBatchTools()
+    const result = await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'read',
+      args: { file_path: '/a.txt' },
+      sessionId: SESSION,
+      timeoutMs: 1_000,
+    })
+
+    expect(result).toMatchObject({ name: 'read', ok: true, value: { ran: 'read' }, text: 'ran read' })
+    const batch = tools.batches[0]
+    expect(batch?.calls).toHaveLength(1)
+    expect(batch?.calls[0]).toMatchObject({ type: 'tool-call', name: 'read' })
+    // The executor parses model-facing JSON: a structured argument object sent as
+    // an object would be preserved as text and reach the tool as a string.
+    expect(batch?.calls[0]?.arguments).toBe(JSON.stringify({ file_path: '/a.txt' }))
+    // The call id is the harness's correlation id, not the caller's.
+    expect(batch?.calls[0]?.id).toMatch(/^dsh-as-mcp-/)
+    // The agent is the scope the batch runs under.
+    expect(batch?.agent).toBe(AGENT)
+    expect(batch?.signal).toBeInstanceOf(AbortSignal)
+    expect(batch?.signal.aborted).toBe(false)
+  })
+
+  it('serializes an absent argument object as an empty JSON object', async () => {
+    const tools = fakeBatchTools()
+    await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'read', sessionId: SESSION, timeoutMs: 1_000,
+    })
+    expect(tools.batches[0]?.calls[0]?.arguments).toBe('{}')
+  })
+
+  it('unwraps a failed batch result as ok: false', async () => {
+    const tools = fakeBatchTools({ fail: true })
+    const result = await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'write',
+      args: { file_path: '/a.txt', content: 'x' },
+      sessionId: SESSION,
+      timeoutMs: 1_000,
+    })
+
+    // A refusal from the pipeline is a normal outcome: the caller needs the reason
+    // to decide what to do next, not a rejection.
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/refused: batch policy/)
+    expect(result.text).toBe('denied')
+  })
+
+  it('uses the legacy contract when the registry has no resolve marker', async () => {
+    // The ≤0.1.7 shape: one ToolExecutionInput in, one ToolExecutionResult out,
+    // and no `resolve` marker. The existing fake is exactly that registry.
+    const tools = fakeTools()
+    const result = await driverWith({ tools: tools.tools }).callAgentTool({
+      name: 'read',
+      args: { file_path: '/a.txt' },
+      sessionId: SESSION,
+      timeoutMs: 1_000,
+    })
+
+    expect(result).toMatchObject({ ok: true, text: 'ran read' })
+    // Structured arguments travel as they are: there is no JSON-string boundary
+    // in the legacy contract.
+    expect(tools.calls[0]).toMatchObject({ name: 'read', args: { file_path: '/a.txt' } })
+    expect(tools.calls[0]).not.toHaveProperty('calls')
+  })
+
+  it('selects the batch contract from the resolve marker, not from an argument name', async () => {
+    const seen: unknown[] = []
+    const tools = {
+      resolve: async () => ({}),
+      schemas: () => [schema('read')],
+      execute: async (input: unknown) => {
+        seen.push(input)
+        return { results: [{ callId: 'c', result: { isError: false, value: null, content: [] } }] }
+      },
+    }
+
+    await driverWith({ tools }).callAgentTool({ name: 'read', sessionId: SESSION, timeoutMs: 1_000 })
+
+    // The batch input is `{calls, signal, agent}`, never a single call object.
+    expect(seen[0]).toHaveProperty('calls')
+    expect(seen[0]).not.toHaveProperty('callId')
+    expect(seen[0]).not.toHaveProperty('name')
+  })
+
+  it('reports a batch answer that carries no result instead of claiming the call ran', async () => {
+    const tools = {
+      resolve: async () => ({}),
+      schemas: () => [schema('read')],
+      execute: async () => ({ results: [] }),
+    }
+
+    await expect(driverWith({ tools }).callAgentTool({
+      name: 'read', sessionId: SESSION, timeoutMs: 1_000,
+    })).rejects.toThrow(/answered without a result/)
+  })
+
+  it('reports a batch result of an unrecognized shape rather than guessing', async () => {
+    const tools = {
+      resolve: async () => ({}),
+      schemas: () => [schema('read')],
+      execute: async () => ({ results: [{ callId: 'c', result: { value: 1 } }] }),
+    }
+
+    await expect(driverWith({ tools }).callAgentTool({
+      name: 'read', sessionId: SESSION, timeoutMs: 1_000,
+    })).rejects.toThrow(/unrecognized result shape/)
+  })
+
+  it('passes a cancellable signal through the batch path too', async () => {
+    let received: AbortSignal | undefined
+    const tools = {
+      resolve: async () => ({}),
+      schemas: () => [schema('read')],
+      execute: async (input: { signal: AbortSignal }) => {
+        received = input.signal
+        return { results: [{ callId: 'c', result: { isError: false, value: null, content: [] } }] }
+      },
+    }
+
+    await driverWith({ tools }).callAgentTool({ name: 'read', sessionId: SESSION, timeoutMs: 1_000 })
+
+    // Cancellation is the caller's deadline or an MCP cancel; either way the
+    // batch executor must be reachable through a signal.
+    expect(received).toBeInstanceOf(AbortSignal)
+    expect(received?.aborted).toBe(false)
   })
 })

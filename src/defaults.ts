@@ -59,6 +59,11 @@ export const DEFAULT_TOOLS = {
  * - `workflow`, `ralph`, `spawn_teammate`, `send_message` and `schedule_create`
  *   start work that outlives the call; `create_goal` and `update_goal` sustain
  *   unattended execution.
+ * - `create_worktree` changes the calling session's working directory (DSH 0.2.2+).
+ *   This plugin exposes that as the first-class `worktree_create`, which scopes the
+ *   operation to a session this endpoint may address and reports the retained
+ *   branch and checkout; adding the model tool to this list would bypass that
+ *   reporting and act on whatever session the agent happens to be.
  *
  * All of those are denied by omission, and a tool a future harness adds is denied
  * by default rather than exposed by default. What remains is the deterministic,

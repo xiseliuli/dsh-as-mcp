@@ -6,6 +6,58 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.53.0
+
+- The endpoint now covers Git worktrees and the sidebar's session organization. Six new tools —
+  `worktree_create`, `worktree_restore`, `session_archive`, `session_unarchive`, `session_pin`,
+  `session_unpin` — bring the surface from 29 to 35. `session_create` gained
+  `worktree: true | { name, from }`: the session is created first in the workspace (or bare
+  directory), so a session created with `workspaceId` keeps its place in that workspace group (a
+  cwd-only session stays ungrouped), and only then is a Git branch created, checked out and made the
+  session's live working directory — the sequence the DSH UI's "New worktree" option performs. A
+  failed worktree request leaves the session usable in the workspace and reports `worktreeError`
+  (retry with `worktree_create`); a profile with no worktrees service is refused *before* the
+  session is created. `worktree_create` does the same for an existing session, refusing while a turn
+  is running and serializing concurrent worktree operations per session (the harness service has no
+  lock of its own). `worktree_restore` re-checks a removed worktree out from the record
+  `worktree_create` returned, recreating the branch at `baseCommit` when it was deleted too.
+  `session_status` reports `workingDirectory` and the forge panel's `worktree` record when the
+  profile can read projections, and a change in either now wakes a held `waitMs`; `session_list`
+  gained `includeWorktree` to fold the same two fields into its rows, which also carry `archived`
+  and `pinned` flags. Archive/pin write the same registry sets the DSH sidebar's actions write:
+  archiving an active session requires `stopActivity: true` (the flag that also asks its work to
+  stop), archiving keeps the log, and the harness still has no session delete.
+- Fixed the one regression DSH 0.2.2 introduced in this bridge: `dsh_tool_call` failed every call
+  with "Tool batch execution failed" while `dsh_tool_list` kept working, because `ctx.tools.execute`
+  changed from a single-call input/output to a batch contract (`{ calls, signal, agent }` in,
+  `{ results }` out). The driver now tells the two shapes apart by the presence of `tools.resolve`
+  (shipped together with the batch executor), sends its one call in the right envelope and unwraps
+  the batch result, so the same build works on ≤0.1.7 and 0.2.2+. The allow-list and session-scope
+  checks run before either path.
+- DSH 0.2.2 removed `sessionController.inspect`. Log reads now prefer `sessionQuery`, keep `inspect`
+  on ≤0.1.7 and fall back to the controller's `events` message-aligned pages on 0.2.2 — enough for
+  "what is open now" and for the transcript, though a bounded page can cover less of a very long
+  log. Usage needs the whole log and deliberately does not use the paged reader (it would silently
+  under-count), so without `sessionQuery` (or `inspect` on ≤0.1.7) it reports an explicit capability
+  error instead of the `TypeError` a missing method used to produce. `session_search` remains
+  disabled on shipped Desktop profiles (the `session-query` index is configured `openAt: "never"`)
+  and says so. Worktree tools need the harness's `worktrees` service, first verified in
+  `0.2.2-rc.1` and shipped by the experimental forge bundle in Desktop/Web;
+  `dsh_info.harnessServices.worktrees` reports it and `toolAvailability` names every tool the
+  current profile cannot serve. Both READMEs gain a Worktrees section — the same-group workflow, a
+  typical flow and the two limits (no service, no commit) — and a tool table with all 35 rows;
+  `docs/CAPABILITY-GAPS.md` is re-counted to 35 tools and 27 probes.
+- `docs/NEW-CAPABILITIES-0.2.2.md` is the capability audit behind this release: the installed
+  `0.2.2-rc.1` service catalog against the old audit, what is now reachable, the ranked candidates
+  and the explicitly rejected additions (`typertGateway.invoke`, credentials, approval/sandbox
+  writes, …, restated for the implementation phase). `docs/WORKTREE-INTEGRATION-CONTRACT.md` is the
+  host-side contract the implementation follows: `ctx.worktrees.create/restore` signatures, the
+  proof that workspace grouping uses the durable header `cwd` (so entering a worktree keeps the
+  group only when the session was created with `workspaceId`), the forge panel's behavior to mirror,
+  the failure/concurrency matrix, and the recommended order of operations. `tools/check-docs.mjs`
+  and `tests/docs-consistency.test.ts` keep the two READMEs, the changelogs and the tool table in
+  step.
+
 ## 0.52.86
 
 - A fire-and-forget turn can now report its own ending to a modern (2026-07-28) MCP client
