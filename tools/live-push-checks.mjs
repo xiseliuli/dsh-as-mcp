@@ -40,7 +40,7 @@ const MODERN_VERSION = '2026-07-28'
 /** The newest 2025-era revision the stateful leg serves. */
 const LEGACY_VERSION = '2025-06-18'
 /** The endpoint's tool count; the push surface must not change it. */
-const TOOL_COUNT = 54
+const TOOL_COUNT = 56
 
 /** Parse `--flag value` arguments and reject unknown ones. */
 function parseArgs(argv) {

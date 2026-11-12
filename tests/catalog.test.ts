@@ -250,7 +250,11 @@ describe('dsh_info catalog and version', () => {
     expect(info.config.limits.maxReadBytes).toBe(testConfig().limits.maxReadBytes)
     expect(info.config.limits.promptTimeoutMs).toBe(testConfig().session.promptTimeoutMs)
     expect(info.config.tools.usage).toBe(testConfig().tools.usage)
-    expect(info.config.approval).toBe(testConfig().approval.policy)
+    expect(info.config.approval).toEqual({
+      policy: testConfig().approval.policy,
+      guardMutations: testConfig().approval.guardMutations,
+      humanTimeoutMs: testConfig().approval.humanTimeoutMs,
+    })
     expect(typeof info.health.node).toBe('string')
     expect(info.health.rssMb).toBeGreaterThan(0)
     // The bearer token itself must never appear in a diagnostic payload.

@@ -32,7 +32,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /** The tool count this build registers. */
-const TOOL_COUNT = 54
+const TOOL_COUNT = 56
 /** A tracked file the check edits, so the diff has a known path. */
 const EDITED_FILE = 'tracked.txt'
 

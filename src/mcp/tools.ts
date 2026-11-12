@@ -46,7 +46,7 @@ export interface ToolDeps {
    */
   readonly feeds?: FeedSurface
   /**
-   * The human-in-the-loop approval queue, when `approval.policy: "human"` is in force.
+   * The human-in-the-loop approval queue, when `approval.guardMutations` is on.
    *
    * Optional so a test or an embedder can serve the tool surface without it; the
    * `approval_*` tools report their absence as a capability error rather than
@@ -415,7 +415,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
             agentToolTimeoutMs: getConfig().limits.agentToolTimeoutMs,
             promptTimeoutMs: getConfig().session.promptTimeoutMs,
           },
-          approval: getConfig().approval.policy,
+          approval: {
+            policy: getConfig().approval.policy,
+            guardMutations: getConfig().approval.guardMutations,
+            humanTimeoutMs: getConfig().approval.humanTimeoutMs,
+          },
           session: {
             scope: getConfig().session.scope,
             ...(getConfig().session.agentPreset === '' ? {} : { agentPreset: getConfig().session.agentPreset }),

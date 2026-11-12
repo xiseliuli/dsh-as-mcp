@@ -83,6 +83,10 @@ function parseArgs(argv) {
       index += 1
       continue
     }
+    if (key === 'guard-mutations') {
+      options['guard-mutations'] = true
+      continue
+    }
     if (key === 'scope') {
       const scope = argv[index + 1]
       if (scope !== 'all' && scope !== 'owned') throw new Error('--scope must be "all" or "owned"')
@@ -186,9 +190,11 @@ async function start(options) {
   // `--scope owned` boots the containment mode so the schedule boundary can be
   // verified against a real profile rather than only in unit tests.
   const scopeLine = options.scope === undefined ? '' : `    session:\n      scope: ${options.scope}\n`
-  const approvalLines = options.approval === undefined
+  const approvalLines = (options.approval === undefined && options['guard-mutations'] !== true)
     ? ''
-    : `    approval:\n      policy: ${options.approval}\n`
+    : `    approval:\n`
+      + (options.approval === undefined ? '' : `      policy: ${options.approval}\n`)
+      + (options['guard-mutations'] === true ? '      guardMutations: true\n' : '')
       + (options['approval-timeout'] === undefined ? '' : `      humanTimeoutMs: ${options['approval-timeout']}\n`)
   writeFileSync(
     join(profileDir, 'cordis.patch.yml'),
