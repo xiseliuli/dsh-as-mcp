@@ -406,6 +406,42 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('routes the observability arguments through to the driver', async () => {
+    const calls: Record<string, unknown>[] = []
+    const recording = await boot(stubDriver({
+      listLiveAgents: async () => {
+        calls.push({ tool: 'agent_list' })
+        return { agents: [], count: 0 }
+      },
+      subagentTree: async (request) => {
+        calls.push({ tool: 'subagent_tree', sessionId: request.sessionId, includeDescendants: request.includeDescendants })
+        return { sessionId: request.sessionId, children: [] }
+      },
+      listSkills: async (request = {}) => {
+        calls.push({ tool: 'skill_list', cwd: request.cwd })
+        return { skills: [], complete: true }
+      },
+      readSkill: async (request) => {
+        calls.push({ tool: 'skill_read', name: request.name, cwd: request.cwd, maxChars: request.maxChars })
+        return { name: request.name, skill: { name: request.name, description: 'd', content: 'c' } }
+      },
+    }))
+    try {
+      await callTool(recording.url, 'agent_list', {})
+      await callTool(recording.url, 'subagent_tree', { sessionId: 'session-1', includeDescendants: true })
+      await callTool(recording.url, 'skill_list', { cwd: '/repo' })
+      await callTool(recording.url, 'skill_read', { name: 'review', cwd: '/repo', maxChars: 4096 })
+      expect(calls).toEqual([
+        { tool: 'agent_list' },
+        { tool: 'subagent_tree', sessionId: 'session-1', includeDescendants: true },
+        { tool: 'skill_list', cwd: '/repo' },
+        { tool: 'skill_read', name: 'review', cwd: '/repo', maxChars: 4096 },
+      ])
+    } finally {
+      await recording.stop()
+    }
+  })
+
   it('reports a harness failure as a tool error, not a transport error', async () => {
     const failing = await boot(
       stubDriver({
@@ -549,6 +585,7 @@ describe('MCP Streamable HTTP endpoint', () => {
         'session_pin', 'session_unpin', 'session_command_list', 'session_command', 'session_goal',
         'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
         'forge_changes', 'forge_local_diff', 'forge_branches',
+        'agent_list', 'subagent_tree', 'skill_list', 'skill_read',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list', 'file_delete', 'file_move'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -564,7 +601,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(50)
+      expect(all).toHaveLength(54)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {

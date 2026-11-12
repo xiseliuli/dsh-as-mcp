@@ -6,6 +6,13 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.59.0
+
+- 在 session 组新增 4 个观察面工具（`agent_list`、`subagent_tree`、`skill_list`、`skill_read`），工具面从 50 增至 54（该组从 28 增至 32）。它们开放了 DSH 面板里回答「现在在发生什么、适用哪些指令」的读取面：`agent_list` 报出 harness 当前持有的 live agent（会话 id、`idle`/`running`、以及是否为 `root`），与 `session_list` 不同——后者看磁盘上所有会话，前者只看内存里活着的；`subagent_tree` 报出某会话派生的会话（`id`、`createdAt`、`mode`、`label`），带 `includeDescendants` 时给出整棵子树的 `parentId` 与 `depth`；`skill_list` 返回 agent 可加载的指令库（`name`、`description`、`whenToUse`、`provider`、`source`、可调用性、`path`，以及 `complete`，避免把仍在加载的 provider 误当成空目录）；`skill_read` 返回单个技能的完整指令正文，让调用方遵循用户自己的项目约定而不是另起一套。
+- **两条刻意的边界**：读不出来的子代理子项带 `reason`（`corrupt`/`unsupported`/`unavailable`）出现而不是被丢掉，坏条目因此可见；两个 skill 工具在 `session.scope` 为 `"owned"` 时被拒绝，因为该目录属于实例的 project/user 指令文件而不属于任何会话——与 schedule 面同一理由。`agent_list` 与 `subagent_tree` 则遵循 owned 作用域，因为二者都是关于会话的。
+- `dsh_info.harnessServices` 新增 `subagents` 与 `skills` 探针（共 36 个，原为 34 个），`dsh_info.notes` 增加一段观察面说明。无新增配置键：推送、两种传输、工具组与设置面板均不变。
+- 文档与测试：两份 README 增加 4 行工具表，`docs/CAPABILITY-GAPS.md` 更新为 54 工具 / 36 探针，`cordis.patch.yml` 的 session 组注释改为 32。`tests/observability.test.ts` 钉住 live agent 投影（状态、root、owned 过滤）、子代理树（子项 vs 后代、保留诊断子项、owned 拒绝）与技能目录（snapshot 完整性、只有 `list()` 时绝不声称完整、有界正文、精确名错误、owned 拒绝）；`tests/mcp-endpoint.test.ts` 钉住参数透传；`tests/availability.test.ts` 覆盖两项新依赖能力。
+
 ## 0.58.0
 
 - 新增 5 个整理类工具——`workspace` 组的 `workspace_rename`、`session_move`、`session_reorder`，以及 `files` 组的 `file_delete`、`file_move`——工具面从 45 增至 50。它们对应人类在侧边栏与文件树里的写操作，并带同样的守卫：`workspace_rename` 只改 DSH 侧边栏显示的标签（目录、会话与成员关系都不动）；`session_move` 把已有会话挂到工作区分组或摘除（跨分组拖拽动作，`action` 默认 `attach`）；`session_reorder` 设置会话在分组成员手动顺序中的位置（拖拽排序动作，省略 `beforeSessionId` 表示移到末尾）。

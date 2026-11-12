@@ -26,7 +26,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /** The tool count this build registers. */
-const TOOL_COUNT = 50
+const TOOL_COUNT = 54
 
 /** Parse `--flag value` arguments and reject unknown ones. */
 function parseArgs(argv) {

@@ -21,6 +21,8 @@ const FULL = {
   forgeSession: true,
   forgePanel: true,
   workspaceOrganize: true,
+  subagents: true,
+  skills: true,
   sessionViews: true,
   sessionArchive: true,
   sessionPin: true,
@@ -50,9 +52,9 @@ describe('describeToolAvailability', () => {
     const report = describeToolAvailability(allOn().tools, FULL, allOn())
     expect(report.unavailable).toEqual([])
     // dsh_info plus the 49 other registered tools (50 advertised in total).
-    expect(report.available).toBe(50)
-    expect(report.availableTools).toHaveLength(50)
-    expect(new Set(report.availableTools).size).toBe(50)
+    expect(report.available).toBe(54)
+    expect(report.availableTools).toHaveLength(54)
+    expect(new Set(report.availableTools).size).toBe(54)
     expect(report.availableTools[0]).toBe('dsh_info')
     expect(report.notes ?? []).toEqual([])
   })
@@ -64,12 +66,12 @@ describe('describeToolAvailability', () => {
       'shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list',
     ])
     expect(report.unavailable[0]?.reason).toMatch(/tools\.shell: false/)
-    // 50 advertised minus the five shell tools.
-    expect(report.available).toBe(45)
+    // 54 advertised minus the five shell tools.
+    expect(report.available).toBe(49)
     expect(report.availableTools).not.toContain('shell_run')
   })
 
-  it('counts the 28-tool session group, including worktree, archive, orchestration, schedule and forge additions', () => {
+  it('counts the 32-tool session group, including worktree, archive, orchestration, schedule, forge and observability additions', () => {
     const config = allOn({ session: false })
     const report = describeToolAvailability(config.tools, FULL, config)
     const sessionTools = [
@@ -79,9 +81,10 @@ describe('describeToolAvailability', () => {
       'session_command_list', 'session_command', 'session_goal',
       'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
       'forge_changes', 'forge_local_diff', 'forge_branches',
+      'agent_list', 'subagent_tree', 'skill_list', 'skill_read',
     ]
     expect(report.unavailable.map((entry) => entry.tool)).toEqual(sessionTools)
-    // 50 advertised minus the 28 session tools.
+    // 54 advertised minus the 32 session tools.
     expect(report.available).toBe(22)
     expect(report.availableTools).not.toContain('session_create')
     expect(report.availableTools).not.toContain('worktree_create')
@@ -114,7 +117,7 @@ describe('describeToolAvailability', () => {
 
   it('marks dsh_tool_* unavailable without an agents service', () => {
     const report = describeToolAvailability(allOn().tools, { ...FULL, agents: false }, allOn())
-    expect(report.unavailable.map((entry) => entry.tool)).toEqual(['dsh_tool_list', 'dsh_tool_call'])
+    expect(report.unavailable.map((entry) => entry.tool)).toEqual(['agent_list', 'dsh_tool_list', 'dsh_tool_call'])
   })
 
   it('names the worktree service for both worktree tools, and keeps sessions working without it', () => {
@@ -164,7 +167,7 @@ describe('describeToolAvailability', () => {
     const report = describeToolAvailability(allOn().tools, { ...FULL, sessionViews: false }, allOn())
     // Neither tool is blocked: the views are additive diagnostics.
     expect(report.unavailable).toEqual([])
-    expect(report.available).toBe(50)
+    expect(report.available).toBe(54)
     expect(report.notes?.join('\n')).toMatch(/session_status and session_list cannot report workingDirectory/)
   })
 })

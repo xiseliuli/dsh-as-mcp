@@ -69,6 +69,12 @@ import {
   DshSessionHandle,
   DshSessionsService,
   DshForgeDiffFile,
+  DshSkillService,
+  DshSkillSummary,
+  DshSubagentChild,
+  DshSubagentDescendant,
+  DshSubagentService,
+  DshAgentPresetsService,
 } from './types.js'
 
 /**
@@ -210,6 +216,12 @@ const MAX_SHELL_TAIL_BYTES = 16 * 1024
  * `/export` are user-plane actions on a session the caller can already prompt.
  */
 const PERMITTED_COMMANDS: ReadonlySet<string> = new Set(['compact', 'plan', 'goal', 'export'])
+
+/** Default characters of one skill body `skill_read` returns. */
+const DEFAULT_SKILL_BODY_CHARS = 32 * 1024
+
+/** Ceiling on one skill body, so a huge skill cannot blow up a caller's context. */
+const MAX_SKILL_BODY_CHARS = 128 * 1024
 
 /** Default characters of one file patch `forge_local_diff` returns. */
 const DEFAULT_FORGE_PATCH_CHARS = 16 * 1024
@@ -1390,6 +1402,9 @@ export class DshDriver {
       // Membership/organization edits live on the Workspace object the registry
       // hands back, so the probe checks the members rather than the service.
       workspaceOrganize: typeof this.workspaceRegistry()?.get === 'function',
+      // Topology and the instruction library: both read-only, both provider-backed.
+      subagents: typeof this.subagentService()?.listChildren === 'function',
+      skills: typeof this.skillService()?.list === 'function',
       forgeSession: typeof this.forgeSessionService()?.changeRequests === 'function',
       forgePanel: typeof this.forgePanelService()?.localDiff === 'function',
       goals: typeof this.goalService()?.create === 'function',
@@ -1621,6 +1636,68 @@ export class DshDriver {
    */
   private sessionStore(): DshSessionsService | undefined {
     return serviceOf<DshSessionsService>(this.ctx, 'sessions')
+  }
+
+  /** `ctx.subagents` — the parent/child topology the Subagent panel shows. */
+  private subagentService(): DshSubagentService | undefined {
+    return serviceOf<DshSubagentService>(this.ctx, 'subagents')
+  }
+
+  /** `ctx.skills` — the host-composition instruction library. */
+  private skillService(): DshSkillService | undefined {
+    return serviceOf<DshSkillService>(this.ctx, 'skills')
+  }
+
+  /** `ctx.agentPresets`, for the preset-scoped skill registry a session actually sees. */
+  private agentPresetsService(): DshAgentPresetsService | undefined {
+    return serviceOf<DshAgentPresetsService>(this.ctx, 'agentPresets')
+  }
+
+  /**
+   * The skill registry a given session sees, and the scope to query it with.
+   *
+   * A preset can add providers (the shipped presets do: bundled skills live behind
+   * them), and the DSH session controller resolves them through
+   * `agentPresets.serviceFor(agent, 'skills')` with the live agent as the scope. Doing
+   * the same means `skill_list { sessionId }` reports what that agent can actually
+   * load, rather than the host composition's narrower default. Without a session the
+   * host registry is used with no scope.
+   */
+  private skillsFor(sessionId: string | undefined): {
+    registry: DshSkillService
+    scope?: unknown
+  } {
+    const host = this.skillService()
+    if (sessionId === undefined) {
+      if (host === undefined) {
+        throw new DshCapabilityError(
+          'skills',
+          'this DSH profile provides no skill service, so the skill catalog cannot be read. '
+            + 'The @deepseek-ai/dsh-base bundle provides it.',
+        )
+      }
+      return { registry: host }
+    }
+    // The registry scope is the **agent**, not the Session record: the skill registry
+    // is agent-scoped, and handing it a Session is what produces "cannot read
+    // Symbol(dsh.scope)" from inside the harness.
+    const agent = this.agentRegistry()?.get(sessionId)
+    if (agent === undefined) {
+      throw new Error(
+        `skill_list needs a live agent for ${sessionId}, and the harness currently holds none for it. `
+          + 'Send it one prompt, or omit sessionId to read the host catalog.',
+      )
+    }
+    const presets = this.agentPresetsService()
+    const scoped = typeof presets?.serviceFor === 'function' ? presets.serviceFor(agent, 'skills') : undefined
+    const registry = scoped ?? host
+    if (registry === undefined) {
+      throw new DshCapabilityError(
+        'skills',
+        'this DSH profile provides no skill service, so the skill catalog cannot be read.',
+      )
+    }
+    return { registry, scope: agent }
   }
 
   /** `ctx.forgeSession` — the session → change-request bindings the panel renders. */
@@ -2887,6 +2964,170 @@ export class DshDriver {
       workspaceId: request.workspaceId,
       before: request.beforeSessionId ?? null,
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Observability: live agents, subagent topology, skills
+  // -------------------------------------------------------------------------
+
+  /**
+   * The agents this instance currently holds, with the live status each reports.
+   *
+   * `agent_list` answers "what is DSH doing right now": the agent registry's live
+   * entries (one per session with an agent in memory), each with its status, whether it
+   * is a root (not spawned by another agent) and — under `session.scope: "owned"` —
+   * only the sessions this endpoint created or forked. A session with no live agent is
+   * not listed; that is the difference between this and `session_list`, which sees
+   * every session on disk.
+   */
+  async listLiveAgents(): Promise<{
+    agents: readonly { sessionId: string; status?: string; root: boolean }[]
+    count: number
+  }> {
+    const registry = this.agentRegistry()
+    if (registry === undefined || typeof registry.list !== 'function') {
+      throw new DshCapabilityError(
+        'agents',
+        'this DSH profile provides no agent registry, so live agents cannot be listed. '
+          + 'The @deepseek-ai/dsh-base bundle provides it.',
+      )
+    }
+    const all = registry.list() as readonly { id: string; status?: string }[]
+    const rootIds = new Set(
+      (typeof registry.roots === 'function' ? (registry.roots() as readonly { id: string }[]) : [])
+        .map((agent) => agent.id),
+    )
+    const visible = all.filter((agent) => this.config.session.scope === 'all' || this.ownsSession(agent.id))
+    return {
+      agents: visible.map((agent) => ({
+        sessionId: agent.id,
+        ...(agent.status === undefined ? {} : { status: agent.status }),
+        root: rootIds.has(agent.id),
+      })),
+      count: visible.length,
+    }
+  }
+
+  /**
+   * The subagent topology under one session.
+   *
+   * Children are the sessions this one spawned; `includeDescendants` walks the whole
+   * subtree with a `depth` and `parentId` per row, which is what the Subagent panel
+   * renders as a tree. A child row that could not be read carries a `reason` instead
+   * of being dropped, so a corrupt entry is visible rather than silently missing.
+   */
+  async subagentTree(request: {
+    sessionId: string
+    includeDescendants?: boolean
+    signal?: AbortSignal
+  }): Promise<{
+    sessionId: string
+    children: readonly DshSubagentChild[]
+    descendants?: readonly DshSubagentDescendant[]
+  }> {
+    await this.assertSessionVisible(request.sessionId, 'subagent_tree')
+    const service = this.subagentService()
+    if (service === undefined) {
+      throw new DshCapabilityError(
+        'subagents',
+        'this DSH profile provides no subagent service, so the subagent tree cannot be read. '
+          + 'The @deepseek-ai/dsh-base bundle provides it.',
+      )
+    }
+    const children = await service.listChildren(request.sessionId, request.signal)
+    if (request.includeDescendants !== true) {
+      return { sessionId: request.sessionId, children: [...children] }
+    }
+    const descendants = await service.listDescendants(request.sessionId, request.signal)
+    return { sessionId: request.sessionId, children: [...children], descendants: [...descendants] }
+  }
+
+  /**
+   * The skills this instance's agent can load, as the catalog reports them.
+   *
+   * `complete: false` means a provider is still loading, so the caller should not
+   * treat the list as exhaustive. `cwd` selects the project-scoped providers, which is
+   * how the same instance offers different skills in different checkouts.
+   */
+  async listSkills(request: { sessionId?: string; cwd?: string; signal?: AbortSignal } = {}): Promise<{
+    skills: readonly DshSkillSummary[]
+    complete: boolean
+  }> {
+    this.assertSkillSurfaceAllowed('skill_list')
+    const { registry, scope } = this.skillsFor(request.sessionId)
+    const options = {
+      ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+      ...(scope === undefined ? {} : { scope }),
+    }
+    if (typeof registry.snapshot === 'function') {
+      const snapshot = await registry.snapshot(options)
+      return { skills: snapshot.skills, complete: snapshot.complete }
+    }
+    const skills = await registry.list(options)
+    // No snapshot means no completeness signal at all; claiming "complete" would be a
+    // claim the profile cannot support.
+    return { skills, complete: false }
+  }
+
+  /**
+   * One skill's full definition, including its instruction text.
+   *
+   * The body is bounded: a skill is a document the DSH agent reads in full, but a
+   * caller asking for it should not be able to pull an unbounded file through a tool
+   * reply, so a longer body is cut and flagged.
+   */
+  async readSkill(request: {
+    name: string
+    sessionId?: string
+    cwd?: string
+    maxChars?: number
+    signal?: AbortSignal
+  }): Promise<{
+    name: string
+    skill?: DshSkillSummary
+    textTruncated?: true
+  }> {
+    this.assertSkillSurfaceAllowed('skill_read')
+    const { registry, scope } = this.skillsFor(request.sessionId)
+    const name = request.name.trim()
+    if (name === '') throw new Error('skill_read needs a non-empty skill name')
+    const skill = await registry.get(name, {
+      ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+      ...(scope === undefined ? {} : { scope }),
+    })
+    if (skill === undefined) {
+      throw new Error(
+        `no skill named "${name}". Call skill_list to see the names this profile provides `
+          + '(the name is matched exactly, including any namespace prefix).',
+      )
+    }
+    const limit = Math.max(1, Math.min(request.maxChars ?? DEFAULT_SKILL_BODY_CHARS, MAX_SKILL_BODY_CHARS))
+    const body = skill.content ?? ''
+    const bounded = truncateText(body, limit)
+    return {
+      name: skill.name,
+      skill: { ...skill, content: bounded },
+      ...(bounded.length < body.length ? { textTruncated: true as const } : {}),
+    }
+  }
+
+  /**
+   * Refuse the skill catalog under an owned scope.
+   *
+   * A skill is a document from the user's own instruction library (project or user
+   * level), not session data, so an endpoint confined to the sessions it created has
+   * no ownership relation to filter it by — the same reasoning the schedule surface
+   * uses. The message says so rather than returning an empty catalog.
+   */
+  private assertSkillSurfaceAllowed(action: string): void {
+    if (this.config.session.scope !== 'owned') return
+    throw new Error(
+      `${action} is unavailable while session.scope is "owned": the skill catalog belongs to this DSH `
+        + 'instance (project and user instruction files), not to a session, so it cannot be filtered to the '
+        + 'sessions this endpoint created. Set session.scope: "all" to read skills.',
+    )
   }
 
   private async toWorkspaceInfo(

@@ -6,6 +6,35 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.59.0
+
+- Four observability tools in the `session` group — `agent_list`, `subagent_tree`, `skill_list` and
+  `skill_read` — bring the surface from 50 to 54 (the group from 28 to 32). They expose the read side of
+  the DSH panels that answer "what is happening and what instructions apply": `agent_list` reports the
+  agents the harness currently holds live (session id, `idle`/`running`, and whether each is a `root`),
+  which is different from `session_list` — that sees every session on disk, this sees what is in memory;
+  `subagent_tree` reports the sessions one session spawned (`id`, `createdAt`, `mode`, `label`) and, with
+  `includeDescendants`, the whole subtree with `parentId` and `depth`; `skill_list` returns the
+  instruction library the agent can load (`name`, `description`, `whenToUse`, `provider`, `source`,
+  invocability, `path`, plus `complete` so a still-loading provider is not mistaken for an empty
+  catalog); `skill_read` returns one skill's full instruction body so a caller can follow the user's own
+  project conventions instead of inventing them.
+- **Two deliberate boundaries.** A subagent child that cannot be read is reported with its `reason`
+  (`corrupt`/`unsupported`/`unavailable`) rather than dropped, so a broken entry stays visible; and both
+  skill tools are refused while `session.scope` is `"owned"`, because the catalog belongs to the instance's
+  project/user instruction files rather than to any session — the same reasoning as the schedule surface.
+  `agent_list` and `subagent_tree` do follow the owned scope, since both are about sessions.
+- `dsh_info.harnessServices` gained `subagents` and `skills` probes (36 probes, was 34) and
+  `dsh_info.notes` a paragraph describing the observability surface. No new configuration keys: the push
+  surface, both transports, the tool groups and the settings panel are unchanged.
+- Docs and tests: both READMEs gain four tool rows, `docs/CAPABILITY-GAPS.md` moves to 54 tools /
+  36 probes, and `cordis.patch.yml` restates the session group as 32 tools. `tests/observability.test.ts`
+  pins the live-agent projection (status, roots, owned filtering), the subagent tree (children vs
+  descendants, a diagnostic child kept, the owned-scope refusal), and the skill catalog (snapshot
+  completeness, the `list()`-only fallback that never claims completeness, the bounded body, the exact-name
+  error, the owned-scope refusal); `tests/mcp-endpoint.test.ts` pins argument routing;
+  `tests/availability.test.ts` covers the two new required capabilities.
+
 ## 0.58.0
 
 - Five organization tools — `workspace_rename`, `session_move`, `session_reorder` in the `workspace`

@@ -379,6 +379,8 @@ export interface DshSessionController {
 
 /** `ctx.agents` — packages/core/agent/src/index.ts */
 export interface DshAgent {
+  /** The session this agent runs. */
+  readonly id?: string
   readonly status: 'idle' | 'running'
   readonly session?: { readonly id: string }
   whenIdle(): Promise<void>
@@ -388,6 +390,10 @@ export interface DshAgent {
 /** `ctx.agents` */
 export interface DshAgentRegistry {
   get(sessionId: string): DshAgent | undefined
+  /** Every agent the harness currently holds live. */
+  list?(): readonly DshAgent[]
+  /** The live agents that were not spawned by another agent. */
+  roots?(): readonly DshAgent[]
 }
 
 /** One model a provider route advertises — `LlmModelInfo` in packages/llm/llm/src/types.ts. */
@@ -693,6 +699,82 @@ export interface DshAgentHandle {
   readonly [brand]?: never
 }
 declare const brand: unique symbol
+
+/** One child a session spawned — `SubagentCatalogEntry`. */
+export interface DshSubagentChild {
+  readonly id: string
+  readonly createdAt: number
+  readonly mode?: string
+  readonly label?: string
+  readonly hasChildren?: boolean
+  readonly reason?: string
+}
+
+/** One descendant in the subagent tree — `SubagentDescendantListEntry`. */
+export interface DshSubagentDescendant extends DshSubagentChild {
+  readonly parentId: string
+  readonly depth: number
+}
+
+/** `ctx.subagents` — the parent/child topology of the sessions this instance ran. */
+export interface DshSubagentService {
+  listChildren(parentSessionId: string, signal?: AbortSignal): Promise<readonly DshSubagentChild[]>
+  listDescendants(rootSessionId: string, signal?: AbortSignal): Promise<readonly DshSubagentDescendant[]>
+}
+
+/** One skill in the catalog — the fields of `SkillSummary` this endpoint reports. */
+export interface DshSkillSummary {
+  readonly name: string
+  readonly description: string
+  readonly whenToUse?: string
+  readonly path?: string
+  readonly provider?: string
+  readonly source?: string
+  readonly invocation?: { readonly modelInvocable?: boolean; readonly userInvocable?: boolean }
+  readonly content?: string
+}
+
+/**
+ * `ctx.skills` — the instruction library the DSH agent sees.
+ *
+ * `list` returns summaries, `get` a full definition (with `content`), and `snapshot`
+ * additionally says whether the catalog it returned is complete (a provider may be
+ * still loading). A profile without a skill provider answers an empty catalog rather
+ * than failing.
+ */
+export interface DshSkillService {
+  list(options?: {
+    readonly cwd?: string
+    readonly signal?: AbortSignal
+    /** The agent (or preset-derived key) whose preset-scoped providers apply. */
+    readonly scope?: unknown
+  }): Promise<readonly DshSkillSummary[]>
+  snapshot?(options?: {
+    readonly cwd?: string
+    readonly signal?: AbortSignal
+    readonly scope?: unknown
+  }): Promise<{
+    readonly skills: readonly DshSkillSummary[]
+    readonly complete: boolean
+  }>
+  get(
+    name: string,
+    options?: { readonly cwd?: string; readonly signal?: AbortSignal; readonly scope?: unknown },
+  ): Promise<DshSkillSummary | undefined>
+}
+
+/**
+ * The `agentPresets` slice skills need.
+ *
+ * A session's skills come from its agent **preset**, not from the host composition:
+ * `serviceFor(agent, 'skills')` returns the preset-scoped registry (or undefined when
+ * the preset does not mount one), and the live agent itself is the registry scope. The
+ * DSH session controller resolves skills exactly this way.
+ */
+export interface DshAgentPresetsService {
+  serviceFor?(agent: unknown, name: 'skills'): DshSkillService | undefined
+  presetForSession?(session: unknown): string | null
+}
 
 /**
  * A live session handle, as the forge services want it.

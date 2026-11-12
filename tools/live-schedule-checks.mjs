@@ -27,7 +27,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /** The tool count this build registers. */
-const TOOL_COUNT = 50
+const TOOL_COUNT = 54
 /** A one-shot far enough out that it cannot fire during the run. */
 const SAFE_AFTER_SECONDS = 86_400
 

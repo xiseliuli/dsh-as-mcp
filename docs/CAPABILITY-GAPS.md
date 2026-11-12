@@ -1,6 +1,6 @@
 # Capability gaps: what DSH can do that `dsh-as-mcp` cannot reach
 
-**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **50 tools** today.
+**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **54 tools** today.
 The author wants to know exactly what is missing, what is worth adding, and what should never be added.
 
 **Artifacts**
@@ -58,7 +58,7 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 
 ### 1.2 Services probed vs. services used
 
-`describeCapabilities()` reports 34 probes, each answering "can this profile do it" rather than
+`describeCapabilities()` reports 36 probes, each answering "can this profile do it" rather than
 "which version is this" — the bridge is version-tolerant, so a missing service degrades one tool and
 `dsh_info.harnessServices` says which:
 
@@ -92,6 +92,8 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 | `forgeSession` | `forgeSession` | change requests bound to a session (`forge_changes`) |
 | `forgePanel` | `forgePanel` | local diffs and branches (`forge_local_diff`, `forge_branches`) |
 | `workspaceOrganize` | `workspaceRegistry` | workspace rename and session grouping/order (`workspace_rename`, `session_move`, `session_reorder`) |
+| `subagents` | `subagents` | the session→subagent topology (`subagent_tree`) |
+| `skills` | `skills` | the instruction library (`skill_list`, `skill_read`) |
 | `agentResolve` | `sessionController.resolveAgent` | agent scoping for `dsh_tool_*`, the worktree tools and the command/goal tools |
 | `sessionArchive` / `sessionPin` | `workspaceRegistry` members | `session_archive`/`unarchive` and `session_pin`/`unpin` |
 | `sessionViews` | `sessionController.projections` or `sessionQuery.observeSession` | `session_status.workingDirectory`/`worktree`, `session_list { includeWorktree }` |
@@ -609,11 +611,11 @@ author chose specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 (50 as of plugin 0.58.0) |
+| MCP tools registered on 0.1.5-rc.1 | 12 (54 as of plugin 0.59.0) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |
-| Services the plugin probes (`dsh_info.harnessServices`) | 34 |
+| Services the plugin probes (`dsh_info.harnessServices`) | 36 |
 | Services the plugin meaningfully uses | 15 (+1 for plumbing: `webServer` for the mount) |
 | Driver methods exposed to tools | 43 |
 | DSH built-in model-visible tools | 53 names / 55 registration sites |

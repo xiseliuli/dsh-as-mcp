@@ -89,6 +89,10 @@ export type McpDriver = Pick<
   | 'renameWorkspace'
   | 'moveSessionToWorkspace'
   | 'reorderSession'
+  | 'listLiveAgents'
+  | 'subagentTree'
+  | 'listSkills'
+  | 'readSkill'
   | 'updateQueue'
   | 'readQueue'
   | 'probeSessionSearch'
@@ -417,6 +421,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'session_create { worktree } and worktree_create/worktree_restore need a worktrees service (the forge bundle in DSH Desktop/Web); harnessServices.worktrees reports it. A workspaceId-created session that enters a worktree keeps its workspace group and works in the new checkout (a cwd-only session stays ungrouped); session_status.workingDirectory and session_list { includeWorktree } show where each session is working.',
           'session_archive/unarchive and session_pin/unpin write the same registry sets the DSH sidebar uses; session_list reports each row\'s archived and pinned flags. The harness has no session delete, and these tools do not add one.',
           'Slash commands execute without a model turn: session_command_list names what this session accepts and session_command runs one. Only the user-plane commands are admitted (/compact, /plan, /goal, /export); /permission and /feedback are refused before any handler runs, and a refused call writes nothing to the session log.',
+          'Observability: agent_list reports the agents the harness currently holds live (with status and whether each is a root), subagent_tree reads the sessions a session spawned (children, and the whole subtree with parentId/depth when asked), and skill_list/skill_read expose the instruction library the DSH agent loads — the last two are refused while session.scope is "owned", since that catalog belongs to the instance rather than to a session.',
           'File organization: file_delete removes one file (directories are refused — use shell_run with the exact command for a tree) and file_move moves/renames one file, reporting whether the source removal succeeded rather than pretending the move is atomic; both accept the same sha256 compare-and-swap guard the write tools use.',
           'Workspace organization mirrors the sidebar: workspace_rename changes only the label, session_move attaches/detaches a session group membership, and session_reorder sets a session\'s position in its group\'s manual order.',
           'forge_changes/forge_local_diff/forge_branches read what the DSH forge panel reads — bound change requests (checks, review state), the local working-tree diff, and the branch list — and are read-only: nothing is submitted, marked ready or merged. They need the forge bundle and a session the harness currently holds live (a cold session has no handle). Owned scope still applies to the session.',
@@ -1796,6 +1801,123 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         const signal = requestSignal(ctx)
         return ok(await driver.forgeBranches({
           sessionId: args.sessionId,
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
+    )
+
+    server.registerTool(
+      'agent_list',
+      {
+        title: 'List the live DSH agents',
+        description:
+          'Every agent this DSH instance currently holds — one per session with an agent in memory — with its '
+          + '`sessionId`, the `status` it reports (`idle`/`running`) and whether it is a `root` (not spawned by '
+          + 'another agent). This is "what is DSH doing right now", which `session_list` cannot answer: that tool '
+          + 'sees every session on disk, while this one sees only live agents. Under `session.scope: "owned"` '
+          + 'only agents of sessions this endpoint created or forked are reported. Read-only.',
+        inputSchema: z.object({}),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('agent_list', log, async () => ok(await driver.listLiveAgents())),
+    )
+
+    server.registerTool(
+      'subagent_tree',
+      {
+        title: "Read a DSH session's subagent tree",
+        description:
+          'The sessions one session spawned, as the DSH Subagent panel renders them: each child\'s `id`, '
+          + '`createdAt`, `mode` (one-shot/external/continuable/unknown) and `label` when it has one. With '
+          + '`includeDescendants` the whole subtree is returned as well, each row carrying `parentId` and '
+          + '`depth` — which is how a caller sees "which subagent is under which". A child that could not be '
+          + 'read appears with a `reason` (`corrupt`/`unsupported`/`unavailable`) instead of being dropped. '
+          + 'Read-only; `session.scope` applies to the parent session.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Parent session id from session_create or session_list.'),
+          includeDescendants: z
+            .boolean()
+            .optional()
+            .describe('Also walk the whole subtree (adds descendants with parentId and depth).'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('subagent_tree', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.subagentTree({
+          sessionId: args.sessionId,
+          ...(args.includeDescendants === undefined ? {} : { includeDescendants: args.includeDescendants }),
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
+    )
+
+    server.registerTool(
+      'skill_list',
+      {
+        title: 'List the skills this DSH instance offers',
+        description:
+          'The instruction library the DSH agent can load, as the harness reports it: each skill\'s `name`, '
+          + '`description`, `whenToUse`, `provider`, `source` (project/user/runtime/bundled), whether it is model- '
+          + 'and user-invocable, and its `path` when it is a file. `cwd` selects the project-scoped providers, so '
+          + 'the same instance can offer different skills per checkout. `complete: false` means a provider is '
+          + 'still loading and the list should not be treated as exhaustive. Read-only. Refused while '
+          + '`session.scope` is `"owned"`, because the catalog belongs to the instance rather than to a session.',
+        inputSchema: z.object({
+          sessionId: z
+            .string()
+            .optional()
+            .describe("Read the catalog through this session's agent preset (needs a live session)."),
+          cwd: z
+            .string()
+            .optional()
+            .describe('Directory whose project skills are included; omit for the harness default scope.'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('skill_list', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.listSkills({
+          ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
+          ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
+    )
+
+    server.registerTool(
+      'skill_read',
+      {
+        title: 'Read one DSH skill',
+        description:
+          'The full definition of one skill, including its instruction body — the same text the DSH agent loads '
+          + 'when it uses that skill. Give the exact `name` from `skill_list`; `cwd` selects the project scope. '
+          + 'The body is bounded by `maxChars` (default 32 KiB, max 128 KiB) and the reply is flagged '
+          + '`textTruncated` when it was cut. Use this when the caller wants to follow the user\'s own project '
+          + 'conventions instead of inventing them. Read-only. Refused while `session.scope` is `"owned"`.',
+        inputSchema: z.object({
+          name: z.string().min(1).describe('Exact skill name from skill_list.'),
+          sessionId: z
+            .string()
+            .optional()
+            .describe("Read through this session's agent preset (needs a live session)."),
+          cwd: z.string().optional().describe('Directory whose project skills are searched.'),
+          maxChars: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('Characters of instruction body to return (default 32768, max 131072).'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('skill_read', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.readSkill({
+          name: args.name,
+          ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
+          ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          ...(args.maxChars === undefined ? {} : { maxChars: args.maxChars }),
           ...(signal === undefined ? {} : { signal }),
         }))
       }),

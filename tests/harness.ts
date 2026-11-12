@@ -132,6 +132,22 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
       workspaceId,
       before: beforeSessionId ?? null,
     }),
+    listLiveAgents: async () => ({
+      agents: [{ sessionId: 'session-1', status: 'idle', root: true }],
+      count: 1,
+    }),
+    subagentTree: async ({ sessionId }) => ({
+      sessionId,
+      children: [{ id: 'child-1', createdAt: 1, mode: 'one-shot', label: 'stub child', hasChildren: false }],
+    }),
+    listSkills: async (_request = {}) => ({
+      skills: [{ name: 'stub-skill', description: 'a stub skill', path: '/repo/.dsh/skills/stub/SKILL.md' }],
+      complete: true,
+    }),
+    readSkill: async ({ name }) => ({
+      name,
+      skill: { name, description: 'a stub skill', content: 'do the thing' },
+    }),
     mutateSessionGoal: async ({ sessionId, action }) => ({
       sessionId,
       action,
