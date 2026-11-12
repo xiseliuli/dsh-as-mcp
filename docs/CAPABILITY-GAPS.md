@@ -33,7 +33,35 @@ executed against the harness.
 
 ## 1. Inventory: what the plugin already uses
 
-### 1.1 The MCP tools
+### Decision: how 0.60.0's human-in-the-loop bridge must be built
+
+The `approval.policy: "human"` wiring committed on main (unreleased) does not work, and the reason is
+structural rather than a bug in the bridge:
+
+- the harness dispatches `approval/request` with `scopeTarget(agent, agent)`, and Cordis filters each
+  listener by `scopeOf(ctx)`, so a listener registered on a plugin-root context is not in the dispatch set;
+- even if it were, `dsh-api-remotes` forwards `approval/request` as a **waterfall** to a browser peer and
+  awaits that peer's answer, so in a headless profile the request waits forever instead of being offered to
+  another answerer. The observable symptom is a turn that stays `running` with a tool call that never lands
+  in any queue.
+
+Therefore 0.60.0 will not intercept harness approvals. It builds the bridge on surfaces this plugin owns:
+
+1. **A guard on this plugin's own mutating tools** (`humanInLoop.guard` listing e.g. `file_write`,
+   `file_delete`, `file_move`, `shell_run`): a matching call is held by the CLI-side broker, published on
+   `dsh://approvals`, and offered to a stateful 2025-era client as an MCP `elicitation/create`; the answer
+   (or the timeout, which fails closed) releases the call. This is verifiable end-to-end without a model
+   turn, and it reuses the broker, `approval_list`/`approval_decide`, `dsh://approvals` and the HTTP
+   layer's elicitation channel already on main.
+2. **Withdrawing `approval.policy: "human"`** — a value that cannot take effect must not ship — and moving
+   its timeout to `humanInLoop.timeoutMs`.
+
+The harness does have a host-callable answer seam for *questions* (`userQuestions.answer(agent, callId,
+answer)`, with `askTimed`/`attachWait`), and `ask_user_question` is a harness tool that must be allowlisted
+via `agentTools.allow` before `dsh_tool_call` can reach it. That is the candidate for bridging
+`ask_user_question` to MCP elicitation in a later version, not for approvals.
+
+## 1.1 The MCP tools
 
 | Tool | Driver method | Harness service | Gate |
 | --- | --- | --- | --- |
