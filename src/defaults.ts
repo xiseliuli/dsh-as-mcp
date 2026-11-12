@@ -119,6 +119,8 @@ export const DEFAULT_LIMITS = {
 /** {@link ApprovalConfig} defaults: never widen the harness policy implicitly. */
 export const DEFAULT_APPROVAL = {
   policy: 'inherit',
+  /** Off by default: an interactive guard changes what an agent-driven call does. */
+  guardMutations: false,
   /**
    * Two minutes is long enough for a human to notice the prompt and short enough
    * that a client which disconnected does not stall the turn behind it.

@@ -114,10 +114,12 @@
           # 'inherit' leaves the harness approval policy alone. 'allow' installs
           # an answerer that approves every request made by sessions this plugin
           # drives — only use it when you understand what the agent may run.
-          # 'human' holds those requests for a connected MCP client instead
-          # (approval_list / approval_decide / dsh://approvals, plus an MCP
-          # elicitation on stateful 2025-era sessions); a timeout answers
-          # rejected, so silence is never consent.
           policy: inherit
-          # Only meaningful with policy: human. A timeout answers rejected.
+          # Hold this endpoint's OWN file_write/file_edit/file_delete/file_move and
+          # shell_run for a connected MCP client (approval_list / approval_decide /
+          # dsh://approvals, plus an MCP elicitation on stateful 2025-era sessions).
+          # A timeout answers rejected, so silence is never consent. The harness's
+          # own approval waterfall is forwarded to a browser peer and is not
+          # interceptable from a plugin, which is why this guards the plugin's calls.
+          guardMutations: false
           humanTimeoutMs: 120000

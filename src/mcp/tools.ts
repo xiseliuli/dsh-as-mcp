@@ -298,6 +298,32 @@ function registerFeedResources(server: McpServer, feeds: FeedSurface, group: Fee
  */
 export function registerTools(server: McpServer, deps: ToolDeps): void {
   const { driver, getConfig, connection, status, log, feeds, approvals } = deps
+  /**
+   * Hold one of this endpoint's own mutating calls for a human, when asked to.
+   *
+   * `approval.guardMutations` turns the human-in-the-loop bridge onto the tools this
+   * server executes itself (the harness's own approval waterfall is forwarded to a
+   * browser peer and cannot be intercepted from a plugin). The request is published on
+   * `dsh://approvals`, offered to a stateful 2025-era client through MCP elicitation,
+   * and released by `approval_decide`, an elicitation answer, or the timeout — which
+   * rejects, so an unanswered call never runs.
+   */
+  const confirmMutation = async (toolName: string, sessionId: unknown): Promise<void> => {
+    if (!getConfig().approval.guardMutations) return
+    if (approvals === undefined) {
+      throw new Error(
+        `approval.guardMutations is on but this endpoint has no approval queue, so ${toolName} cannot be `
+          + 'confirmed and does not run. Restart with the plugin mounted normally, or turn the setting off.',
+      )
+    }
+    const outcome = await approvals.request({
+      sessionId: typeof sessionId === 'string' && sessionId !== '' ? sessionId : 'endpoint',
+      toolName,
+      reason: 'this endpoint runs it on your behalf',
+    })
+    if (outcome !== 'allowed-once') throw new Error(`the user rejected ${toolName} (${outcome})`)
+  }
+
   const enabled = getConfig().tools
 
   server.registerTool(
@@ -1940,8 +1966,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'The approval requests currently blocking a turn, oldest first: the `approvalId` to answer, the '
           + '`sessionId` and `toolName` that raised it, the harness `reason` (and a localized `displayReason` '
           + 'when it has one), plus `createdAt` and the `expiresAt` it will be answered `rejected` at. Only '
-          + 'populated when `approval.policy` is `"human"` — that is the setting that routes approvals raised by '
-          + 'sessions this endpoint created to a connected client instead of deciding them. `includeSettled` '
+          + 'populated when `approval.guardMutations` is on — that is the setting that holds this endpoint\'s own '
+          + 'mutating file and shell tools for a client to approve. `includeSettled` '
           + 'also returns the recent decisions (who answered: a tool call, an elicitation, or the timeout), for '
           + 'audit. Also published as `dsh://approvals`, so a client can subscribe and be told when something needs '
           + 'an answer. Read-only.',
@@ -1955,10 +1981,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       },
       guard('approval_list', log, async (args) => {
         if (approvals === undefined) {
-          return ok({ pending: [], settled: [], enabled: false, note: 'approval.policy is not "human", so this endpoint never holds an approval request.' })
+          return ok({ pending: [], settled: [], enabled: false, note: 'humanInLoop is not mounted, so this endpoint never holds an approval request.' })
         }
         return ok({
-          enabled: getConfig().approval.policy === 'human',
+          enabled: getConfig().approval.guardMutations,
           pending: approvals.pendingApprovals(),
           ...(args.includeSettled === true ? { settled: approvals.settledApprovals() } : {}),
           ...(approvals.hasElicitor ? {} : { elicitation: false }),
@@ -1975,8 +2001,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           + 'lets the tool run once (`allowed-once`), `"reject"` refuses it. The answer is applied to the request '
           + 'the harness is blocking on, and the decided record is returned. An id that is no longer pending — it '
           + 'timed out, the turn was cancelled, or another client answered first — returns `decided: false` with '
-          + 'the reason instead of an error, so a race is not a failure. Requires `approval.policy: "human"`; '
-          + 'nothing else holds requests.',
+          + 'the reason instead of an error, so a race is not a failure. Requires '
+          + '`approval.guardMutations: true`; nothing else holds requests.',
         inputSchema: z.object({
           approvalId: z.string().min(1).describe('Id from approval_list or dsh://approvals.'),
           decision: z.enum(['allow', 'reject']).describe('allow runs the tool once; reject refuses it.'),
@@ -1985,10 +2011,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         annotations: { openWorldHint: false },
       },
       guard('approval_decide', log, async (args) => {
-        if (approvals === undefined || getConfig().approval.policy !== 'human') {
+        if (approvals === undefined || !getConfig().approval.guardMutations) {
           throw new Error(
-            'approval_decide needs approval.policy: "human" — this endpoint is not holding any request. '
-              + 'Set approval.policy to "human" to route approvals raised by sessions it created to a client.',
+            'approval_decide needs approval.guardMutations: true — this endpoint is not holding any request. '
+              + 'Turn it on to hold this endpoint\'s mutating file and shell tools for a client to approve.',
           )
         }
         const settled = approvals.decide(args.approvalId, args.decision, args.reason)
@@ -2017,7 +2043,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         title: 'DSH approval queue',
         description:
           'Approval requests waiting for a human answer, published whenever one is raised or decided. Populated '
-          + 'only when approval.policy is "human".',
+          + 'only when approval.guardMutations is on.',
         mimeType: 'application/json',
       },
       async (uri) => ({
@@ -2025,7 +2051,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           uri: uri.href,
           mimeType: 'application/json',
           text: JSON.stringify({
-            enabled: getConfig().approval.policy === 'human',
+            enabled: getConfig().approval.guardMutations,
             pending: approvals?.pendingApprovals() ?? [],
             ...(approvals?.hasElicitor === true ? { elicitation: true } : {}),
           }),
@@ -2290,13 +2316,16 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { openWorldHint: false },
       },
-      guard('file_write', log, async (args) => ok(await driver.writeFile({
+      guard('file_write', log, async (args) => {
+        await confirmMutation('file_write', (args as { sessionId?: string }).sessionId)
+        return ok(await driver.writeFile({
         path: args.path,
         content: args.content,
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
         createDirectories: args.createDirectories ?? true,
         ...(args.expectedSha256 === undefined ? {} : { expectedSha256: args.expectedSha256 }),
-      }))),
+        }))
+      }),
     )
 
     server.registerTool(
@@ -2376,15 +2405,18 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { openWorldHint: false },
       },
-      guard('file_edit', log, async (args) => ok(await driver.editFile({
-        path: args.path,
-        ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
-        oldText: args.oldText,
-        newText: args.newText,
-        replaceAll: args.replaceAll ?? false,
-        maxBytes: getConfig().limits.maxReadBytes,
-        ...(args.expectedSha256 === undefined ? {} : { expectedSha256: args.expectedSha256 }),
-      }))),
+      guard('file_edit', log, async (args) => {
+        await confirmMutation('file_edit', (args as { sessionId?: string }).sessionId)
+        return ok(await driver.editFile({
+          path: args.path,
+          ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          oldText: args.oldText,
+          newText: args.newText,
+          replaceAll: args.replaceAll ?? false,
+          maxBytes: getConfig().limits.maxReadBytes,
+          ...(args.expectedSha256 === undefined ? {} : { expectedSha256: args.expectedSha256 }),
+        }))
+      }),
     )
 
     server.registerTool(
@@ -2409,6 +2441,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         annotations: { openWorldHint: true },
       },
       guard('file_delete', log, async (args, ctx) => {
+        await confirmMutation('file_delete', (args as { sessionId?: string }).sessionId)
         const signal = requestSignal(ctx)
         return ok(await driver.deleteFile({
           path: args.path,
@@ -2442,6 +2475,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         annotations: { openWorldHint: true },
       },
       guard('file_move', log, async (args, ctx) => {
+        await confirmMutation('file_move', (args as { sessionId?: string }).sessionId)
         const signal = requestSignal(ctx)
         return ok(await driver.moveFile({
           source: args.source,
@@ -2470,11 +2504,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }),
         annotations: { openWorldHint: true },
       },
-      guard('shell_run', log, async (args) => ok(await driver.runShell({
-        command: args.command,
-        ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
-        timeoutMs: args.timeoutMs ?? getConfig().limits.shellTimeoutMs,
-      }))),
+      guard('shell_run', log, async (args) => {
+        await confirmMutation('shell_run', (args as { sessionId?: string }).sessionId)
+        return ok(await driver.runShell({
+          command: args.command,
+          ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          timeoutMs: args.timeoutMs ?? getConfig().limits.shellTimeoutMs,
+        }))
+      }),
     )
 
     server.registerTool(

@@ -12,7 +12,7 @@ import type { DshSessionController } from '../src/dsh/types.js'
  */
 
 /** A config with the approval policy under test. */
-function configWithApproval(policy: 'inherit' | 'allow' | 'human'): Config {
+function configWithApproval(policy: 'inherit' | 'allow'): Config {
   return { ...testConfig(), approval: { ...testConfig().approval, policy } }
 }
 

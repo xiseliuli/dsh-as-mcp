@@ -707,12 +707,12 @@ token 数字不受影响。钱覆盖会话内每一次 LLM 调用，而 token �
     的无人值守策略（`never`），harness 会把这次切换告知 agent；非本插件创建的会话保持你的策略，
     你手动操作的会话不受影响。这是让无人值守的 agent 任务能跑通的前提，也确实实质性地扩大了
     agent 可执行的范围。创建/fork 的回复会带 `approvalPolicy: "never"`，切换失败则带
-  - `human` — 本插件创建的会话所触发的审批**留给人来答**，而不是自动决定：请求出现在 `approval_list`
-    与 `dsh://approvals` 资源上（请求到达与结算时都会推送），有状态 2025 版客户端还会在 GET 流上收到
-    MCP `elicitation/create` 请求。用 `approval_decide`（`allow` → 本次放行，`reject` → 拒绝）或回答
-    elicitation 即可。`approval.humanTimeoutMs`（默认 120000）内无人作答则按 `rejected` 处理——人在回路
-    必须失败关闭，沉默绝不等于同意。非本插件创建的会话不受影响。
-    `approvalPolicyError`。
+  - `approval.guardMutations`（默认关闭）即人在回路桥：开启后 `file_write`、`file_edit`、`file_delete`、
+    `file_move`、`shell_run` 在执行前挂起，发布到 `dsh://approvals`，并向有状态 2025 版客户端发 MCP
+    `elicitation/create`；由 `approval_decide`（或回答 elicitation）放行；`approval.humanTimeoutMs` 内无人作答则
+    答 **rejected**——沉默绝不等于同意。它守的是本端点自己的变更类工具；harness 的审批 waterfall 转发给浏览器
+    peer，插件无法拦截。
+
 - `file_write`、`shell_run` 以及后台的 `shell_start`/`shell_kill` 都是**调用方**的动作，不是
   agent 的。它们走 harness 自己的文件系统与 shell 服务，所以这个 DSH 实例配置的沙箱和策略照样生效。
 
@@ -868,8 +868,9 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
       shellTimeoutMs: 120000
       agentToolTimeoutMs: 120000
     approval:
-      policy: inherit        # inherit | allow | human
-      humanTimeoutMs: 120000 # human 策略：等这么久，超时按拒绝处理
+      policy: inherit        # inherit | allow
+      guardMutations: false  # 本插件的写操作/shell_run 先让 MCP 客户端确认
+      humanTimeoutMs: 120000 # guardMutations 的等待上限，超时按拒绝处理
 ```
 
 `session.scope` 是把 token 交给"不应接触你自己对话"的一方时用的收窄选项：设为 `owned` 后，所有涉及

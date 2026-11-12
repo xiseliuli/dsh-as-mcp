@@ -8,31 +8,30 @@ this file stays the authoritative record.
 
 ## 0.60.0
 
-- **Human-in-the-loop approvals, opt-in.** `approval.policy` gains a third value, `human`: approval
-  requests raised by sessions this plugin created are no longer decided by the plugin but held for a
-  person. Two new tools answer them — `approval_list` (the pending queue: `approvalId`, `sessionId`,
-  `toolName`, the harness `reason`/`displayReason`, `createdAt`, and the `expiresAt` at which it will be
-  answered `rejected`, with `includeSettled` returning the recent decisions and who answered) and
-  `approval_decide` (`allow` runs the tool once, `reject` refuses it, an id that is no longer pending
-  returns `decided: false` rather than an error). The queue is also the `dsh://approvals` resource,
-  published whenever a request is raised or settled, so a client can subscribe instead of polling.
-- **The bridge also speaks MCP elicitation, where the protocol offers it.** A stateful **2025-era**
-  client gets an MCP `elicitation/create` request on its long-lived GET stream (the protocol's
-  push-style request channel); answering it settles the approval exactly like a tool decision. The
-  **2026-07-28** era replaced that channel with `input_required` results, which only exist inside a tool
-  call, so modern clients use the resource + tool path — documented rather than pretended.
-- **It fails closed, and it is bounded.** A timeout (`approval.humanTimeoutMs`, default 120000 ms), a
-  cancelled harness request, or a client that vanished answers `rejected`/`cancelled`; there is no path
-  where silence becomes consent. Only sessions this plugin owns can reach the broker (the answerer
-  refuses to claim a foreign request before it gets there), at most 32 requests are held at once and a
-  request beyond that is refused (rejected), and settled decisions live in a 50-entry ring for audit.
-  `approval.policy: "allow"` and `"inherit"` are unchanged.
-- Docs and tests: both READMEs document the third policy, the two tools, and the fail-closed timeout;
-  `cordis.patch.yml` restates the policy and the timeout; `docs/CAPABILITY-GAPS.md` moves to 56 tools.
-  `tests/approvals.test.ts` pins the broker (timeout/abort/dispose all fail closed, first answer wins,
-  the pending cap, the settled ring, elicitation settling when no tool decision arrives);
-  `tests/mcp-endpoint.test.ts` pins the two tools and the resource read; `tests/settings.test.ts` and
-  `tests/config.test.ts` cover the new policy value and the volatile leaf.
+- **Opt-in human-in-the-loop for this endpoint's own mutating tools.** `approval.guardMutations` (default
+  `false`) makes `file_write`, `file_edit`, `file_delete`, `file_move` and `shell_run` **hold before they
+  run**: the request is published on `dsh://approvals`, offered to a stateful **2025-era** MCP client as an
+  `elicitation/create` request on its GET stream, and released by `approval_decide` (`allow` runs it once,
+  `reject` refuses it) or by an elicitation answer. If nobody answers within `approval.humanTimeoutMs`
+  (default 120000) the call answers **rejected** — the bridge fails closed, so silence is never consent. An
+  `allow` releases exactly one call; the next one asks again.
+- **The two tools that serve it**: `approval_list` (the pending queue — `approvalId`, the tool, the harness
+  reason, `createdAt`, and the `expiresAt` it will be answered `rejected` at; `includeSettled` adds the recent
+  decisions with who answered) and `approval_decide` (answer one request; an id that is no longer pending
+  returns `decided: false` rather than an error, so a race with the timeout is not a failure). The queue is
+  also the `dsh://approvals` resource, pushed when a request is raised or settled, so a client can subscribe.
+- **Why it guards the plugin's calls and not the harness's approvals.** Meaningful design note: the harness
+  dispatches `approval/request` with a scoped waterfall, and `dsh-api-remotes` forwards that event to a browser
+  peer; a plugin cannot claim it, and in a headless profile the request waits for a browser that is not there
+  (observable as a turn that stays `running`). The bridge therefore covers what this endpoint executes itself,
+  which is the part a remote caller can actually be made to confirm. `approval.policy` keeps its two values
+  (`inherit`/`allow`).
+- Docs and tests: both READMEs document the setting, the two tools and the fail-closed timeout, and their
+  sample config shows `guardMutations`/`humanTimeoutMs`; `cordis.patch.yml` does the same; the settings panel
+  gains a toggle and both dictionaries its strings. `tests/mcp-endpoint.test.ts` holds a guarded `file_write`
+  until a decision (allow runs it once and the driver sees the write; reject returns a tool error and the
+  driver is never called), `tests/approvals.test.ts` pins the broker (timeout/abort/dispose fail closed, first
+  answer wins, pending cap, settled ring), and the config/settings/panel tests cover the new field.
 
 ## 0.59.0
 

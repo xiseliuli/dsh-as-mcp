@@ -812,13 +812,13 @@ draws a warning at boot, and a generated one is 43 characters of CSPRNG output.
     interactive sessions are untouched. This is what makes unattended agent runs work; it is a
     real widening of what the agent may execute. The create/fork reply reports
     `approvalPolicy: "never"`, or `approvalPolicyError` when the switch could not be made.
-  - `human` — approvals raised by sessions this plugin created are **held for a person** instead of
-    being decided: they appear in `approval_list` and on the `dsh://approvals` resource (pushed when a
-    request arrives or is settled), and a stateful 2025-era client additionally receives an MCP
-    `elicitation/create` request on its GET stream. Answer with `approval_decide`
-    (`allow` → allowed once, `reject` → refused) or by answering the elicitation. If nobody answers
-    within `approval.humanTimeoutMs` (default 120000), the request is answered `rejected` — the human
-    bridge fails closed, so silence is never consent. Sessions this plugin did not create are untouched.
+  - `approval.guardMutations` (off by default) is the human-in-the-loop bridge: while it is on,
+    `file_write`, `file_edit`, `file_delete`, `file_move` and `shell_run` are held before they run, published
+    on `dsh://approvals`, and offered to a stateful 2025-era client as an MCP `elicitation/create` request.
+    `approval_decide` (or answering the elicitation) releases the call; `approval.humanTimeoutMs` without an
+    answer answers **rejected**, so silence is never consent. This guards this endpoint's own mutating tools —
+    the harness's approval waterfall is forwarded to a browser peer and cannot be intercepted from a plugin.
+
 - `file_write`, `shell_run`, and the background `shell_start`/`shell_kill` are the *caller's*
   actions, not the agent's. They run through the harness's own filesystem and shell services, so
   the sandbox and policy configured for this DSH instance still apply.
@@ -987,8 +987,9 @@ key named, because a silently ignored typo means your override is not being appl
       shellTimeoutMs: 120000
       agentToolTimeoutMs: 120000
     approval:
-      policy: inherit        # inherit | allow | human
-      humanTimeoutMs: 120000 # human policy: wait this long, then answer rejected
+      policy: inherit        # inherit | allow
+      guardMutations: false  # ask an MCP client before this plugin's writes/shell_run
+      humanTimeoutMs: 120000 # how long guardMutations waits, then answers rejected
 ```
 
 `session.scope` is the containment option for a token you hand to a party that should not reach

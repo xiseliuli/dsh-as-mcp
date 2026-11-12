@@ -516,8 +516,7 @@ export function apply(ctx: Context, config: unknown): void {
         }
         | undefined
       const next = args[1] as (() => unknown) | undefined
-      const policy = getConfig().approval.policy
-      if (policy !== 'allow' && policy !== 'human') return typeof next === 'function' ? next() : undefined
+      if (getConfig().approval.policy !== 'allow') return typeof next === 'function' ? next() : undefined
       // `agent.id` is the SessionId the public `ApprovalRequestEvent` contract
       // declares, so it is read first. `agent.session.id` is the same value on
       // the shipped harness, but the published `Agent` declaration carries only
@@ -527,30 +526,19 @@ export function apply(ctx: Context, config: unknown): void {
       if (sessionId === undefined || !deps.driver.ownsSession(sessionId)) {
         return typeof next === 'function' ? next() : undefined
       }
-      if (policy === 'allow') return 'allowed-once'
-      // `human`: hold the request until a person answers. The outcome is always a
-      // decision — a timeout, a cancelled turn or a vanished client is `rejected`,
-      // never an implicit allow.
-      return approvals.request({
-        sessionId,
-        toolName: request?.toolName ?? 'unknown-tool',
-        ...(request?.callId === undefined ? {} : { callId: request.callId }),
-        ...(request?.reason === undefined ? {} : { reason: request.reason }),
-        ...(request?.displayReason === undefined ? {} : { displayReason: request.displayReason }),
-        ...(request?.signal === undefined ? {} : { signal: request.signal }),
-      })
+      return 'allowed-once'
     })
     return () => {
       off()
     }
   }, 'dsh-as-mcp approval answerer')
 
-  if (entry.approval.policy === 'human') {
+  if (entry.approval.guardMutations) {
     log.warn(
-      '[dsh-as-mcp] approval.policy=human — approval requests raised by sessions this plugin created are '
-      + 'held for a connected MCP client to answer (approval_list / approval_decide, or an MCP elicitation '
-      + `request on a stateful 2025-era session). ${entry.approval.humanTimeoutMs} ms without an answer `
-      + 'answers rejected.',
+      '[dsh-as-mcp] approval.guardMutations is on — this endpoint\'s own file_write, file_edit, file_delete, '
+      + 'file_move and shell_run calls are held for a connected MCP client to approve (approval_list / '
+      + `approval_decide, or an MCP elicitation on a stateful 2025-era session). ${entry.approval.humanTimeoutMs} `
+      + 'ms without an answer answers rejected.',
     )
   }
 

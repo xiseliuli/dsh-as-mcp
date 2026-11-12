@@ -8,10 +8,10 @@
 
 ## 0.60.0
 
-- **人在回路审批（opt-in）**：`approval.policy` 增加第三个取值 `human`——本插件创建的会话触发的审批不再由插件自行决定，而是留给人来答。两个新工具负责作答：`approval_list`（待决队列：`approvalId`、`sessionId`、`toolName`、harness 的 `reason`/`displayReason`、`createdAt`，以及到点会被答为 `rejected` 的 `expiresAt`；`includeSettled` 还返回最近决定及作答方）与 `approval_decide`（`allow` 本次放行、`reject` 拒绝；已不在待决的 id 返回 `decided: false` 而不是报错）。队列同时是 `dsh://approvals` 资源，请求到达与结算时都会推送，客户端可订阅而不必轮询。
-- **在协议允许的地方，这座桥也走 MCP elicitation**：有状态 **2025 版**客户端会在其长连接 GET 流上收到 MCP `elicitation/create` 请求（协议里的推送式请求通道），回答它与工具决定等效。**2026-07-28** 版把该通道换成了只存在于工具调用内部的 `input_required` 结果，因此现代客户端走资源 + 工具路径——如实记录，不假装支持。
-- **失败关闭、有界**：超时（`approval.humanTimeoutMs`，默认 120000 ms）、harness 取消请求、客户端消失，都会答 `rejected`/`cancelled`；不存在"沉默变同意"的路径。只有本插件拥有的会话能到达该 broker（answerer 在到达之前就拒绝认领外部请求），同时最多持有 32 个请求、超出者被拒（rejected），已决记录保留最近 50 条用于审计。`allow` 与 `inherit` 行为不变。
-- 文档与测试：两份 README 记录第三种策略、两个工具与失败关闭超时；`cordis.patch.yml` 补上策略与超时；`docs/CAPABILITY-GAPS.md` 更新为 56 工具。`tests/approvals.test.ts` 钉住 broker（超时/取消/dispose 全部失败关闭、第一个答案生效、待决上限、已决环形缓冲、无工具决定时 elicitation 结算）；`tests/mcp-endpoint.test.ts` 钉住两个工具与资源读取；`tests/settings.test.ts` 与 `tests/config.test.ts` 覆盖新策略值与 volatile 叶子。
+- **本端点自身变更类工具的人在回路（opt-in）**：`approval.guardMutations`（默认 `false`）让 `file_write`、`file_edit`、`file_delete`、`file_move`、`shell_run` **执行前先挂起**——请求发布到 `dsh://approvals`，并向有状态 **2025 版** MCP 客户端的 GET 流发 `elicitation/create`，由 `approval_decide`（`allow` 本次放行、`reject` 拒绝）或 elicitation 回答解除；`approval.humanTimeoutMs`（默认 120000）内无人作答则答 **rejected**——失败关闭，沉默绝不等于同意。`allow` 只放行一次，下一次仍会询问。
+- **支撑它的两个工具**：`approval_list`（待决队列：`approvalId`、工具名、harness 原因、`createdAt`、到点会被答为 `rejected` 的 `expiresAt`；`includeSettled` 追加最近决定与作答方）与 `approval_decide`（回答一个请求；已不在待决的 id 返回 `decided: false` 而不是报错，超时竞态不算失败）。队列同时是 `dsh://approvals` 资源，请求到达与结算时推送，客户端可订阅。
+- **为什么守本插件自己的调用、而不是 harness 审批**：设计说明——harness 以作用域 waterfall 派发 `approval/request`，`dsh-api-remotes` 又把它转发给浏览器 peer，插件无法认领；无头 profile 下该请求在等一个不存在的浏览器（表现就是 turn 一直 `running`）。因此桥梁覆盖本端点自己执行的调用，这才是远程调用方真正能被要求确认的部分。`approval.policy` 保持 `inherit`/`allow` 两值。
+- 文档与测试：两份 README 记录该设置、两个工具与失败关闭超时，示例配置含 `guardMutations`/`humanTimeoutMs`；`cordis.patch.yml` 同步；设置面板新增开关并补齐中英文案。`tests/mcp-endpoint.test.ts` 让被守卫的 `file_write` 挂在待决状态直到决定（allow 放行一次且 driver 真的收到写入、reject 返回工具错误且 driver 从未被调用），`tests/approvals.test.ts` 钉住 broker（超时/取消/dispose 全部失败关闭、首答生效、待决上限、已决环形缓冲），config/settings/panel 测试覆盖新字段。
 
 ## 0.59.0
 

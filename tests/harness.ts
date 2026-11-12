@@ -279,7 +279,7 @@ export function testConfig(overrides: Partial<Config['tools']> = {}, port = 0): 
     agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 1000, scope: 'all' },
     limits: { maxReadBytes: 1024, shellTimeoutMs: 1000, agentToolTimeoutMs: 1000 },
-    approval: { policy: 'inherit', humanTimeoutMs: 120000 },
+    approval: { policy: 'inherit', humanTimeoutMs: 120000, guardMutations: false },
   }
 }
 

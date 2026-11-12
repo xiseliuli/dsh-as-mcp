@@ -77,7 +77,7 @@ function pluginConfig(overrides: {
     agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 500, scope: 'all' },
     limits: { maxReadBytes: 1024, shellTimeoutMs: 1000, agentToolTimeoutMs: 1000 },
-    approval: overrides.approval ?? { policy: 'inherit', humanTimeoutMs: 120000 },
+    approval: overrides.approval ?? { policy: 'inherit', humanTimeoutMs: 120000, guardMutations: false },
   }
 }
 
@@ -451,7 +451,7 @@ describe('approval answerer', () => {
         cancel: () => ({ accepted: true }),
         inspect: async () => ({ events: [] }),
       })
-      return pluginConfig({ port, approval: { policy: 'allow', humanTimeoutMs: 120000 } })
+      return pluginConfig({ port, approval: { policy: 'allow', humanTimeoutMs: 120000, guardMutations: false } })
     })
 
     // Ownership is established by creating the session through this plugin.

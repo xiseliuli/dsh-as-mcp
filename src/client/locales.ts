@@ -85,7 +85,8 @@ export const zh: Record<string, string> = {
   'field.approval.policy.hint': '默认只对本插件创建的会话生效，不影响 DSH 里的其他会话。',
   'field.approval.policy.inherit': '继承 DSH 权限设置',
   'field.approval.policy.allow': '自动批准本插件创建的会话',
-  'field.approval.policy.human': '问连接的 MCP 客户端（人在回路）',
+  'field.approval.guardMutations': '让 MCP 客户端确认本插件的写操作',
+  'field.approval.guardMutations.hint': '开启后 file_write / file_edit / file_delete / file_move / shell_run 会先挂起等人确认；超时按拒绝处理。',
   'field.approval.humanTimeoutMs': '人工审批超时（毫秒）',
   'field.approval.humanTimeoutMs.hint': '超时按拒绝处理：人在回路的失败方向必须是拒绝，不能是静默放行。',
 
@@ -197,7 +198,8 @@ export const en: Record<string, string> = {
   'field.approval.policy.hint': 'Either way this only affects sessions this plugin created, never the rest of DSH.',
   'field.approval.policy.inherit': 'Inherit DSH permissions',
   'field.approval.policy.allow': 'Auto-approve this plugin’s sessions',
-  'field.approval.policy.human': 'Ask a connected MCP client (human in the loop)',
+  'field.approval.guardMutations': 'Ask an MCP client to approve this plugin’s writes',
+  'field.approval.guardMutations.hint': 'While on, file_write / file_edit / file_delete / file_move / shell_run are held for a human; a timeout answers rejected.',
   'field.approval.humanTimeoutMs': 'Human approval timeout (ms)',
   'field.approval.humanTimeoutMs.hint': 'A timeout answers "rejected": the human bridge must fail closed, never silently allow.',
 

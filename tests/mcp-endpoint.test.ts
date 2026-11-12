@@ -450,7 +450,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       timeoutMs: () => 60_000,
     })
     const humanConfig = testConfig()
-    humanConfig.approval.policy = 'human'
+    humanConfig.approval.guardMutations = true
     humanConfig.approval.humanTimeoutMs = 60_000
     const approvals = await boot(stubDriver(), humanConfig, { approvals: broker })
     try {
@@ -489,6 +489,45 @@ describe('MCP Streamable HTTP endpoint', () => {
     } finally {
       broker.dispose()
       await approvals.stop()
+    }
+  })
+
+  it('holds a guarded mutation until a decision, and refuses it on reject', async () => {
+    const broker = new ApprovalBroker({
+      log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+      timeoutMs: () => 30_000,
+    })
+    const guarded = testConfig()
+    guarded.approval.guardMutations = true
+    guarded.approval.humanTimeoutMs = 30_000
+    const writes: string[] = []
+    const endpoint = await boot(stubDriver({
+      writeFile: async (request) => {
+        writes.push(request.path)
+        return { path: request.path, operation: 'create', sha256: 'stub' }
+      },
+    }), guarded, { approvals: broker })
+    try {
+      const call = callTool(endpoint.url, 'file_write', { path: '/tmp/guarded.txt', content: 'x' })
+      // The call waits for a person: the request is in the queue.
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const pending = broker.pendingApprovals()
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({ toolName: 'file_write' })
+      expect(writes).toEqual([])
+      broker.decide(pending[0]!.approvalId, 'allow')
+      expect((await call).isError).toBe(false)
+      expect(writes).toEqual(['/tmp/guarded.txt'])
+
+      // A rejection is a tool error, and the driver never runs.
+      const rejected = callTool(endpoint.url, 'file_write', { path: '/tmp/guarded-2.txt', content: 'x' })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      broker.decide(broker.pendingApprovals()[0]!.approvalId, 'reject')
+      expect((await rejected).isError).toBe(true)
+      expect(writes).toEqual(['/tmp/guarded.txt'])
+    } finally {
+      broker.dispose()
+      await endpoint.stop()
     }
   })
 
