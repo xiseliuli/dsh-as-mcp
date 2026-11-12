@@ -658,6 +658,128 @@ export interface DshAgentHandle {
 }
 declare const brand: unique symbol
 
+/**
+ * A live session handle, as the forge services want it.
+ *
+ * Opaque on purpose: the forge/forge-panel services take the harness's own `Session`
+ * object, and the only thing this plugin does with one is hand it back. It comes from
+ * `ctx.sessions.get(id)`, which answers only for a session the harness currently holds
+ * live — a cold session has no handle until something resumes it.
+ */
+export interface DshSessionHandle {
+  readonly [brand]?: never
+}
+
+/** `ctx.sessions` — the live-session store the forge services are scoped by. */
+export interface DshSessionsService {
+  get(id: string): DshSessionHandle | undefined
+}
+
+/** One change request bound to a session — `SessionChangeRequest` in the 0.2.2 catalog. */
+export interface DshSessionChangeRequest {
+  readonly url: string
+  readonly origin: 'created' | 'referenced' | 'discovered' | 'tracked'
+  readonly ref: {
+    readonly repository: { readonly forge: string; readonly host: string; readonly owner: string; readonly name: string }
+    readonly number: number
+  } | null
+  readonly update: {
+    readonly fetchedAt: number
+    readonly snapshot?: DshChangeRequestSnapshot
+    readonly failure?: { readonly code: string; readonly message: string }
+  } | null
+}
+
+/** A change-request snapshot — the fields this endpoint reports from `ChangeRequestSnapshot`. */
+export interface DshChangeRequestSnapshot {
+  readonly url: string
+  readonly title: string
+  readonly state: 'open' | 'closed' | 'merged'
+  readonly draft: boolean
+  readonly author: string | null
+  readonly headBranch: string
+  readonly headSha: string
+  readonly baseBranch: string
+  readonly additions: number
+  readonly deletions: number
+  readonly mergeability: 'mergeable' | 'conflicting' | 'unknown'
+  readonly mergeReady: boolean
+  readonly mergeMethods: readonly string[]
+  readonly reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'none'
+  readonly checks: readonly {
+    readonly name: string
+    readonly state: string
+    readonly url: string | null
+    readonly workflow: string | null
+    readonly startedAt: string | null
+    readonly completedAt: string | null
+  }[]
+  readonly checksRollup: 'none' | 'pending' | 'success' | 'failure'
+  readonly checksTruncated?: boolean
+  readonly unresolvedThreads: number
+  readonly updatedAt: string
+  readonly closedAt: string | null
+}
+
+/** One file in a forge diff — `ForgeDiffFile` in the 0.2.2 catalog. */
+export interface DshForgeDiffFile {
+  readonly path: string
+  readonly previousPath: string | null
+  readonly status: string
+  readonly binary: boolean
+  readonly oversized: boolean
+  readonly untracked: boolean
+  readonly additions: number
+  readonly deletions: number
+  readonly hunks: readonly unknown[]
+}
+
+/** A local working-tree diff — `ForgeLocalDiff`. */
+export interface DshForgeLocalDiff {
+  readonly base: string | null
+  readonly files: readonly DshForgeDiffFile[]
+  readonly omitted: number
+}
+
+/** A change-request diff — `ForgeChangeRequestDiff`. */
+export interface DshForgeChangeRequestDiff {
+  readonly headSha: string
+  readonly files: readonly DshForgeDiffFile[]
+  readonly localAhead: number | null
+}
+
+/** `ctx.forgeSession` — the per-session change-request bindings. */
+export interface DshForgeSessionService {
+  changeRequests(session: DshSessionHandle): readonly DshSessionChangeRequest[]
+}
+
+/** `ctx.forgePanel` — the panel's read side: branches, local diffs, checks, diffs. */
+export interface DshForgePanelService {
+  branches(session: DshSessionHandle, signal?: AbortSignal): Promise<{ readonly current: string | null; readonly branches: readonly string[] }>
+  localDiff(
+    session: DshSessionHandle,
+    scope: { readonly kind: 'branch' | 'uncommitted' | 'unstaged' | 'staged' },
+    signal?: AbortSignal,
+  ): Promise<DshForgeLocalDiff>
+  localText(
+    session: DshSessionHandle,
+    scope: { readonly kind: 'branch' | 'uncommitted' | 'unstaged' | 'staged' },
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<string>
+  changeRequestChecks?(
+    session: DshSessionHandle,
+    url: string,
+    headSha: string,
+    signal?: AbortSignal,
+  ): Promise<DshChangeRequestSnapshot>
+  changeRequestDiff?(
+    session: DshSessionHandle,
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<DshForgeChangeRequestDiff>
+}
+
 /** When a scheduled task fires — `ScheduleTiming` in the 0.2.2 catalog (the subset this endpoint uses). */
 export type DshScheduleTiming =
   | { readonly kind: 'after'; readonly after_seconds: number }

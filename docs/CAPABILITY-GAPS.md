@@ -1,6 +1,6 @@
 # Capability gaps: what DSH can do that `dsh-as-mcp` cannot reach
 
-**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **42 tools** today.
+**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **45 tools** today.
 The author wants to know exactly what is missing, what is worth adding, and what should never be added.
 
 **Artifacts**
@@ -58,7 +58,7 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 
 ### 1.2 Services probed vs. services used
 
-`describeCapabilities()` reports 30 probes, each answering "can this profile do it" rather than
+`describeCapabilities()` reports 33 probes, each answering "can this profile do it" rather than
 "which version is this" — the bridge is version-tolerant, so a missing service degrades one tool and
 `dsh_info.harnessServices` says which:
 
@@ -88,6 +88,9 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 | `commands` | `commands` | slash commands without a model turn (`session_command_list`, `session_command`) |
 | `goals` | `goals` | the session's durable goal (`session_goal`) |
 | `schedule` | `schedule` | Host scheduled tasks (`schedule_create`/`list`/`view`/`edit`) |
+| `sessions` | `sessions` | the live-session store the forge reads are scoped by |
+| `forgeSession` | `forgeSession` | change requests bound to a session (`forge_changes`) |
+| `forgePanel` | `forgePanel` | local diffs and branches (`forge_local_diff`, `forge_branches`) |
 | `agentResolve` | `sessionController.resolveAgent` | agent scoping for `dsh_tool_*`, the worktree tools and the command/goal tools |
 | `sessionArchive` / `sessionPin` | `workspaceRegistry` members | `session_archive`/`unarchive` and `session_pin`/`unpin` |
 | `sessionViews` | `sessionController.projections` or `sessionQuery.observeSession` | `session_status.workingDirectory`/`worktree`, `session_list { includeWorktree }` |
@@ -605,11 +608,11 @@ author chose specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 (42 as of plugin 0.56.0) |
+| MCP tools registered on 0.1.5-rc.1 | 12 (45 as of plugin 0.57.0) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |
-| Services the plugin probes (`dsh_info.harnessServices`) | 30 |
+| Services the plugin probes (`dsh_info.harnessServices`) | 33 |
 | Services the plugin meaningfully uses | 15 (+1 for plumbing: `webServer` for the mount) |
 | Driver methods exposed to tools | 43 |
 | DSH built-in model-visible tools | 53 names / 55 registration sites |

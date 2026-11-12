@@ -6,6 +6,39 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.57.0
+
+- Three read-only forge tools in the `session` group — `forge_changes`, `forge_local_diff` and
+  `forge_branches` — bring the surface from 42 to 45 (the group from 25 to 28). They expose the read
+  half of what the DSH forge panel shows, so an external caller can answer "what did the agent change"
+  and "are the checks green" without a local `gh` install: `forge_changes` lists the change requests
+  bound to a session (URL, binding origin, repository/number, and the cached snapshot — title, state,
+  draft, author, head/base branch, additions/deletions, mergeability, `mergeReady`, review decision,
+  checks rollup and individual checks, unresolved threads, update time), `forge_local_diff` returns the
+  working-tree diff for one of the panel's four scopes (`uncommitted` by default, `branch`, `staged`,
+  `unstaged`) as a bounded file listing, or one file's unified patch text when `path` is given, and
+  `forge_branches` returns the checkout's branches and the current one, which is exactly the set
+  `worktree_create { from }` accepts.
+- **Honest partial information.** A binding whose snapshot could not be read is still reported with its
+  `failure` (for example `unauthenticated`) instead of disappearing, because that is what the panel shows
+  too; a requested checks refresh that fails keeps the cached snapshot and marks `checksStale`; every
+  payload is bounded (`maxFiles` for listings, `maxChars` up to 64 KiB for patch text, `omitted`/
+  `truncated`/`textTruncated` flags when something was cut). Nothing in this group writes: no review is
+  submitted, nothing is marked ready, nothing is merged — those stay deliberately absent, because they
+  act on the user's code host with the user's credentials.
+- Forge reads are scoped by a **live session handle** (`ctx.sessions.get`), so a cold session is refused
+  with an explanation rather than reported as "no change requests", and `session.scope: "owned"` still
+  applies to the session. `dsh_info.harnessServices` gained three probes — `sessions`, `forgeSession`,
+  `forgePanel` (33 probes, was 30) — and `dsh_info.notes` a paragraph on the read-only scope. No new
+  configuration keys: the push surface, both transports, the tool groups and the settings panel are
+  unchanged.
+- Docs and tests: both READMEs gain three tool rows, `docs/CAPABILITY-GAPS.md` moves to 45 tools /
+  33 probes, and `cordis.patch.yml` restates the session group as 28 tools. `tests/forge.test.ts` pins
+  the capability gate, the live-session requirement, the snapshot projection (including a failed
+  binding), the refresh/stale semantics, the diff bounds and the branch passthrough;
+  `tests/mcp-endpoint.test.ts` pins argument routing; `tests/availability.test.ts` covers the three new
+  required capabilities.
+
 ## 0.56.0
 
 - Four new tools at the end of the `session` group — `schedule_create`, `schedule_list`,

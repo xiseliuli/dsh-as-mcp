@@ -81,6 +81,9 @@ export type McpDriver = Pick<
   | 'listScheduledTasks'
   | 'viewScheduledTask'
   | 'editScheduledTask'
+  | 'forgeChanges'
+  | 'forgeLocalDiff'
+  | 'forgeBranches'
   | 'updateQueue'
   | 'readQueue'
   | 'probeSessionSearch'
@@ -409,6 +412,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'session_create { worktree } and worktree_create/worktree_restore need a worktrees service (the forge bundle in DSH Desktop/Web); harnessServices.worktrees reports it. A workspaceId-created session that enters a worktree keeps its workspace group and works in the new checkout (a cwd-only session stays ungrouped); session_status.workingDirectory and session_list { includeWorktree } show where each session is working.',
           'session_archive/unarchive and session_pin/unpin write the same registry sets the DSH sidebar uses; session_list reports each row\'s archived and pinned flags. The harness has no session delete, and these tools do not add one.',
           'Slash commands execute without a model turn: session_command_list names what this session accepts and session_command runs one. Only the user-plane commands are admitted (/compact, /plan, /goal, /export); /permission and /feedback are refused before any handler runs, and a refused call writes nothing to the session log.',
+          'forge_changes/forge_local_diff/forge_branches read what the DSH forge panel reads — bound change requests (checks, review state), the local working-tree diff, and the branch list — and are read-only: nothing is submitted, marked ready or merged. They need the forge bundle and a session the harness currently holds live (a cold session has no handle). Owned scope still applies to the session.',
           'Scheduled tasks (schedule_*) are Host records, not session records: the harness delivers the prompt at each occurrence whether or not anyone is connected, and the reply carries the generated id plus the first occurrence. They are refused while session.scope is "owned", because a Host record has no owning session to filter on.',
           'session_goal reads and mutates the session\'s durable goal (the round driver advances it across turns). Mutations carry the harness\'s own goal revision, so pass expectedRevision from a read to refuse a goal that changed underneath you.',
           ...(feeds === undefined ? [] : ['Push feeds: modern clients open one subscriptions/listen stream and name resources — dsh://sessions, dsh://session/<id>/turn|events|assistant|status|projections, dsh://jobs, dsh://jobs/<id>. 2025-era clients get the same notifications on a stateful session\'s GET SSE stream after resources/subscribe. Reads return JSON; event and assistant feeds carry a monotonic seq so a client can drop repeats.']),
@@ -1607,6 +1611,113 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         ...(args.active === undefined ? {} : { active: args.active }),
         ...(args.expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt: args.expectedUpdatedAt }),
       }))),
+    )
+
+    server.registerTool(
+      'forge_changes',
+      {
+        title: 'Read the change requests a DSH session opened',
+        description:
+          'The change requests (pull requests) bound to a session, as the DSH forge panel shows them: the '
+          + 'binding URL and origin, the repository and number when the forge resolved one, and the cached '
+          + 'snapshot — title, state, draft, author, head/base branch, additions/deletions, mergeability, '
+          + '`mergeReady`, review decision, checks rollup and the checks themselves, unresolved threads and the '
+          + 'update time. A binding whose snapshot could not be read still appears, with `failure` (for example '
+          + '"unauthenticated"), because that is what the panel shows too. `includeChecks` refreshes each '
+          + "request's checks through the forge (one call per request, needs forge sign-in; a failed refresh "
+          + 'keeps the cached snapshot and marks `checksStale`), and `includeDiff` adds that request\'s changed-file '
+          + 'list (bounded by `maxFiles`, hunk text is not included). Read-only: nothing is submitted, marked '
+          + 'ready or merged. Needs the forge bundle and a session the harness currently holds live; smart '
+          + 'complements worktree_create for "review what the agent produced".',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id whose bound change requests are wanted.'),
+          includeChecks: z
+            .boolean()
+            .optional()
+            .describe('Refresh each request\'s checks through the forge instead of using the cached snapshot.'),
+          includeDiff: z.boolean().optional().describe('Also report each request\'s changed-file listing.'),
+          maxFiles: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('Changed files per request diff, 1-200 (default 50).'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('forge_changes', log, async (args) => ok(await driver.forgeChanges({
+        sessionId: args.sessionId,
+        ...(args.includeChecks === undefined ? {} : { includeChecks: args.includeChecks }),
+        ...(args.includeDiff === undefined ? {} : { includeDiff: args.includeDiff }),
+        ...(args.maxFiles === undefined ? {} : { maxFiles: args.maxFiles }),
+      }))),
+    )
+
+    server.registerTool(
+      'forge_local_diff',
+      {
+        title: "Read a DSH session\'s working-tree diff",
+        description:
+          'The local Git diff the forge panel shows for a session, so a caller can see what the agent actually '
+          + 'changed. `scope` selects the panel\'s view: `uncommitted` (default, everything not yet committed), '
+          + '`branch` (the session branch against its base), `staged` or `unstaged`. Without `path` the reply is '
+          + 'a file listing — path, previous path, status, add/delete counts, and `binary`/`oversized`/`untracked` '
+          + 'flags — bounded by `maxFiles` and `omitted`. With `path` it returns that one file\'s unified patch '
+          + 'text, bounded by `maxChars` (default 16 KiB, max 64 KiB) and marked `textTruncated` when cut. '
+          + 'Read-only. Needs the forge bundle and a live session handle.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id whose checkout is diffed.'),
+          scope: z
+            .enum(['branch', 'uncommitted', 'unstaged', 'staged'])
+            .optional()
+            .describe('Which diff view: branch base, all uncommitted (default), unstaged only, or staged only.'),
+          path: z
+            .string()
+            .optional()
+            .describe('Return this one file\'s patch text instead of the whole file listing.'),
+          maxFiles: z.number().int().positive().optional().describe('Files in the listing, 1-200 (default 50).'),
+          maxChars: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('Characters of patch text when path is given (default 16384, max 65536).'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('forge_local_diff', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.forgeLocalDiff({
+          sessionId: args.sessionId,
+          ...(args.scope === undefined ? {} : { scope: args.scope }),
+          ...(args.path === undefined ? {} : { path: args.path }),
+          ...(args.maxFiles === undefined ? {} : { maxFiles: args.maxFiles }),
+          ...(args.maxChars === undefined ? {} : { maxChars: args.maxChars }),
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
+    )
+
+    server.registerTool(
+      'forge_branches',
+      {
+        title: "List a DSH session\'s Git branches",
+        description:
+          'The branches in a session\'s checkout and which one is current — the same list the forge panel\'s '
+          + 'branch selector offers, which is what worktree_create\'s `from` accepts as a base revision. '
+          + 'Read-only. Needs the forge bundle and a live session handle.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id whose checkout branches are wanted.'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('forge_branches', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.forgeBranches({
+          sessionId: args.sessionId,
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
     )
   }
 

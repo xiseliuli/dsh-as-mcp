@@ -25,7 +25,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /** The tool count this build registers; the orchestration release must not change it accidentally. */
-const TOOL_COUNT = 42
+const TOOL_COUNT = 45
 /** The commands this endpoint admits; everything else must be refused. */
 const PERMITTED = ['compact', 'plan', 'goal', 'export']
 /** The two shipped commands deliberately refused. */

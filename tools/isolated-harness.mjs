@@ -58,6 +58,13 @@ function parseArgs(argv) {
     const arg = argv[index]
     if (!arg.startsWith('--')) throw new Error(`unexpected argument ${arg}`)
     const key = arg.slice(2)
+    if (key === 'bundle') {
+      const name = argv[index + 1]
+      if (name === undefined || name.startsWith('--')) throw new Error('--bundle needs a package name')
+      options.bundles = [...(options.bundles ?? []), name]
+      index += 1
+      continue
+    }
     if (key === 'keep-home') {
       options['keep-home'] = true
       continue
@@ -152,6 +159,16 @@ async function start(options) {
     stdio: 'ignore',
   })
   execFileSync(RUNTIME_CLI, ['plugin', '--profile', PROFILE, 'add', tarball], { env, stdio: 'ignore' })
+  // Shipped bundles (the forge/worktree one, for example) are composed by name from
+  // the app runtime, so adding them is a profile-manifest edit rather than an install.
+  if (options.bundles !== undefined && options.bundles.length > 0) {
+    const manifestPath = join(profileDir, 'package.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    for (const bundle of options.bundles) {
+      if (!manifest.dsh.profile.bundles.includes(bundle)) manifest.dsh.profile.bundles.push(bundle)
+    }
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  }
   // `--scope owned` boots the containment mode so the schedule boundary can be
   // verified against a real profile rather than only in unit tests.
   const scopeLine = options.scope === undefined ? '' : `    session:\n      scope: ${options.scope}\n`
@@ -198,6 +215,7 @@ ${scopeLine}`,
     home,
     profile: PROFILE,
     scope: options.scope ?? 'all',
+    bundles: options.bundles ?? [],
     tarball,
     pluginPort,
     webPort,

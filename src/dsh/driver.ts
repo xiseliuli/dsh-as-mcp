@@ -62,6 +62,13 @@ import {
   DshScheduleService,
   DshScheduleTargetRequest,
   DshScheduleTiming,
+  DshForgeChangeRequestDiff,
+  DshForgePanelService,
+  DshForgeSessionService,
+  DshSessionChangeRequest,
+  DshSessionHandle,
+  DshSessionsService,
+  DshForgeDiffFile,
 } from './types.js'
 
 /**
@@ -203,6 +210,12 @@ const MAX_SHELL_TAIL_BYTES = 16 * 1024
  * `/export` are user-plane actions on a session the caller can already prompt.
  */
 const PERMITTED_COMMANDS: ReadonlySet<string> = new Set(['compact', 'plan', 'goal', 'export'])
+
+/** Default characters of one file patch `forge_local_diff` returns. */
+const DEFAULT_FORGE_PATCH_CHARS = 16 * 1024
+
+/** Ceiling on one file patch, so a generated file cannot blow up a caller's context. */
+const MAX_FORGE_PATCH_CHARS = 64 * 1024
 
 /** Characters a scheduled task title may use — the harness's own cap. */
 const MAX_SCHEDULE_TITLE_CHARS = 120
@@ -686,6 +699,73 @@ export interface SessionGoalView {
   readonly blockedReason?: { readonly code: string; readonly message: string }
   readonly createdAt: number
   readonly updatedAt: number
+}
+
+/** One file in a forge diff listing, as this endpoint reports it. */
+export interface ForgeFileSummary {
+  readonly path: string
+  readonly previousPath: string | null
+  readonly status: string
+  readonly binary: boolean
+  readonly oversized: boolean
+  readonly untracked: boolean
+  readonly additions: number
+  readonly deletions: number
+  /** Hunk count; the hunks themselves stay in the forge diff and are not shipped here. */
+  readonly hunks: number
+}
+
+/** One change-request diff, bounded to a file listing. */
+export interface ForgeDiffSummary {
+  readonly headSha: string
+  readonly files: readonly ForgeFileSummary[]
+  readonly localAhead: number | null
+  /** True when the diff named more files than the caller asked to see. */
+  readonly truncated?: true
+}
+
+/** One check on a change request. */
+export interface ForgeCheckSummary {
+  readonly name: string
+  readonly state: string
+  readonly url?: string | null
+  readonly workflow?: string | null
+  readonly startedAt?: string | null
+  readonly completedAt?: string | null
+}
+
+/** One change request bound to a session, as `forge_changes` reports it. */
+export interface ForgeChangeView {
+  readonly url: string
+  readonly origin: string
+  readonly number?: number
+  readonly repository?: { readonly forge: string; readonly host: string; readonly owner: string; readonly name: string }
+  readonly title?: string
+  readonly state?: string
+  readonly draft?: boolean
+  readonly author?: string | null
+  readonly headBranch?: string
+  readonly headSha?: string
+  readonly baseBranch?: string
+  readonly additions?: number
+  readonly deletions?: number
+  readonly mergeability?: string
+  readonly mergeReady?: boolean
+  readonly mergeMethods?: readonly string[]
+  readonly reviewDecision?: string
+  readonly checksRollup?: string
+  readonly checksTruncated?: boolean
+  readonly unresolvedThreads?: number
+  readonly updatedAt?: string
+  readonly closedAt?: string | null
+  /** When the cached snapshot was fetched (epoch milliseconds). */
+  readonly fetchedAt?: number
+  /** The forge failure that left the binding without a snapshot, when there is one. */
+  readonly failure?: { readonly code: string; readonly message: string }
+  readonly checks?: readonly ForgeCheckSummary[]
+  /** True when a requested checks refresh failed and the cached snapshot is shown. */
+  readonly checksStale?: true
+  readonly diff?: ForgeDiffSummary
 }
 
 /**
@@ -1296,6 +1376,11 @@ export class DshDriver {
       // Host-global, so the probe answers "is the store mounted", not "may this
       // endpoint touch it" — the scope refusal is a call-time check.
       schedule: typeof this.scheduleService()?.create === 'function',
+      // Forge reads need three services together: the live-session store scopes
+      // them, forgeSession holds the bindings, forgePanel serves branches/diffs.
+      sessions: typeof this.sessionStore()?.get === 'function',
+      forgeSession: typeof this.forgeSessionService()?.changeRequests === 'function',
+      forgePanel: typeof this.forgePanelService()?.localDiff === 'function',
       goals: typeof this.goalService()?.create === 'function',
       // Creating or restoring a worktree needs the session's live agent as its
       // scope, the same bridge `dsh_tool_call` uses.
@@ -1514,6 +1599,60 @@ export class DshDriver {
    */
   private commandService(): DshCommandService | undefined {
     return serviceOf<DshCommandService>(this.ctx, 'commands')
+  }
+
+  /**
+   * `ctx.sessions` — the live-session store the forge services are scoped by.
+   *
+   * A core harness service (every composition mounts it); absent means a stripped
+   * profile, and forge reads degrade to an explicit capability error rather than a
+   * TypeError.
+   */
+  private sessionStore(): DshSessionsService | undefined {
+    return serviceOf<DshSessionsService>(this.ctx, 'sessions')
+  }
+
+  /** `ctx.forgeSession` — the session → change-request bindings the panel renders. */
+  private forgeSessionService(): DshForgeSessionService | undefined {
+    return serviceOf<DshForgeSessionService>(this.ctx, 'forgeSession')
+  }
+
+  /** `ctx.forgePanel` — branches, local diffs and fresh checks for one session. */
+  private forgePanelService(): DshForgePanelService | undefined {
+    return serviceOf<DshForgePanelService>(this.ctx, 'forgePanel')
+  }
+
+  private requireForgeServices(): { session: DshSessionsService; forgeSession: DshForgeSessionService; panel: DshForgePanelService } {
+    const session = this.sessionStore()
+    const forgeSession = this.forgeSessionService()
+    const panel = this.forgePanelService()
+    if (session === undefined || forgeSession === undefined || panel === undefined) {
+      throw new DshCapabilityError(
+        'forgePanel',
+        'this DSH profile provides no forge read surface, so change requests, local diffs and branches '
+          + 'cannot be read. DSH Desktop and Web provide it through the forge bundle ("变更请求与工作树"); '
+          + 'enable that bundle, or read the same data through shell_run + git.',
+      )
+    }
+    return { session, forgeSession, panel }
+  }
+
+  /**
+   * The live session handle forge reads are scoped by.
+   *
+   * `ctx.sessions.get` answers only for a session the harness currently holds live; a
+   * cold session has no handle, and activating one just to read its diff would be a
+   * side effect. The error says that plainly, because "call session_create then read
+   * the diff" is otherwise a confusing dead end.
+   */
+  private requireLiveSession(services: { session: DshSessionsService }, sessionId: string, action: string): DshSessionHandle {
+    const live = services.session.get(sessionId)
+    if (live !== undefined) return live
+    throw new Error(
+      `${action} needs a live session handle for ${sessionId}, and the harness currently holds no live `
+        + 'session for it (a cold session has none until something resumes it). Send it one prompt, or use '
+        + 'session_status to check whether it is running, then retry.',
+    )
   }
 
   /**
@@ -2365,6 +2504,148 @@ export class DshDriver {
       ...(request.expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt: request.expectedUpdatedAt }),
     })
     return scheduleEditOutcome(request.scheduleId, result)
+  }
+
+  // -------------------------------------------------------------------------
+  // Forge reads (change requests, local diffs, branches)
+  // -------------------------------------------------------------------------
+
+  /**
+   * The change requests a session has bound, with their cached snapshots.
+   *
+   * This is the panel's own list: a binding is created when the agent opened a
+   * change request, referenced one, discovered it from a branch, or the user tracked
+   * it. `includeChecks` refreshes the checks for each bound request whose snapshot
+   * carries a head SHA (one forge call per request, so it is opt-in); `includeDiff`
+   * asks for the file list of each request's diff. All of it is read-only.
+   */
+  async forgeChanges(request: {
+    sessionId: string
+    includeChecks?: boolean
+    includeDiff?: boolean
+    maxFiles?: number
+  }): Promise<{
+    sessionId: string
+    changes: readonly ForgeChangeView[]
+    truncated?: { checks?: true; diff?: true }
+  }> {
+    await this.assertSessionVisible(request.sessionId, 'forge_changes')
+    const services = this.requireForgeServices()
+    const live = this.requireLiveSession(services, request.sessionId, 'forge_changes')
+    const bindings = services.forgeSession.changeRequests(live) ?? []
+    const maxFiles = Math.max(1, Math.min(request.maxFiles ?? 50, 200))
+    const truncated: { checks?: true; diff?: true } = {}
+    let anyTruncated = false
+    const changes: ForgeChangeView[] = []
+    for (const binding of bindings) {
+      // `effective` is the binding as it will be reported: the cached one, or the
+      // one carrying a freshly refreshed snapshot. A refresh failure keeps the
+      // cached snapshot and marks the view stale instead of hiding the binding.
+      let effective = binding
+      let refreshed = false
+      const snapshot = binding.update?.snapshot
+      if (request.includeChecks === true && binding.url !== '' && snapshot !== undefined
+        && typeof services.panel.changeRequestChecks === 'function') {
+        try {
+          const fresh = await services.panel.changeRequestChecks(live, binding.url, snapshot.headSha)
+          effective = {
+            ...binding,
+            update: { ...(binding.update ?? { fetchedAt: Date.now() }), snapshot: fresh },
+          }
+          refreshed = true
+        } catch {
+          refreshed = false
+          anyTruncated = true
+        }
+      }
+      let diff: ForgeDiffSummary | undefined
+      if (request.includeDiff === true && effective.url !== '' && typeof services.panel.changeRequestDiff === 'function') {
+        try {
+          const fresh = await services.panel.changeRequestDiff(live, effective.url)
+          diff = forgeDiffSummary(fresh, maxFiles)
+          if (fresh.files.length > maxFiles) truncated.diff = true
+        } catch {
+          truncated.diff = true
+        }
+      }
+      // `checksStale` only makes sense for a binding whose refresh was attempted
+      // and failed; a plain read of an unauthenticated binding shows its failure.
+      const stale = request.includeChecks === true && !refreshed && snapshot !== undefined && binding.url !== ''
+      changes.push(forgeViewOf(effective, diff, stale))
+    }
+    if (anyTruncated && truncated.checks === undefined) truncated.checks = true
+    return {
+      sessionId: request.sessionId,
+      changes,
+      ...(Object.keys(truncated).length === 0 ? {} : { truncated }),
+    }
+  }
+
+  /**
+   * The working-tree diff the forge panel shows for one session.
+   *
+   * `scope` is the panel's view selector: `uncommitted` (default) is everything not
+   * yet committed, `branch` is the session branch against its base, `staged` and
+   * `unstaged` split the index. With `path`, the unified patch text of one file is
+   * returned instead of the whole listing — that is the only form that can be large,
+   * so it is bounded by {@link MAX_FORGE_PATCH_CHARS}.
+   */
+  async forgeLocalDiff(request: {
+    sessionId: string
+    scope?: 'branch' | 'uncommitted' | 'unstaged' | 'staged'
+    path?: string
+    maxFiles?: number
+    maxChars?: number
+    signal?: AbortSignal
+  }): Promise<{
+    sessionId: string
+    scope: string
+    base: string | null
+    files: readonly ForgeFileSummary[]
+    omitted: number
+    text?: string
+    textTruncated?: true
+  }> {
+    await this.assertSessionVisible(request.sessionId, 'forge_local_diff')
+    const services = this.requireForgeServices()
+    const live = this.requireLiveSession(services, request.sessionId, 'forge_local_diff')
+    const scope = { kind: request.scope ?? 'uncommitted' } as const
+    if (request.path !== undefined) {
+      const text = await services.panel.localText(live, scope, request.path, request.signal)
+      const limit = Math.max(1, Math.min(request.maxChars ?? DEFAULT_FORGE_PATCH_CHARS, MAX_FORGE_PATCH_CHARS))
+      const bounded = truncateText(text, limit)
+      return {
+        sessionId: request.sessionId,
+        scope: scope.kind,
+        base: null,
+        files: [],
+        omitted: 0,
+        text: bounded,
+        ...(bounded.length < text.length ? { textTruncated: true as const } : {}),
+      }
+    }
+    const diff = await services.panel.localDiff(live, scope, request.signal)
+    const maxFiles = Math.max(1, Math.min(request.maxFiles ?? 50, 200))
+    return {
+      sessionId: request.sessionId,
+      scope: scope.kind,
+      base: diff.base,
+      files: diff.files.slice(0, maxFiles).map(forgeFileSummary),
+      omitted: diff.omitted + Math.max(0, diff.files.length - maxFiles),
+    }
+  }
+
+  /** The branches this session's checkout has, and which one is current. */
+  async forgeBranches(request: { sessionId: string; signal?: AbortSignal }): Promise<{
+    sessionId: string
+    current: string | null
+    branches: readonly string[]
+  }> {
+    await this.assertSessionVisible(request.sessionId, 'forge_branches')
+    const services = this.requireForgeServices()
+    const live = this.requireLiveSession(services, request.sessionId, 'forge_branches')
+    const branches = await services.panel.branches(live, request.signal)
+    return { sessionId: request.sessionId, current: branches.current, branches: branches.branches }
   }
 
   private async toWorkspaceInfo(
@@ -6342,6 +6623,92 @@ function tailText(text: string, limit: number): string {
 function normalizeCommandLine(input: string): string {
   const trimmed = input.trim()
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+}
+
+/** Project one diff file onto the bounded listing row. */
+function forgeFileSummary(file: DshForgeDiffFile): ForgeFileSummary {
+  return {
+    path: file.path,
+    previousPath: file.previousPath,
+    status: file.status,
+    binary: file.binary,
+    oversized: file.oversized,
+    untracked: file.untracked,
+    additions: file.additions,
+    deletions: file.deletions,
+    hunks: file.hunks.length,
+  }
+}
+
+/** Project one change-request diff onto the bounded listing. */
+function forgeDiffSummary(
+  diff: DshForgeChangeRequestDiff,
+  maxFiles: number,
+): ForgeDiffSummary {
+  return {
+    headSha: diff.headSha,
+    files: diff.files.slice(0, maxFiles).map(forgeFileSummary),
+    localAhead: diff.localAhead,
+    ...(diff.files.length > maxFiles ? { truncated: true as const } : {}),
+  }
+}
+
+/**
+ * Project one session binding plus its optional fresh reads.
+ *
+ * A binding without a snapshot is still reported: its `failure` is exactly what the
+ * panel shows (for example "not authenticated"), and dropping it would make an
+ * unauthenticated binding look like no binding at all.
+ */
+function forgeViewOf(
+  binding: DshSessionChangeRequest,
+  diff?: ForgeDiffSummary,
+  checksStale?: boolean,
+): ForgeChangeView {
+  const snapshot = binding.update?.snapshot
+  const common = {
+    url: binding.url,
+    origin: binding.origin,
+    ...(binding.ref === null
+      ? {}
+      : { number: binding.ref.number, repository: binding.ref.repository }),
+    ...(binding.update === null ? {} : { fetchedAt: binding.update.fetchedAt }),
+    ...(binding.update?.failure === undefined
+      ? {}
+      : { failure: { code: binding.update.failure.code, message: binding.update.failure.message } }),
+    ...(diff === undefined ? {} : { diff }),
+    ...(checksStale === true ? { checksStale: true as const } : {}),
+  }
+  if (snapshot === undefined) return common
+  return {
+    ...common,
+    title: snapshot.title,
+    state: snapshot.state,
+    draft: snapshot.draft,
+    author: snapshot.author,
+    headBranch: snapshot.headBranch,
+    headSha: snapshot.headSha,
+    baseBranch: snapshot.baseBranch,
+    additions: snapshot.additions,
+    deletions: snapshot.deletions,
+    mergeability: snapshot.mergeability,
+    mergeReady: snapshot.mergeReady,
+    mergeMethods: snapshot.mergeMethods,
+    reviewDecision: snapshot.reviewDecision,
+    checksRollup: snapshot.checksRollup,
+    ...(snapshot.checksTruncated === undefined ? {} : { checksTruncated: snapshot.checksTruncated }),
+    unresolvedThreads: snapshot.unresolvedThreads,
+    updatedAt: snapshot.updatedAt,
+    closedAt: snapshot.closedAt,
+    checks: snapshot.checks.map((check) => ({
+      name: check.name,
+      state: check.state,
+      url: check.url,
+      workflow: check.workflow,
+      startedAt: check.startedAt,
+      completedAt: check.completedAt,
+    })),
+  }
 }
 
 /**

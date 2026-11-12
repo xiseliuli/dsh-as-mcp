@@ -311,6 +311,55 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('routes the forge arguments through to the driver', async () => {
+    const calls: Record<string, unknown>[] = []
+    const recording = await boot(stubDriver({
+      forgeChanges: async (request) => {
+        calls.push({ tool: 'forge_changes', ...request })
+        return { sessionId: request.sessionId, changes: [] }
+      },
+      forgeLocalDiff: async (request) => {
+        calls.push({ tool: 'forge_local_diff', ...request })
+        return { sessionId: request.sessionId, scope: request.scope ?? 'uncommitted', base: null, files: [], omitted: 0 }
+      },
+      forgeBranches: async (request) => {
+        calls.push({ tool: 'forge_branches', sessionId: request.sessionId })
+        return { sessionId: request.sessionId, current: 'main', branches: [] }
+      },
+    }))
+    try {
+      await callTool(recording.url, 'forge_changes', {
+        sessionId: 'session-1',
+        includeChecks: true,
+        includeDiff: true,
+        maxFiles: 7,
+      })
+      await callTool(recording.url, 'forge_local_diff', {
+        sessionId: 'session-1',
+        scope: 'staged',
+        path: 'src/index.ts',
+        maxFiles: 3,
+        maxChars: 1234,
+      })
+      await callTool(recording.url, 'forge_branches', { sessionId: 'session-1' })
+      expect(calls).toEqual([
+        { tool: 'forge_changes', sessionId: 'session-1', includeChecks: true, includeDiff: true, maxFiles: 7 },
+        {
+          tool: 'forge_local_diff',
+          sessionId: 'session-1',
+          scope: 'staged',
+          path: 'src/index.ts',
+          maxFiles: 3,
+          maxChars: 1234,
+          signal: expect.anything(),
+        },
+        { tool: 'forge_branches', sessionId: 'session-1' },
+      ])
+    } finally {
+      await recording.stop()
+    }
+  })
+
   it('reports a harness failure as a tool error, not a transport error', async () => {
     const failing = await boot(
       stubDriver({
@@ -450,6 +499,7 @@ describe('MCP Streamable HTTP endpoint', () => {
         'session_fork', 'session_rename', 'session_set_model', 'session_archive', 'session_unarchive',
         'session_pin', 'session_unpin', 'session_command_list', 'session_command', 'session_goal',
         'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
+        'forge_changes', 'forge_local_diff', 'forge_branches',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -465,7 +515,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(42)
+      expect(all).toHaveLength(45)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {

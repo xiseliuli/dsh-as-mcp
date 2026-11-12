@@ -79,6 +79,40 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
     editScheduledTask: async ({ scheduleId, action }) => (action === 'delete'
       ? { found: false, deleted: true, id: scheduleId }
       : { found: true, updated: true, id: scheduleId }),
+    forgeChanges: async ({ sessionId }) => ({
+      sessionId,
+      changes: [{
+        url: 'https://github.com/example/repo/pull/1',
+        origin: 'created',
+        number: 1,
+        repository: { forge: 'github', host: 'github.com', owner: 'example', name: 'repo' },
+        title: 'stub change request',
+        state: 'open',
+        checksRollup: 'success',
+      }],
+    }),
+    forgeLocalDiff: async ({ sessionId, scope }) => ({
+      sessionId,
+      scope: scope ?? 'uncommitted',
+      base: 'main',
+      files: [{
+        path: 'src/index.ts',
+        previousPath: null,
+        status: 'modified',
+        binary: false,
+        oversized: false,
+        untracked: false,
+        additions: 3,
+        deletions: 1,
+        hunks: 1,
+      }],
+      omitted: 0,
+    }),
+    forgeBranches: async ({ sessionId }) => ({
+      sessionId,
+      current: 'main',
+      branches: ['main', 'feature'],
+    }),
     mutateSessionGoal: async ({ sessionId, action }) => ({
       sessionId,
       action,

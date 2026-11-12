@@ -244,6 +244,9 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `schedule_list` | Host 定时任务的一页，活动任务按下次触发时间在前，暂停/已结束的在后。`active: true` 只留活动任务，`false` 只留暂停与已结束的；不传则返回全部。`limit` 为 1–200（默认 20），`offset` 用于跳过。每行含任务 `id`、`title`、`prompt`、时间形态字段、`scheduledAt`、`status`、`target`，以及触发过之后的最近一次投递。列出的是任何会话创建的任务；`session.scope` 为 `"owned"` 时拒绝。 |
 | `schedule_view` | 按 `scheduleId` 读一个 Host 定时任务，字段与 `schedule_list` 相同并附投递目标细节。已不存在的 id 返回 `{ "found": false, "id": ... }` 而不是报错，清理循环因此保持幂等。`session.scope` 为 `"owned"` 时拒绝。 |
 | `schedule_edit` | 修改或删除一个 Host 定时任务。`action: "update"` 至少需要一项改动：`title`、`prompt`、某种时间形态（`rrule`、`afterSeconds` 或 `everySeconds`）、`target`（`"session"` 需 `sessionId`，`"new"`/`"new_once"` 可带 `cwd`/`agentPreset`），或 `active`——`false` 暂停，`true` 恢复，旧规则已耗尽时恢复可能需要新的时间形态。`action: "delete"` 删除任务及其保存的投递记录，且不接受任何改动字段。`expectedUpdatedAt` 是丢失更新的守卫：若任务在该次读取后变过，调用返回 `conflict: true` 且不做任何修改。结果是数据而不是错误：`{ updated: true, task }`、`{ deleted: true }`、`{ found: false }` 或 `{ conflict: true }`。`session.scope` 为 `"owned"` 时拒绝。 |
+| `forge_changes` | 某会话绑定的变更请求（pull request），即 DSH forge 面板看到的内容：每个绑定的 `url` 与 `origin`、forge 解析成功时的仓库与 `number`，以及缓存的快照——`title`、`state`、`draft`、`author`、`headBranch`/`baseBranch`、`additions`/`deletions`、`mergeability`、`mergeReady`、`mergeMethods`、`reviewDecision`、`checksRollup` 与 `checks` 明细、`unresolvedThreads`、`updatedAt`。快照读不出来的绑定仍会列出，并带 `failure`（例如 `unauthenticated`），因为面板也是这么显示的。`includeChecks` 会向 forge 刷新每个请求的 checks（每个请求一次调用，需要 forge 登录；刷新失败则保留缓存快照并标 `checksStale`），`includeDiff` 增加变更文件列表（由 `maxFiles` 限制）。只读——不提交、不标 ready、不合并。需要 forge bundle 且 harness 当前持有该会话的 live 句柄。 |
+| `forge_local_diff` | 某会话的本地 Git diff（forge 面板所显示的那份），让调用方看到 agent 实际改了什么。`scope` 选择面板视图：`uncommitted`（默认，所有未提交改动）、`branch`（会话分支相对基线）、`staged` 或 `unstaged`。不传 `path` 时返回文件清单——`path`、`previousPath`、`status`、增删行数、`hunks` 数量以及 `binary`/`oversized`/`untracked` 标记——由 `maxFiles` 限制并用 `omitted` 说明省略了多少；传 `path` 时返回该文件的 unified patch 文本，由 `maxChars` 限制（默认 16 KiB，最大 64 KiB），被截断时标 `textTruncated`。只读；需要 forge bundle 与 live 会话。 |
+| `forge_branches` | 某会话 checkout 里的分支列表与当前分支 `current`——即 forge 面板分支选择器提供的那份列表，也是 `worktree_create` 的 `from` 可接受的基础版本。只读；需要 forge bundle 与 live 会话。 |
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。传 `sessionIds` 可一次结算多个已知会话，传 `cwd` 可汇总某个工作目录里跑过的所有会话。 |
 | `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件（两者都是**字节**偏移，因此 EOF 处或之后的偏移是空的完整读取），`maxBytes` 用更小的窗口降低单次开销；`sha256: true` 返回整个文件的哈希，作为后续写入/编辑的比较并交换值。 |
 | `file_read_image` | 读取图片（png/jpeg/gif/webp/bmp，按字节嗅探）并以 MCP image block 返回，让你直接看截图或图表而不是靠猜。上限 8 MiB。 |
@@ -381,7 +384,7 @@ profile 能读 session projection 时，`session_status` 会报 `workingDirector
 
 MCP 服务无法主动调用客户端，所以「有什么变了」只能以资源通知的形式送出去。本端点把同一套变更 feed 发布到
 两种标准的推送通道上，而且每条通知都**不携带负载**：它只点名一个合成资源，客户端再去读那个资源拿 JSON。
-这件事没有新增任何工具——工具面是上面表格里的 42 个——推送也没有配置键：它始终开启，且在无人订阅时
+这件事没有新增任何工具——工具面是上面表格里的 45 个——推送也没有配置键：它始终开启，且在无人订阅时
 零成本。
 
 | 客户端时代 | 握手 | 服务端→客户端通道 | 如何请求推送 |

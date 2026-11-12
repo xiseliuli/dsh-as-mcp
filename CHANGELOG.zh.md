@@ -6,6 +6,13 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.57.0
+
+- 在 session 组新增 3 个只读 forge 工具（`forge_changes`、`forge_local_diff`、`forge_branches`），工具面从 42 增至 45（该组从 25 增至 28）。它们把 DSH forge 面板的读取面开放出来，外部调用方不必在本机装 `gh` 就能回答「agent 改了什么」「checks 绿没绿」：`forge_changes` 列出会话绑定的变更请求（URL、绑定来源、仓库/编号，以及缓存快照——标题、状态、草稿、作者、head/base 分支、增删行、可合并性、`mergeReady`、评审结论、checks 汇总与明细、未解决讨论数、更新时间）；`forge_local_diff` 按面板的四种视图（默认 `uncommitted`，另有 `branch`、`staged`、`unstaged`）返回工作树 diff 的有界文件清单，给了 `path` 则返回单文件 unified patch 文本；`forge_branches` 返回 checkout 的分支集合与当前分支，正是 `worktree_create { from }` 接受的基础版本集合。
+- **诚实地给出部分信息**：快照读不出来的绑定仍会带 `failure`（例如 `unauthenticated`）列出，而不是凭空消失——面板也是这么显示的；请求刷新 checks 失败时保留缓存快照并标 `checksStale`；所有载荷都有界（列表用 `maxFiles`，patch 文本 `maxChars` 上限 64 KiB，被裁剪时用 `omitted`/`truncated`/`textTruncated` 标记）。本组不写任何东西：不提评审、不标 ready、不合并——这些刻意不做，因为它们会以用户的凭据操作代码托管方。
+- forge 读取由 **live 会话句柄**（`ctx.sessions.get`）作用域化，因此冷会话会被明确拒绝而不是报成「没有变更请求」；`session.scope: "owned"` 仍然作用于会话。`dsh_info.harnessServices` 新增 `sessions`、`forgeSession`、`forgePanel` 三个探针（共 33 个，原为 30 个），`dsh_info.notes` 增加一段只读说明。无新增配置键：推送、两种传输、工具组与设置面板均不变。
+- 文档与测试：两份 README 增加 3 行工具表，`docs/CAPABILITY-GAPS.md` 更新为 45 工具 / 33 探针，`cordis.patch.yml` 把 session 组注释改为 28。`tests/forge.test.ts` 钉住能力门槛、live 会话要求、快照投影（含失败绑定）、刷新/过期语义、diff 边界与分支透传；`tests/mcp-endpoint.test.ts` 钉住参数透传；`tests/availability.test.ts` 覆盖三项新依赖能力。
+
 ## 0.56.0
 
 - 在 session 组末尾新增 4 个工具（`schedule_create`、`schedule_list`、`schedule_view`、`schedule_edit`），工具面从 38 增至 42（该组从 21 增至 25）。它们包装 Host 的 `ctx.schedule` 服务，任务由 harness 自己存储与投递：每次触发都把 prompt 送到目标会话，无论本端点或任何客户端是否在线。`schedule_create` 必须且只能给一种时间形态——`rrule`（一行 `DTSTART` 加一行 `RRULE`，与 DSH「自动化」页面写出的 RFC 5545 子集相同）、`afterSeconds`（从现在起 N 秒后一次）、或 `everySeconds`（固定间隔）——`target` 取 `"session"`（更新已有会话，需要 `sessionId`）、`"new_once"`（首次投递新建会话并复用）、`"new"`（每次投递新建会话），后两者可带 `cwd`/`agentPreset`。同时给两种时间形态会被拒绝而不是悄悄取其一；`target` 为新建会话却又给了 `sessionId` 也会因自相矛盾被拒绝。`schedule_list` 分页列出任务（活动任务按下次触发在前，`limit` 1–200）；`schedule_view` 对不存在的 id 返回 `found: false` 而不是报错；`schedule_edit` 负责更新/删除，`active: false` 暂停、`true` 恢复，删除时拒绝任何改动字段。
