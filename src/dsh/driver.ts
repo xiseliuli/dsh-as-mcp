@@ -317,6 +317,14 @@ export interface WorkspaceInfo {
   readonly createdAt: string
   readonly updatedAt: string
   readonly sessionCount: number
+  /**
+   * The sessions this registration accounts for, in the group's order.
+   *
+   * This is what `session_list` cannot tell you: which group a session is in, and
+   * where it sits in that group's manual order. It is also what makes
+   * session_move/session_reorder observable to a caller.
+   */
+  readonly sessionIds: readonly string[]
   readonly status: 'ok' | 'missing-dir'
 }
 
@@ -1379,6 +1387,9 @@ export class DshDriver {
       // Forge reads need three services together: the live-session store scopes
       // them, forgeSession holds the bindings, forgePanel serves branches/diffs.
       sessions: typeof this.sessionStore()?.get === 'function',
+      // Membership/organization edits live on the Workspace object the registry
+      // hands back, so the probe checks the members rather than the service.
+      workspaceOrganize: typeof this.workspaceRegistry()?.get === 'function',
       forgeSession: typeof this.forgeSessionService()?.changeRequests === 'function',
       forgePanel: typeof this.forgePanelService()?.localDiff === 'function',
       goals: typeof this.goalService()?.create === 'function',
@@ -2648,6 +2659,236 @@ export class DshDriver {
     return { sessionId: request.sessionId, current: branches.current, branches: branches.branches }
   }
 
+  // -------------------------------------------------------------------------
+  // File deletion/moves and workspace organization
+  // -------------------------------------------------------------------------
+
+  /**
+   * Delete one file through the filesystem seam.
+   *
+   * Directories are refused on purpose: a recursive delete is not the same operation
+   * as removing a file, and the safe version of it belongs in `shell_run` where the
+   * caller writes the command. `expectedSha256` is the compare-and-swap guard — the
+   * same shape `file_write`/`file_edit` use — and it needs the file to be readable
+   * within the configured read limit, which the error says when it is not.
+   */
+  async deleteFile(request: {
+    path: string
+    cwd?: string
+    expectedSha256?: string
+    signal?: AbortSignal
+  }): Promise<{ path: string; deleted: true }> {
+    const fs = this.requireFileSystem()
+    if (typeof fs.deleteFile !== 'function') {
+      throw new DshCapabilityError(
+        'fs',
+        'this DSH profile cannot delete files (fs.deleteFile is missing). Use shell_run with rm instead.',
+      )
+    }
+    const target = await fs.resolve(request.path, {
+      ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+    })
+    const displayPath = fs.processPath(target)
+    const info = await fs.stat(target, request.signal)
+    if (info === undefined) {
+      throw new Error(`cannot delete ${displayPath}: it does not exist (a delete is not idempotent here; read it first)`)
+    }
+    if (info.type === 'directory') {
+      throw new Error(
+        `${displayPath} is a directory. This tool deletes files only; for a tree use shell_run with the `
+        + 'exact rm command so the intent is visible in the session log.',
+      )
+    }
+    if (request.expectedSha256 !== undefined) {
+      const limit = this.config.limits.maxReadBytes
+      if (info.size !== undefined && info.size > limit) {
+        throw new Error(
+          `refusing to verify ${displayPath}: it is ${info.size} bytes, above the ${limit}-byte read limit, so `
+            + 'its sha256 cannot be checked here. Omit expectedSha256 to delete it unconditionally.',
+        )
+      }
+      const before = await fs.readText(target, request.signal)
+      const actual = sha256OfText(before)
+      if (actual !== request.expectedSha256.toLowerCase()) {
+        throw new Error(
+          `refusing to delete ${displayPath}: its current sha256 is ${actual}, not the expected `
+            + `${request.expectedSha256}. The file changed since you read it.`,
+        )
+      }
+    }
+    await fs.deleteFile(target, undefined, request.signal)
+    return { path: displayPath, deleted: true }
+  }
+
+  /**
+   * Move or rename one file inside the filesystem seam.
+   *
+   * The seam writes the destination first and removes the source second, and reports
+   * a `sourceFailure` when the second phase did not complete — so the reply says
+   * `sourceDeleted: false` with the reason rather than pretending the move was atomic.
+   * An existing destination is refused unless `overwrite: true`, in which case the
+   * current destination version is used as the compare-and-swap guard.
+   */
+  async moveFile(request: {
+    source: string
+    destination: string
+    cwd?: string
+    overwrite?: boolean
+    signal?: AbortSignal
+  }): Promise<{
+    source: string
+    destination: string
+    operation: 'create' | 'update'
+    sourceDeleted: boolean
+    sourceFailure?: { code: string; message: string }
+  }> {
+    const fs = this.requireFileSystem()
+    if (typeof fs.moveFile !== 'function') {
+      throw new DshCapabilityError(
+        'fs',
+        'this DSH profile cannot move files (fs.moveFile is missing). Use shell_run with mv instead.',
+      )
+    }
+    const source = await fs.resolve(request.source, {
+      ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+    })
+    const destination = await fs.resolve(request.destination, {
+      ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+    })
+    const sourcePath = fs.processPath(source)
+    const destinationPath = fs.processPath(destination)
+    const sourceInfo = await fs.stat(source, request.signal)
+    if (sourceInfo === undefined) throw new Error(`cannot move ${sourcePath}: it does not exist`)
+    if (sourceInfo.type === 'directory') {
+      throw new Error(
+        `${sourcePath} is a directory. This tool moves files only; use shell_run with the exact mv command for a tree.`,
+      )
+    }
+    const destinationInfo = await fs.stat(destination, request.signal)
+    let expectedDestination: unknown
+    if (destinationInfo !== undefined) {
+      if (request.overwrite !== true) {
+        throw new Error(
+          `refusing to move onto ${destinationPath}: it already exists. Pass overwrite: true to replace it, `
+            + 'or choose another destination.',
+        )
+      }
+      expectedDestination = { kind: 'replaceIfVersion', version: destinationInfo.version }
+    } else {
+      expectedDestination = { kind: 'createIfAbsent' }
+    }
+    const outcome = await fs.moveFile(
+      source,
+      destination,
+      {
+        expectedSource: { version: sourceInfo.version },
+        expectedDestination,
+      },
+      request.signal,
+    )
+    return {
+      source: sourcePath,
+      destination: destinationPath,
+      operation: outcome.destination.operation,
+      sourceDeleted: outcome.sourceDeleted,
+      ...(outcome.sourceFailure === undefined
+        ? {}
+        : { sourceFailure: { code: outcome.sourceFailure.code, message: outcome.sourceFailure.message } }),
+    }
+  }
+
+  /**
+   * Rename one workspace registration.
+   *
+   * The DSH UI's rename action writes the same `title`; the directory and every
+   * session's group membership are untouched. A blank title is refused here because
+   * the harness's own UI refuses it too.
+   */
+  async renameWorkspace(request: { workspaceId: string; title: string }): Promise<{
+    workspaceId: string
+    title: string
+  }> {
+    const title = request.title.trim()
+    if (title === '') throw new Error('workspace_rename needs a non-blank title')
+    const registry = this.requireWorkspaceRegistry()
+    const workspace = registry.get(request.workspaceId)
+    if (workspace === undefined) throw new Error(`no workspace with id ${request.workspaceId}`)
+    if (typeof workspace.setTitle !== 'function') {
+      throw new DshCapabilityError(
+        'workspaceRegistry',
+        'this DSH profile cannot rename workspaces (Workspace.setTitle is missing).',
+      )
+    }
+    await workspace.setTitle(title)
+    return { workspaceId: request.workspaceId, title }
+  }
+
+  /**
+   * Attach a session to a workspace's group, or detach it again.
+   *
+   * This is the drag-between-groups action in the DSH sidebar: the session keeps its
+   * log and its directory, and only its group membership changes. Detaching leaves
+   * the session outside every group, which is where a `cwd`-only session already is.
+   */
+  async moveSessionToWorkspace(request: {
+    sessionId: string
+    workspaceId: string
+    action?: 'attach' | 'detach'
+  }): Promise<{ sessionId: string; workspaceId: string; attached: boolean }> {
+    await this.assertSessionVisible(request.sessionId, 'session_move')
+    const registry = this.requireWorkspaceRegistry()
+    const workspace = registry.get(request.workspaceId)
+    if (workspace === undefined) throw new Error(`no workspace with id ${request.workspaceId}`)
+    const action = request.action ?? 'attach'
+    if (action === 'attach') {
+      if (typeof workspace.attachSession !== 'function') {
+        throw new DshCapabilityError(
+          'workspaceRegistry',
+          'this DSH profile cannot move a session into a workspace (Workspace.attachSession is missing).',
+        )
+      }
+      await workspace.attachSession(request.sessionId)
+      return { sessionId: request.sessionId, workspaceId: request.workspaceId, attached: true }
+    }
+    if (typeof workspace.detachSession !== 'function') {
+      throw new DshCapabilityError(
+        'workspaceRegistry',
+        'this DSH profile cannot detach a session from a workspace (Workspace.detachSession is missing).',
+      )
+    }
+    await workspace.detachSession(request.sessionId)
+    return { sessionId: request.sessionId, workspaceId: request.workspaceId, attached: false }
+  }
+
+  /**
+   * Move one session to a position in its workspace's manual order.
+   *
+   * This is the sidebar's drag-to-reorder action; omitting `beforeSessionId` moves the
+   * session to the end of the group.
+   */
+  async reorderSession(request: {
+    sessionId: string
+    workspaceId: string
+    beforeSessionId?: string
+  }): Promise<{ sessionId: string; workspaceId: string; before: string | null }> {
+    await this.assertSessionVisible(request.sessionId, 'session_reorder')
+    const registry = this.requireWorkspaceRegistry()
+    const workspace = registry.get(request.workspaceId)
+    if (workspace === undefined) throw new Error(`no workspace with id ${request.workspaceId}`)
+    if (typeof workspace.insertSessionBefore !== 'function') {
+      throw new DshCapabilityError(
+        'workspaceRegistry',
+        'this DSH profile cannot reorder sessions (Workspace.insertSessionBefore is missing).',
+      )
+    }
+    await workspace.insertSessionBefore(request.sessionId, request.beforeSessionId)
+    return {
+      sessionId: request.sessionId,
+      workspaceId: request.workspaceId,
+      before: request.beforeSessionId ?? null,
+    }
+  }
+
   private async toWorkspaceInfo(
     workspace: ReturnType<DshWorkspaceRegistry['list']>[number],
   ): Promise<WorkspaceInfo> {
@@ -2658,6 +2899,7 @@ export class DshDriver {
       createdAt: workspace.createdAt,
       updatedAt: workspace.updatedAt,
       sessionCount: workspace.sessionIds.length,
+      sessionIds: [...workspace.sessionIds],
       status: await workspace.status(),
     }
   }

@@ -1,7 +1,7 @@
 {
   "name": "dsh-as-mcp",
-  "version": "0.57.0",
-  "description": "Expose this DeepSeek Harness as an MCP server: create workspaces and sessions, isolate sessions in Git worktrees, drive DSH agents, edit files, run commands (foreground and background), fork/rename/rename-model/archive/pin sessions, run slash commands and manage durable goals, read exact token usage and cost receipts for every call, manage durable goals, schedule recurring tasks, read the forge panel (change requests, local diffs, branches), and subscribe to live session and job change feeds over both MCP push transports.",
+  "version": "0.58.0",
+  "description": "Expose this DeepSeek Harness as an MCP server: create workspaces and sessions, isolate sessions in Git worktrees, drive DSH agents, edit files, run commands (foreground and background), fork/rename/rename-model/archive/pin sessions, run slash commands and manage durable goals, read exact token usage and cost receipts for every call, manage durable goals, schedule recurring tasks, read the forge panel (change requests, local diffs, branches), organize files and workspace groups, and subscribe to live session and job change feeds over both MCP push transports.",
   "type": "module",
   "license": "MIT",
   "repository": {

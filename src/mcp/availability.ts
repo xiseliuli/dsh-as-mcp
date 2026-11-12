@@ -36,7 +36,10 @@ export interface ToolAvailability {
 
 /** Tools per group, in registration order. */
 const GROUP_TOOLS: Record<keyof ToolToggles, readonly string[]> = {
-  workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
+  workspace: [
+    'workspace_create', 'workspace_list', 'workspace_delete', 'workspace_rename',
+    'session_move', 'session_reorder',
+  ],
   session: [
     'session_create', 'worktree_create', 'worktree_restore', 'session_search', 'session_status', 'session_list',
     'session_prompt', 'session_messages', 'session_tool_result', 'session_queue', 'session_cancel', 'session_fork',
@@ -45,7 +48,7 @@ const GROUP_TOOLS: Record<keyof ToolToggles, readonly string[]> = {
     'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
     'forge_changes', 'forge_local_diff', 'forge_branches',
   ],
-  files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
+  files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list', 'file_delete', 'file_move'],
   shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
   agentTools: ['dsh_tool_list', 'dsh_tool_call'],
   usage: ['session_usage'],
@@ -72,6 +75,11 @@ const REQUIRED_CAPABILITIES: Record<string, readonly string[]> = {
   workspace_create: ['workspaceRegistry'],
   workspace_list: ['workspaceRegistry'],
   workspace_delete: ['workspaceRegistry'],
+  workspace_rename: ['workspaceRegistry', 'workspaceOrganize'],
+  session_move: ['workspaceRegistry', 'workspaceOrganize'],
+  session_reorder: ['workspaceRegistry', 'workspaceOrganize'],
+  file_delete: ['fs'],
+  file_move: ['fs'],
   session_create: ['sessionController'],
   worktree_create: ['sessionController', 'agentResolve', 'worktrees'],
   worktree_restore: ['sessionController', 'agentResolve', 'worktrees'],
@@ -118,6 +126,7 @@ const REQUIRED_CAPABILITIES: Record<string, readonly string[]> = {
 /** Human phrases for the probes, so the reason is about a service, not a flag. */
 const CAPABILITY_LABEL: Record<string, string> = {
   workspaceRegistry: 'a workspace registry',
+  workspaceOrganize: 'workspace rename/membership methods (Workspace.setTitle/attachSession/insertSessionBefore)',
   sessionController: 'a session controller',
   sessionSearch: 'sessionController.search()',
   sessionQueue: 'sessionController.updateQueue()',

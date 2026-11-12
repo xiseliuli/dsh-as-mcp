@@ -33,6 +33,12 @@ export interface DshWorkspace {
   readonly sessionIds: readonly string[]
   setTitle(title: string): Promise<void>
   status(): Promise<'ok' | 'missing-dir'>
+  /** Move one accounted session into this workspace's manual order. */
+  insertSessionBefore?(sessionId: string, beforeSessionId?: string): Promise<void>
+  /** Attach an existing session to this workspace registration. */
+  attachSession?(sessionId: string): Promise<void>
+  /** Detach a session from this workspace registration (the session survives). */
+  detachSession?(sessionId: string): Promise<void>
 }
 
 /** `ctx.workspaceRegistry` */
@@ -507,6 +513,8 @@ export interface DshFsDirEntry {
 export interface DshFsInfo {
   readonly type: 'file' | 'directory' | 'other'
   readonly size?: number
+  /** The seam's opaque version token, usable as a compare-and-swap guard. */
+  readonly version?: unknown
 }
 
 /** `ctx.fs` — packages/fs/fs/src/index.ts */
@@ -531,6 +539,34 @@ export interface DshFileSystem {
   listDir(target: DshFsTarget, signal?: AbortSignal): Promise<readonly DshFsDirEntry[]>
   writeText(target: DshFsTarget, content: string, expected?: unknown, signal?: AbortSignal): Promise<{
     readonly operation: 'create' | 'update'
+  }>
+  /**
+   * Delete one file. Absent on a harness that does not expose the seam's delete, so
+   * the tool degrades to a capability error rather than a TypeError.
+   */
+  deleteFile?(
+    target: DshFsTarget,
+    expected?: { readonly version: unknown },
+    signal?: AbortSignal,
+  ): Promise<{ readonly before: string | null }>
+  /**
+   * Move (or rename) one file inside the seam. A two-phase operation: the
+   * destination is written first and the source removed after, and the outcome says
+   * whether the source was deleted.
+   */
+  moveFile?(
+    source: DshFsTarget,
+    destination: DshFsTarget,
+    options: {
+      readonly expectedSource?: { readonly version: unknown }
+      readonly expectedDestination?: unknown
+    },
+    signal?: AbortSignal,
+  ): Promise<{
+    readonly sourceBefore: string | null
+    readonly destination: { readonly operation: 'create' | 'update'; readonly before: string | null }
+    readonly sourceDeleted: boolean
+    readonly sourceFailure?: { readonly code: string; readonly message: string }
   }>
 }
 

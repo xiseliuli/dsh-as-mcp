@@ -20,6 +20,7 @@ const FULL = {
   sessions: true,
   forgeSession: true,
   forgePanel: true,
+  workspaceOrganize: true,
   sessionViews: true,
   sessionArchive: true,
   sessionPin: true,
@@ -48,10 +49,10 @@ describe('describeToolAvailability', () => {
   it('reports every advertised tool available when every probe is true', () => {
     const report = describeToolAvailability(allOn().tools, FULL, allOn())
     expect(report.unavailable).toEqual([])
-    // dsh_info plus the 37 other registered tools (38 advertised in total).
-    expect(report.available).toBe(45)
-    expect(report.availableTools).toHaveLength(45)
-    expect(new Set(report.availableTools).size).toBe(45)
+    // dsh_info plus the 49 other registered tools (50 advertised in total).
+    expect(report.available).toBe(50)
+    expect(report.availableTools).toHaveLength(50)
+    expect(new Set(report.availableTools).size).toBe(50)
     expect(report.availableTools[0]).toBe('dsh_info')
     expect(report.notes ?? []).toEqual([])
   })
@@ -63,7 +64,8 @@ describe('describeToolAvailability', () => {
       'shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list',
     ])
     expect(report.unavailable[0]?.reason).toMatch(/tools\.shell: false/)
-    expect(report.available).toBe(40)
+    // 50 advertised minus the five shell tools.
+    expect(report.available).toBe(45)
     expect(report.availableTools).not.toContain('shell_run')
   })
 
@@ -79,7 +81,8 @@ describe('describeToolAvailability', () => {
       'forge_changes', 'forge_local_diff', 'forge_branches',
     ]
     expect(report.unavailable.map((entry) => entry.tool)).toEqual(sessionTools)
-    expect(report.available).toBe(17)
+    // 50 advertised minus the 28 session tools.
+    expect(report.available).toBe(22)
     expect(report.availableTools).not.toContain('session_create')
     expect(report.availableTools).not.toContain('worktree_create')
   })
@@ -161,7 +164,7 @@ describe('describeToolAvailability', () => {
     const report = describeToolAvailability(allOn().tools, { ...FULL, sessionViews: false }, allOn())
     // Neither tool is blocked: the views are additive diagnostics.
     expect(report.unavailable).toEqual([])
-    expect(report.available).toBe(45)
+    expect(report.available).toBe(50)
     expect(report.notes?.join('\n')).toMatch(/session_status and session_list cannot report workingDirectory/)
   })
 })

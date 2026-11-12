@@ -31,6 +31,7 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z',
         sessionCount: 0,
+        sessionIds: [],
         status: 'ok',
       },
     }),
@@ -112,6 +113,24 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
       sessionId,
       current: 'main',
       branches: ['main', 'feature'],
+    }),
+    deleteFile: async ({ path }) => ({ path, deleted: true }),
+    moveFile: async ({ source, destination }) => ({
+      source,
+      destination,
+      operation: 'create',
+      sourceDeleted: true,
+    }),
+    renameWorkspace: async ({ workspaceId, title }) => ({ workspaceId, title }),
+    moveSessionToWorkspace: async ({ sessionId, workspaceId, action }) => ({
+      sessionId,
+      workspaceId,
+      attached: (action ?? 'attach') === 'attach',
+    }),
+    reorderSession: async ({ sessionId, workspaceId, beforeSessionId }) => ({
+      sessionId,
+      workspaceId,
+      before: beforeSessionId ?? null,
     }),
     mutateSessionGoal: async ({ sessionId, action }) => ({
       sessionId,

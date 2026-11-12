@@ -360,6 +360,52 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('routes the organization arguments through to the driver', async () => {
+    const calls: Record<string, unknown>[] = []
+    const recording = await boot(stubDriver({
+      deleteFile: async (request) => {
+        calls.push({ tool: 'file_delete', path: request.path, expectedSha256: request.expectedSha256 })
+        return { path: request.path, deleted: true }
+      },
+      moveFile: async (request) => {
+        calls.push({ tool: 'file_move', source: request.source, destination: request.destination, overwrite: request.overwrite })
+        return { source: request.source, destination: request.destination, operation: 'create', sourceDeleted: true }
+      },
+      renameWorkspace: async (request) => {
+        calls.push({ tool: 'workspace_rename', workspaceId: request.workspaceId, title: request.title })
+        return { workspaceId: request.workspaceId, title: request.title }
+      },
+      moveSessionToWorkspace: async (request) => {
+        calls.push({ tool: 'session_move', sessionId: request.sessionId, workspaceId: request.workspaceId, action: request.action })
+        return { sessionId: request.sessionId, workspaceId: request.workspaceId, attached: true }
+      },
+      reorderSession: async (request) => {
+        calls.push({ tool: 'session_reorder', sessionId: request.sessionId, workspaceId: request.workspaceId, beforeSessionId: request.beforeSessionId })
+        return { sessionId: request.sessionId, workspaceId: request.workspaceId, before: request.beforeSessionId ?? null }
+      },
+    }))
+    try {
+      await callTool(recording.url, 'file_delete', { path: '/tmp/a.txt', expectedSha256: 'abc' })
+      await callTool(recording.url, 'file_move', { source: '/tmp/a.txt', destination: '/tmp/b.txt', overwrite: true })
+      await callTool(recording.url, 'workspace_rename', { workspaceId: 'ws-1', title: 'Renamed' })
+      await callTool(recording.url, 'session_move', { sessionId: 'session-1', workspaceId: 'ws-1', action: 'detach' })
+      await callTool(recording.url, 'session_reorder', {
+        sessionId: 'session-1',
+        workspaceId: 'ws-1',
+        beforeSessionId: 'session-2',
+      })
+      expect(calls).toEqual([
+        { tool: 'file_delete', path: '/tmp/a.txt', expectedSha256: 'abc' },
+        { tool: 'file_move', source: '/tmp/a.txt', destination: '/tmp/b.txt', overwrite: true },
+        { tool: 'workspace_rename', workspaceId: 'ws-1', title: 'Renamed' },
+        { tool: 'session_move', sessionId: 'session-1', workspaceId: 'ws-1', action: 'detach' },
+        { tool: 'session_reorder', sessionId: 'session-1', workspaceId: 'ws-1', beforeSessionId: 'session-2' },
+      ])
+    } finally {
+      await recording.stop()
+    }
+  })
+
   it('reports a harness failure as a tool error, not a transport error', async () => {
     const failing = await boot(
       stubDriver({
@@ -492,7 +538,10 @@ describe('MCP Streamable HTTP endpoint', () => {
 
   it('removes exactly the disabled group from tools/list', async () => {
     const groups: Record<string, string[]> = {
-      workspace: ['workspace_create', 'workspace_list', 'workspace_delete'],
+      workspace: [
+        'workspace_create', 'workspace_list', 'workspace_delete', 'workspace_rename',
+        'session_move', 'session_reorder',
+      ],
       session: [
         'session_create', 'worktree_create', 'worktree_restore', 'session_search', 'session_status', 'session_list',
         'session_prompt', 'session_messages', 'session_tool_result', 'session_queue', 'session_cancel',
@@ -501,7 +550,7 @@ describe('MCP Streamable HTTP endpoint', () => {
         'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
         'forge_changes', 'forge_local_diff', 'forge_branches',
       ],
-      files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
+      files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list', 'file_delete', 'file_move'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
       agentTools: ['dsh_tool_list', 'dsh_tool_call'],
       usage: ['session_usage'],
@@ -515,7 +564,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(45)
+      expect(all).toHaveLength(50)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {

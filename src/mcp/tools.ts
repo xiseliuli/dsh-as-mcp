@@ -84,6 +84,11 @@ export type McpDriver = Pick<
   | 'forgeChanges'
   | 'forgeLocalDiff'
   | 'forgeBranches'
+  | 'deleteFile'
+  | 'moveFile'
+  | 'renameWorkspace'
+  | 'moveSessionToWorkspace'
+  | 'reorderSession'
   | 'updateQueue'
   | 'readQueue'
   | 'probeSessionSearch'
@@ -412,6 +417,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'session_create { worktree } and worktree_create/worktree_restore need a worktrees service (the forge bundle in DSH Desktop/Web); harnessServices.worktrees reports it. A workspaceId-created session that enters a worktree keeps its workspace group and works in the new checkout (a cwd-only session stays ungrouped); session_status.workingDirectory and session_list { includeWorktree } show where each session is working.',
           'session_archive/unarchive and session_pin/unpin write the same registry sets the DSH sidebar uses; session_list reports each row\'s archived and pinned flags. The harness has no session delete, and these tools do not add one.',
           'Slash commands execute without a model turn: session_command_list names what this session accepts and session_command runs one. Only the user-plane commands are admitted (/compact, /plan, /goal, /export); /permission and /feedback are refused before any handler runs, and a refused call writes nothing to the session log.',
+          'File organization: file_delete removes one file (directories are refused — use shell_run with the exact command for a tree) and file_move moves/renames one file, reporting whether the source removal succeeded rather than pretending the move is atomic; both accept the same sha256 compare-and-swap guard the write tools use.',
+          'Workspace organization mirrors the sidebar: workspace_rename changes only the label, session_move attaches/detaches a session group membership, and session_reorder sets a session\'s position in its group\'s manual order.',
           'forge_changes/forge_local_diff/forge_branches read what the DSH forge panel reads — bound change requests (checks, review state), the local working-tree diff, and the branch list — and are read-only: nothing is submitted, marked ready or merged. They need the forge bundle and a session the harness currently holds live (a cold session has no handle). Owned scope still applies to the session.',
           'Scheduled tasks (schedule_*) are Host records, not session records: the harness delivers the prompt at each occurrence whether or not anyone is connected, and the reply carries the generated id plus the first occurrence. They are refused while session.scope is "owned", because a Host record has no owning session to filter on.',
           'session_goal reads and mutates the session\'s durable goal (the round driver advances it across turns). Mutations carry the harness\'s own goal revision, so pass expectedRevision from a read to refuse a goal that changed underneath you.',
@@ -463,7 +470,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       'workspace_list',
       {
         title: 'List DSH workspaces',
-        description: 'List every workspace registered in this DeepSeek Harness, with its id, path, title, session count, and whether the directory still exists.',
+        description: 'List every workspace registered in this DeepSeek Harness, with its id, path, title, session count, the `sessionIds` it accounts for in group order, and whether the directory still exists.',
         inputSchema: z.object({}),
         outputSchema: outputSchema({
           workspaces: z.array(z.looseObject({})).optional(),
@@ -488,6 +495,80 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       },
       guard('workspace_delete', log, async (args) => ok(await driver.deleteWorkspace({
         workspaceId: args.workspaceId,
+      }))),
+    )
+
+    server.registerTool(
+      'workspace_rename',
+      {
+        title: 'Rename a DSH workspace',
+        description:
+          'Rename a workspace registration — the same title the DSH sidebar shows and its rename action '
+          + 'writes. The directory, every session and every group membership are untouched; only the label '
+          + 'changes, so this is the safe way to make a caller-created workspace recognisable to the human. '
+          + 'A blank title is refused, as the UI refuses it.',
+        inputSchema: z.object({
+          workspaceId: z.string().describe('Workspace id from workspace_create or workspace_list.'),
+          title: z.string().min(1).describe('New human-readable workspace title.'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('workspace_rename', log, async (args) => ok(await driver.renameWorkspace({
+        workspaceId: args.workspaceId,
+        title: args.title,
+      }))),
+    )
+
+    server.registerTool(
+      'session_move',
+      {
+        title: 'Move a session into or out of a DSH workspace group',
+        description:
+          'Attach an existing session to a workspace group, or detach it again — the sidebar\'s '
+          + 'drag-between-groups action. The session keeps its log and its working directory; only the group '
+          + 'membership changes, and `workspace_list` / `session_list` report the new grouping. `action` '
+          + 'defaults to "attach"; "detach" leaves the session outside every group, which is where a cwd-only '
+          + 'session already lives.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id to move.'),
+          workspaceId: z.string().describe('Workspace id whose group is the destination (or the current group).'),
+          action: z
+            .enum(['attach', 'detach'])
+            .optional()
+            .describe('attach (default) adds the session to the group; detach removes it.'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_move', log, async (args) => ok(await driver.moveSessionToWorkspace({
+        sessionId: args.sessionId,
+        workspaceId: args.workspaceId,
+        ...(args.action === undefined ? {} : { action: args.action }),
+      }))),
+    )
+
+    server.registerTool(
+      'session_reorder',
+      {
+        title: 'Reorder a session inside its DSH workspace group',
+        description:
+          'Move a session to a position in its workspace\'s manual order — the sidebar\'s drag-to-reorder '
+          + 'action, which is what the DSH UI stores when the view is "Manual". `beforeSessionId` is the row '
+          + 'the session should precede; omit it to move the session to the end of the group. The session must '
+          + 'already be in that workspace\'s manual sequence.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id to move.'),
+          workspaceId: z.string().describe('Workspace id whose group owns the order.'),
+          beforeSessionId: z
+            .string()
+            .optional()
+            .describe('Insert before this session id; omit to place the session at the end of the group.'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_reorder', log, async (args) => ok(await driver.reorderSession({
+        sessionId: args.sessionId,
+        workspaceId: args.workspaceId,
+        ...(args.beforeSessionId === undefined ? {} : { beforeSessionId: args.beforeSessionId }),
       }))),
     )
   }
@@ -2072,6 +2153,72 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         maxBytes: getConfig().limits.maxReadBytes,
         ...(args.expectedSha256 === undefined ? {} : { expectedSha256: args.expectedSha256 }),
       }))),
+    )
+
+    server.registerTool(
+      'file_delete',
+      {
+        title: 'Delete one file through DSH',
+        description:
+          'Delete a single file through this DSH instance\'s filesystem seam, so the same path rules and '
+          + 'sandbox apply as for `file_read`/`file_write`. Files only: a directory is refused, because a '
+          + 'recursive delete is a different operation and belongs in `shell_run` where the exact command is '
+          + 'visible in the session log. `expectedSha256` makes it compare-and-swap — the same guard the write '
+          + 'and edit tools use — and needs the file to be readable within `limits.maxReadBytes`; the error says '
+          + 'so when it is too large to verify. A path that does not exist is an error, not a no-op.',
+        inputSchema: z.object({
+          path: z.string().min(1).describe('File path (absolute, or relative to cwd).'),
+          cwd: z.string().optional().describe('Base directory for a relative path.'),
+          expectedSha256: z
+            .string()
+            .optional()
+            .describe('Refuse the delete unless the file still has this sha256 (from file_read).'),
+        }),
+        annotations: { openWorldHint: true },
+      },
+      guard('file_delete', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.deleteFile({
+          path: args.path,
+          ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          ...(args.expectedSha256 === undefined ? {} : { expectedSha256: args.expectedSha256 }),
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
+    )
+
+    server.registerTool(
+      'file_move',
+      {
+        title: 'Move or rename one file through DSH',
+        description:
+          'Move or rename a single file inside this DSH instance\'s filesystem seam. The seam writes the '
+          + 'destination first and removes the source afterwards, and the reply reports both phases: '
+          + '`operation` (created or updated) and `sourceDeleted` — when the removal failed, `sourceFailure` '
+          + 'carries the reason instead of the move pretending to be atomic. An existing destination is refused '
+          + 'unless `overwrite: true`, in which case the current destination version is the guard. Files only: '
+          + 'for a directory tree use `shell_run` with the exact `mv`.',
+        inputSchema: z.object({
+          source: z.string().min(1).describe('File to move (absolute, or relative to cwd).'),
+          destination: z.string().min(1).describe('New path (absolute, or relative to cwd).'),
+          cwd: z.string().optional().describe('Base directory for relative paths.'),
+          overwrite: z
+            .boolean()
+            .optional()
+            .describe('Replace an existing destination (default false refuses it).'),
+        }),
+        annotations: { openWorldHint: true },
+      },
+      guard('file_move', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.moveFile({
+          source: args.source,
+          destination: args.destination,
+          ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          ...(args.overwrite === undefined ? {} : { overwrite: args.overwrite }),
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
     )
   }
 

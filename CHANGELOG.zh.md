@@ -6,6 +6,14 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.58.0
+
+- 新增 5 个整理类工具——`workspace` 组的 `workspace_rename`、`session_move`、`session_reorder`，以及 `files` 组的 `file_delete`、`file_move`——工具面从 45 增至 50。它们对应人类在侧边栏与文件树里的写操作，并带同样的守卫：`workspace_rename` 只改 DSH 侧边栏显示的标签（目录、会话与成员关系都不动）；`session_move` 把已有会话挂到工作区分组或摘除（跨分组拖拽动作，`action` 默认 `attach`）；`session_reorder` 设置会话在分组成员手动顺序中的位置（拖拽排序动作，省略 `beforeSessionId` 表示移到末尾）。
+- **文件删除与移动刻意收窄**：`file_delete` 经文件系统 seam 删除单个文件，目录直接拒绝——递归删除应放进 `shell_run`，让确切命令出现在会话日志里；`expectedSha256` 给它与 `file_write`/`file_edit` 相同的比较并交换守卫，超过 `limits.maxReadBytes` 无法校验的文件会被拒绝并说明原因，而不是未经校验就删。`file_move` 移动/重命名单个文件，目标已存在默认拒绝（`overwrite: true` 时以目标当前版本为守卫），并分别报告 seam 两步操作的两个阶段——`operation` 与 `sourceDeleted`，删源失败时 `sourceFailure` 给出原因，而不是把半完成的移动说成原子操作。
+- `workspace_list` 每行新增 `sessionIds`（按分组成员的手动顺序），使 `session_move`/`session_reorder` 可被观察，也回答了 `session_list` 回答不了的「这个会话在哪个分组」。此前只有数量。
+- `dsh_info.harnessServices` 新增 `workspaceOrganize` 探针（共 34 个，原为 33 个），`dsh_info.notes` 增加两段文件与工作区整理说明。无新增配置键：推送、两种传输、工具组与设置面板均不变。
+- 文档与测试：两份 README 增加 5 行工具表，`docs/CAPABILITY-GAPS.md` 更新为 50 工具 / 34 探针，`cordis.patch.yml` 的 workspace 与 files 组注释更新。`tests/organization.test.ts` 钉住文件守卫（目录拒绝、比较并交换、过大不可校验、两阶段移动与源删除失败的上报）与工作区写操作（经 workspace 对象改标题、attach/detach、手动顺序、owned 拒绝）；`tests/mcp-endpoint.test.ts` 钉住参数透传；`tests/availability.test.ts` 覆盖新探针与组大小。
+
 ## 0.57.0
 
 - 在 session 组新增 3 个只读 forge 工具（`forge_changes`、`forge_local_diff`、`forge_branches`），工具面从 42 增至 45（该组从 25 增至 28）。它们把 DSH forge 面板的读取面开放出来，外部调用方不必在本机装 `gh` 就能回答「agent 改了什么」「checks 绿没绿」：`forge_changes` 列出会话绑定的变更请求（URL、绑定来源、仓库/编号，以及缓存快照——标题、状态、草稿、作者、head/base 分支、增删行、可合并性、`mergeReady`、评审结论、checks 汇总与明细、未解决讨论数、更新时间）；`forge_local_diff` 按面板的四种视图（默认 `uncommitted`，另有 `branch`、`staged`、`unstaged`）返回工作树 diff 的有界文件清单，给了 `path` 则返回单文件 unified patch 文本；`forge_branches` 返回 checkout 的分支集合与当前分支，正是 `worktree_create { from }` 接受的基础版本集合。

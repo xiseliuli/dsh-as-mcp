@@ -217,8 +217,11 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | --- | --- |
 | `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`、`toolAvailability`（通过全部规则的 `availableTools`，可与 `tools/list` 对照；以及本部署无法服务的工具及原因），以及 `notes` 里的推送 feed URI；`probeSearch` 可验证搜索是否真的可用。 |
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建；传 `createDirectory: false` 则要求它已存在）。 |
-| `workspace_list` | 列出所有工作区：id、路径、标题、目录是否还在，以及**挂在该注册下**的会话数（用 `workspaceId` 创建的会话）——这不是"cwd 恰好是该目录"的会话数，后者由 `session_list { cwd }` 回答。 |
+| `workspace_list` | 列出所有工作区：id、路径、标题、目录是否还在，以及**挂在该注册下**的会话 `sessionIds`（按分组成员的手动顺序；用 `workspaceId` 创建的，或之后用 `session_move` 挂上的；仅在该目录里跑过的不算）——这不是"cwd 恰好是该目录"的会话数，后者由 `session_list { cwd }` 回答。 |
 | `workspace_delete` | 注销一个工作区（文件与会话历史不受影响）；幂等。 |
+| `workspace_rename` | 重命名一个工作区注册项——DSH 侧边栏显示的那个标签，与界面里的重命名动作写的是同一处。目录、会话与分组关系都不变，因此这是让调用方创建的工作区在人类眼里可辨识的安全方式。空 `title` 会被拒绝，与界面一致。 |
+| `session_move` | 把已有会话挂到某个工作区分组，或再摘除——即侧边栏里跨分组拖拽的动作。会话的日志与工作目录都不变，只有分组关系改变，`workspace_list`/`session_list` 会反映新的分组。`action` 默认 `attach`；`detach` 让会话回到不属于任何分组的状态（`cwd`-only 会话本来就在那里）。 |
+| `session_reorder` | 把会话移动到其工作区手动顺序中的某个位置——即侧边栏的拖拽排序动作，也是 DSH 界面在「手动」视图下保存的顺序。`beforeSessionId` 是会话应排在其前面的那一行；省略则移到分组末尾。会话必须已在该工作区的手动序列中。 |
 | `session_create` | 新建一个绑定到工作区（或裸目录）的 DSH agent 会话，可同时给它一个独立的 Git 检出。不指定模型时沿用本 DSH 实例的默认路由（`provider` 与 `model` 必须成对出现——只给一半会在会话创建之前被拒绝；给了不可路由的一对仍会创建会话，但会在 `modelSelectionError` 里说明）。传 `worktree: true`（或 `{ name, from }`）会在会话建成后从工作区创建 Git 分支与检出，并把它设为该会话的实时工作目录：带 `workspaceId` 创建的会话保持所在工作区分组（持久目录仍是工作区），只用 cwd 创建的会话则不在任何分组里。回复带 `worktree` 记录和新的 `workingDirectory`；worktree 创建失败不会回滚会话——它仍能在工作区使用，回复用 `worktreeError` 说明原因（可再用 `worktree_create` 重试）；profile 没有 worktrees 服务时，整个调用在创建会话之前就被拒绝。 |
 | `worktree_create` | 从会话当前的检出创建 Git 分支与检出，并把它设为该会话的工作目录——即 DSH 界面「New worktree」选项对新会话做的事，但用于已存在的会话（会话有正在跑的 turn 时拒绝；同一会话上的并发 worktree 调用会被串行化）。`name` 是新分支名，也是源检出 `.agents/worktrees/` 下的目录名；`from` 是本地 commit、分支或 tag（默认取检出的 `HEAD`）；未提交的文件留在源检出里，分支或检出名已存在则失败。回复带 `path`、`branch`、`baseCommit`、`repositoryRoot` 与 `from`——保存它，`worktree_restore` 要用。需要 worktrees 服务。 |
 | `worktree_restore` | 当 worktree 目录被会话之外的操作删除后，按记录在 `path` 的位置重新检出：`branch` 还在就检出该分支，否则在 `baseCommit` 上重建，仓库根用记录的 `repositoryRoot`。会话当前的工作目录不变；随目录一起丢掉的未提交修改无法恢复。传入 `worktree_create`（或 `session_status.worktree`）返回的那条记录。需要 worktrees 服务。 |
@@ -253,6 +256,8 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `file_write` | 经 DSH 文件系统服务创建或覆盖文件。默认会创建缺失的父目录（`createDirectories: false` 则要求父目录已存在）；`expectedSha256` 让写入变成比较并交换：文件在读到哈希后变过就会被拒绝。 |
 | `file_edit` | 在一个文件里替换字面文本（`oldText` → `newText`）：精确匹配，除非 `replaceAll` 否则要求唯一，歧义匹配不写入，`expectedSha256` 在文件读后变过时拒绝编辑。不再需要"整读 + 整写"。 |
 | `file_list` | 经 DSH 文件系统服务列目录；`recursive` 递归遍历子目录（受 `maxDepth` 与条目上限约束并带 `truncated`），每个条目给相对 `path`；`sha256: true` 为每个文件算哈希以便批量变更检测。 |
+| `file_delete` | 经文件系统 seam 删除单个文件，`file_read`/`file_write` 的路径规则与沙箱同样生效。仅限文件：目录会被拒绝，因为递归删除是另一种操作，应放进 `shell_run` 里让确切命令出现在会话日志中。`expectedSha256` 使其成为比较并交换（值来自 `file_read { sha256: true }`），并要求文件可读且不超过 `limits.maxReadBytes`——文件过大无法校验时错误会说明。路径不存在是错误而不是无操作。 |
+| `file_move` | 在文件系统 seam 内移动或重命名单个文件：`source` 与 `destination` 各自可以是绝对路径或相对 `cwd`。seam 先写目标再删源，回复分别报告两个阶段：`operation`（`create`/`update`）与 `sourceDeleted`——删除失败时 `sourceFailure` 给出原因，而不是假装移动是原子的。目标已存在时默认拒绝，`overwrite: true` 则以目标当前版本作为守卫。仅限文件；目录树请用 `shell_run` 执行确切的 `mv`。 |
 | `shell_run` | 经 DSH shell 服务执行一条命令并等待它结束。 |
 | `shell_start` | 后台启动一条命令（构建、测试、开发服务器）并返回 job id；可选看门狗。最多保留 16 个任务：满了会先淘汰已结束的旧任务，但第 17 个**正在运行**的任务会被拒绝，而不会悄悄停掉别人的进程。 |
 | `shell_output` | 增量读取后台任务的输出（不重复返回已读部分）；`truncated` 表示有字节未送达，`lossy` 表示 shell 服务自身丢弃了字节（此时 spill 路径指向完整流）。 |
@@ -384,7 +389,7 @@ profile 能读 session projection 时，`session_status` 会报 `workingDirector
 
 MCP 服务无法主动调用客户端，所以「有什么变了」只能以资源通知的形式送出去。本端点把同一套变更 feed 发布到
 两种标准的推送通道上，而且每条通知都**不携带负载**：它只点名一个合成资源，客户端再去读那个资源拿 JSON。
-这件事没有新增任何工具——工具面是上面表格里的 45 个——推送也没有配置键：它始终开启，且在无人订阅时
+这件事没有新增任何工具——工具面是上面表格里的 50 个——推送也没有配置键：它始终开启，且在无人订阅时
 零成本。
 
 | 客户端时代 | 握手 | 服务端→客户端通道 | 如何请求推送 |

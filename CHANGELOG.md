@@ -6,6 +6,38 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.58.0
+
+- Five organization tools — `workspace_rename`, `session_move`, `session_reorder` in the `workspace`
+  group and `file_delete`, `file_move` in the `files` group — bring the surface from 45 to 50. They are
+  the writes a human makes in the sidebar and the file tree, with the same guards: `workspace_rename`
+  changes only the label the DSH sidebar shows (directory, sessions and memberships untouched);
+  `session_move` attaches an existing session to a workspace group or detaches it again (the
+  drag-between-groups action, `action` defaulting to `attach`); `session_reorder` sets a session's
+  position in its group's manual order (the drag-to-reorder action, `beforeSessionId` omitted meaning
+  "end of the group").
+- **File deletion and moves are deliberately narrow.** `file_delete` deletes one file through the
+  filesystem seam and refuses a directory outright, because a recursive delete belongs in `shell_run`
+  where the exact command is visible in the session log; `expectedSha256` gives it the same
+  compare-and-swap guard `file_write`/`file_edit` use, and a file too large to verify within
+  `limits.maxReadBytes` is refused with that reason rather than deleted unverified. `file_move` moves or
+  renames one file, refuses an existing destination unless `overwrite: true` (then using the current
+  destination version as the guard), and reports both phases of the seam's two-step operation —
+  `operation` and `sourceDeleted`, with `sourceFailure` carrying the reason when the source removal
+  failed, rather than presenting a half-completed move as atomic.
+- `workspace_list` rows now carry `sessionIds` in the group's manual order, which is what makes
+  `session_move`/`session_reorder` observable (and answers "which group is this session in" — something
+  `session_list` cannot). The previous rows reported only a count.
+- `dsh_info.harnessServices` gained a `workspaceOrganize` probe (34 probes, was 33) and
+  `dsh_info.notes` two paragraphs on the file and workspace organization surface. No new configuration
+  keys: the push surface, both transports, the tool groups and the settings panel are unchanged.
+- Docs and tests: both READMEs gain five tool rows, `docs/CAPABILITY-GAPS.md` moves to 50 tools /
+  34 probes, and `cordis.patch.yml` restates the workspace and files groups. `tests/organization.test.ts`
+  pins the file guards (directory refusal, compare-and-swap, too-large-to-verify, two-phase move with a
+  surfaced source failure) and the workspace writes (title through the workspace object, attach/detach,
+  manual order, owned-scope refusal); `tests/mcp-endpoint.test.ts` pins argument routing;
+  `tests/availability.test.ts` covers the new probe and group sizes.
+
 ## 0.57.0
 
 - Three read-only forge tools in the `session` group — `forge_changes`, `forge_local_diff` and

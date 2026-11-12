@@ -61,6 +61,8 @@
           # group removes all 28 at once; `dsh_info.toolAvailability` names the
           # ones a profile cannot serve.
           session: true
+          # 7 tools: read/read_image/write/edit/list plus delete and move (files only;
+          # a directory delete or move belongs in shell_run with the exact command).
           files: true
           shell: true
           # `dsh_tool_list` and `dsh_tool_call`: run this instance's own agent
