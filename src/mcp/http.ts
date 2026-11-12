@@ -1,7 +1,18 @@
+import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 
-import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol/node'
-import { McpServer, createMcpHandler } from '@modelcontextprotocol/server'
+import { toNodeHandler, toWebRequest, type NodeMcpRequestHandler } from '@modelcontextprotocol/node'
+import {
+  McpServer,
+  WebStandardStreamableHTTPServerTransport,
+  createMcpHandler,
+  isInitializeRequest,
+  isLegacyRequest,
+  legacyStatelessFallback,
+  type JSONRPCMessage,
+  type LegacyHttpHandler,
+  type McpServerFactory,
+} from '@modelcontextprotocol/server'
 
 import type { Config } from '../config.js'
 import type { DshLogger } from '../dsh/types.js'
@@ -61,11 +72,18 @@ export const SERVER_INSTRUCTIONS = [
   'waits already reports the same facts: its reply carries turn.failure for an abnormal ending, and a client that',
   'sends a progressToken gets progress notifications whose message includes the log silence.',
   '',
-  'Modern (2026-07-28) clients can be told when a fire-and-forget turn settles instead of polling. Open one',
-  'subscriptions/listen stream with notifications.resourceSubscriptions = ["dsh://session/<sessionId>/turn"] BEFORE',
-  'prompting; the server publishes notifications/resources/updated for that URI when the turn ends, and resources/read',
-  'on the same URI returns the session_status payload (failure included). A stream opened after the prompt may miss',
-  'the event, and clients that do not subscribe — including every 2025-era client — keep polling session_status.',
+  'Do not poll what can be pushed. Modern (2026-07-28) clients open ONE subscriptions/listen stream and name the',
+  'resources they want (notifications.resourceSubscriptions); the server then publishes',
+  'notifications/resources/updated whenever one changes, and resources/read on that URI returns the JSON payload.',
+  'Feeds, all under dsh://: dsh://sessions, dsh://jobs and dsh://jobs/<jobId>, and per session',
+  'dsh://session/<sessionId>/turn (settlement of a fire-and-forget prompt), .../events (projected durable events:',
+  'seq/type/turn/step/summary), .../assistant (live text/reasoning/tool deltas), .../status (same as session_status)',
+  'and .../projections (workingDirectory, worktree, goal, plan, todos, agentPreset, title). Open the',
+  'listen stream BEFORE prompting; a notification only names the URI, so read it for the data. Event and assistant',
+  'feeds carry a monotonic seq, so a client can drop repeats. 2025-era clients get the same notifications on a',
+  'long-lived GET channel instead: initialize returns Mcp-Session-Id, then GET this same URL with that header and',
+  'Accept: text/event-stream, after resources/subscribe. A 2025 client that ignores the session id keeps the old',
+  'stateless request/response behavior (GET is 405 for it), so polling still works as a fallback.',
   '',
   'To control queued work: session_queue lists the pending inbox and can remove, edit or steer one message before it',
   'runs; session_cancel stops the running turn. If session.scope is "owned", all of these are limited to sessions this',
@@ -79,7 +97,13 @@ export const SERVER_INSTRUCTIONS = [
 export interface EndpointHandle {
   /** The URL an MCP client should POST to. */
   readonly url: string
-  /** Release the listener; safe to call twice. */
+  /**
+   * Release the listener; safe to call twice.
+   *
+   * An open Streamable-HTTP GET stream is an active connection that never ends
+   * on its own, so teardown drops live sockets instead of waiting for clients
+   * to hang up (a settings change or an unload must not stall on one).
+   */
   dispose(): Promise<void>
 }
 
@@ -253,6 +277,335 @@ function queryToken(url: string | undefined): string | null {
   return new URLSearchParams(url.slice(queryAt + 1)).get('token')
 }
 
+/** A human-readable message for an unknown thrown value. */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Most stateful 2025-era sessions one endpoint keeps at once.
+ *
+ * Every session is one live server instance and, once a client opens it, one
+ * long-lived SSE stream; an unbounded map would let a token holder pin an
+ * arbitrary number of both. Eight is far more than the one-or-two concurrent
+ * 2025 clients a DSH endpoint actually sees, and an evicted client recovers by
+ * re-initializing (a 404 tells it its session is gone).
+ */
+const MAX_LEGACY_SESSIONS = 8
+
+/** Idle time after which a stateful 2025-era session is closed. */
+const LEGACY_SESSION_IDLE_MS = 30 * 60 * 1000
+
+/** How often {@link LegacySessionManager} sweeps idle sessions. */
+const LEGACY_SESSION_SWEEP_MS = 60 * 1000
+
+/** One stateful 2025-era session: its server, transport and last-use stamp. */
+interface LegacySession {
+  readonly server: McpServer
+  readonly transport: WebStandardStreamableHTTPServerTransport
+  /** Last request served on this session, for capacity and idle eviction. */
+  lastSeen: number
+}
+
+/**
+ * A JSON-RPC error body shaped like the SDK transports' own error answers.
+ *
+ * Unknown-session answers must stay indistinguishable from the transport's
+ * `404 Session not found`, so a client cannot tell which leg refused it.
+ */
+function jsonRpcErrorResponse(status: number, code: number, message: string): Response {
+  return new Response(JSON.stringify({ jsonrpc: '2.0', error: { code, message }, id: null }), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  })
+}
+
+/** Whether a parsed request body carries an `initialize` JSON-RPC request. */
+function carriesInitialize(body: unknown): boolean {
+  return messagesOf(body).some((message) =>
+    isInitializeRequest(message as unknown as JSONRPCMessage),
+  )
+}
+
+/**
+ * The stateful 2025-era Streamable HTTP leg.
+ *
+ * A 2025 MCP client may POST the `initialize` handshake without a session and
+ * then expect the server to remember it: subsequent POSTs carry the
+ * `Mcp-Session-Id` header, and a long-lived `GET` with `Accept:
+ * text/event-stream` is the channel on which the server pushes notifications.
+ * The stateless serving this endpoint used before cannot do either (it answers
+ * every POST from a fresh instance and `GET`/`DELETE` with 405), so this class
+ * owns one server + transport per session and routes by the header.
+ *
+ * It keeps three behaviours intact:
+ *
+ * - **Backward compatibility.** A legacy POST with no session id that is not an
+ *   `initialize` is still answered statelessly by
+ *   {@link legacyStatelessFallback}, so a client that ignores the response
+ *   header keeps working exactly as before.
+ * - **SDK fidelity.** Requests for a known session go straight to that
+ *   transport, which owns session validation, `MCP-Protocol-Version` checks and
+ *   per-request SSE framing; a `/mcp`-less or stale session id is answered 404
+ *   with the same body the transport emits.
+ * - **Bounded memory.** At most {@link MAX_LEGACY_SESSIONS} sessions, closed
+ *   after {@link LEGACY_SESSION_IDLE_MS} of silence; both paths close the
+ *   transport (which ends its streams) and the server.
+ *
+ * Resumability (`Last-Event-ID` replay) is deliberately not implemented: it
+ * would need a bounded event store per session, while every published
+ * notification is payload-less and names a resource the client re-reads over
+ * `resources/read`. A client whose GET stream drops reconnects without a
+ * cursor and refetches; see the P1 report/CHANGELOG for that limitation.
+ */
+class LegacySessionManager {
+  private readonly sessions = new Map<string, LegacySession>()
+  private readonly stateless: LegacyHttpHandler
+  private readonly factory: McpServerFactory
+  private readonly log: DshLogger
+  private sweepTimer: ReturnType<typeof setInterval> | undefined
+
+  constructor(input: { readonly factory: McpServerFactory; readonly log: DshLogger }) {
+    this.factory = input.factory
+    this.log = input.log
+    this.stateless = legacyStatelessFallback(
+      this.factory,
+      (error) => this.log.warn('[dsh-as-mcp] 2025-era request rejected:', error.message),
+      { maxRequestBodySize: MAX_REQUEST_BYTES },
+    )
+    const timer = setInterval(() => this.evictIdle(), LEGACY_SESSION_SWEEP_MS)
+    // The sweep must never keep the host process (or a test run) alive.
+    if (typeof timer === 'object' && 'unref' in timer) timer.unref()
+    this.sweepTimer = timer
+  }
+
+  /** Open sessions; the push fanout arms while this is non-zero. */
+  get size(): number {
+    return this.sessions.size
+  }
+
+  /** Serve one 2025-era request, opening a session on `initialize`. */
+  async handle(request: Request, body: unknown): Promise<Response> {
+    const method = request.method.toUpperCase()
+    const sessionId = request.headers.get('mcp-session-id')
+    if (sessionId === null) {
+      // Only an initialize opens a session. Everything else keeps the old
+      // stateless serving — including its 405 for GET/DELETE.
+      if (method !== 'POST' || !carriesInitialize(body)) {
+        return await this.stateless(request, { parsedBody: body })
+      }
+      return await this.open(request, body)
+    }
+    const session = this.sessions.get(sessionId)
+    if (session === undefined) return jsonRpcErrorResponse(404, -32001, 'Session not found')
+    session.lastSeen = Date.now()
+    return await session.transport.handleRequest(request, { parsedBody: body })
+  }
+
+  /** Publish one resource update to every live session, best effort. */
+  notifyResourceUpdated(uri: string): void {
+    for (const [sessionId, session] of this.sessions) {
+      try {
+        void Promise.resolve(session.server.server.sendResourceUpdated({ uri })).catch((error: unknown) => {
+          this.log.warn('[dsh-as-mcp] 2025-era push to session %s failed: %s', sessionId, errorText(error))
+        })
+      } catch (error) {
+        this.log.warn('[dsh-as-mcp] 2025-era push to session %s failed: %s', sessionId, errorText(error))
+      }
+    }
+  }
+
+  /** Close every session and stop the sweep timer; safe to call twice. */
+  async close(): Promise<void> {
+    if (this.sweepTimer !== undefined) {
+      clearInterval(this.sweepTimer)
+      this.sweepTimer = undefined
+    }
+    const sessions = [...this.sessions.values()]
+    this.sessions.clear()
+    await Promise.all(sessions.map((session) => this.dispose(session.server, session.transport)))
+  }
+
+  /**
+   * Open one session around an `initialize` request.
+   *
+   * The transport generates the id, calls `onsessioninitialized` before it
+   * answers, and registers the session in the map from there; a rejected
+   * initialize (no id was ever generated) leaves nothing behind.
+   */
+  private async open(request: Request, body: unknown): Promise<Response> {
+    this.evictOverCapacity()
+    let server: McpServer | undefined
+    let transport: WebStandardStreamableHTTPServerTransport | undefined
+    try {
+      server = await this.createServer(request)
+      const created = server
+      let entry: LegacySession | undefined
+      const opened = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sessionId) => {
+          // Two initializes can race past `open`'s capacity check; enforce the
+          // bound again at registration so the map can never end up over it.
+          if (entry === undefined) return
+          this.evictOverCapacity()
+          this.sessions.set(sessionId, entry)
+        },
+        onsessionclosed: (sessionId) => {
+          this.evict(sessionId)
+        },
+      })
+      transport = opened
+      entry = { server: created, transport: opened, lastSeen: Date.now() }
+      opened.onerror = (error) => {
+        this.log.warn('[dsh-as-mcp] 2025-era transport error:', error.message)
+      }
+      // `Server.connect` chains an existing `onclose` rather than replacing it,
+      // so a transport closed from anywhere (eviction included) still drops its
+      // entry from the map.
+      opened.onclose = () => {
+        for (const [sessionId, candidate] of this.sessions) {
+          if (candidate.transport === opened) {
+            this.sessions.delete(sessionId)
+            return
+          }
+        }
+      }
+      await created.connect(opened)
+      const response = await opened.handleRequest(request, { parsedBody: body })
+      if (opened.sessionId === undefined) await this.dispose(created, opened)
+      return response
+    } catch (error) {
+      await this.dispose(server, transport)
+      throw error
+    }
+  }
+
+  /** Build the server side of one session. */
+  private async createServer(request: Request): Promise<McpServer> {
+    const product = await this.factory({ era: 'legacy', requestInfo: request })
+    if (!(product instanceof McpServer)) {
+      throw new TypeError('the 2025-era session factory must return an McpServer')
+    }
+    return product
+  }
+
+  /** Remove one session from the map and close it, best effort. */
+  private evict(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (session === undefined) return
+    this.sessions.delete(sessionId)
+    void this.dispose(session.server, session.transport)
+  }
+
+  /** Close every session that has been silent past the idle window. */
+  private evictIdle(): void {
+    const cutoff = Date.now() - LEGACY_SESSION_IDLE_MS
+    for (const [sessionId, session] of [...this.sessions]) {
+      if (session.lastSeen > cutoff) continue
+      this.log.info('[dsh-as-mcp] closing idle 2025-era session %s', sessionId)
+      this.evict(sessionId)
+    }
+  }
+
+  /** Evict least-recently-used sessions until a new one fits under the cap. */
+  private evictOverCapacity(): void {
+    while (this.sessions.size >= MAX_LEGACY_SESSIONS) {
+      let oldestId: string | undefined
+      let oldest = Number.POSITIVE_INFINITY
+      for (const [sessionId, session] of this.sessions) {
+        if (session.lastSeen >= oldest) continue
+        oldest = session.lastSeen
+        oldestId = sessionId
+      }
+      if (oldestId === undefined) return
+      this.log.info('[dsh-as-mcp] evicting 2025-era session %s to stay under the cap', oldestId)
+      this.evict(oldestId)
+    }
+  }
+
+  /** Close the transport then the server; every failure is deliberately quiet. */
+  private async dispose(
+    server: McpServer | undefined,
+    transport: WebStandardStreamableHTTPServerTransport | undefined,
+  ): Promise<void> {
+    if (transport !== undefined) {
+      await transport.close().catch(() => {})
+    }
+    if (server !== undefined) {
+      // `McpServer.close` closes the transport too, which is idempotent.
+      await server.close().catch(() => {})
+    }
+  }
+}
+
+/**
+ * Write one Web-standard `Response` back to a Node response.
+ *
+ * This is the same conversion `toNodeHandler` performs, kept here because the
+ * 2025-era leg gets its `Response` itself. Differences that matter for a
+ * long-lived GET SSE stream:
+ *
+ * - headers are flushed immediately, because the transport may not emit its
+ *   first frame for a while and a client that waits for headers would stall;
+ * - writes respect backpressure (`drain`) and stop at the first `close`;
+ * - a client disconnect cancels the response body, which is what releases the
+ *   transport's per-session stream mapping and lets the client reconnect.
+ */
+async function writeWebResponse(
+  res: Parameters<NodeMcpRequestHandler>[1],
+  response: Response,
+  onerror: (error: Error) => void,
+): Promise<void> {
+  const headers: Record<string, string> = {}
+  response.headers.forEach((value, name) => {
+    headers[name] = value
+  })
+  try {
+    res.writeHead(response.status, headers)
+  } catch (error) {
+    onerror(error instanceof Error ? error : new Error(String(error)))
+    return
+  }
+  const body = response.body
+  if (body === null) {
+    res.end()
+    return
+  }
+  const flushHeaders = (res as { flushHeaders?: () => void }).flushHeaders
+  if (typeof flushHeaders === 'function') flushHeaders.call(res)
+
+  let clientClosed = false
+  const closed = new Promise<void>((resolve) => {
+    res.on('close', () => {
+      clientClosed = true
+      resolve()
+    })
+  })
+  const reader = body.getReader()
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), closed.then(() => undefined)])
+      if (next === undefined) break
+      if (next.done) break
+      if (next.value === undefined) continue
+      if (res.write(next.value) === false) {
+        await Promise.race([
+          new Promise<void>((resolve) => res.on('drain', () => resolve())),
+          closed,
+        ])
+        if (clientClosed) break
+      }
+    }
+  } catch (error) {
+    onerror(error instanceof Error ? error : new Error(String(error)))
+  } finally {
+    // Cancelling a finished stream is a no-op; on a disconnect it runs the
+    // transport's stream teardown (dropping the session's standalone SSE slot).
+    await reader.cancel().catch(() => {})
+  }
+  if (!clientClosed) res.end()
+}
+
 /**
  * Wrap the SDK's Node handler with bearer-token admission.
  *
@@ -260,41 +613,54 @@ function queryToken(url: string | undefined): string | null {
  * plugin-registered exact route sits in front of that fallback — so this route
  * has to enforce its own admission or it would be the one unauthenticated hole
  * in the surface.
+ *
+ * Admission happens here for every method, including the 2025-era long-lived
+ * `GET` stream, because the stateful leg is served from this same handler.
  */
 export function createRequestHandler(options: RequestHandlerOptions): RequestHandler {
   const { deps, getToken, log } = options
   const pushes = options.pushes ?? new EndpointPushes()
 
-  // One server instance per request: `createMcpHandler` owns the modern leg's
-  // per-request lifetime, and our tools are stateless beyond the driver.
-  const handler = createMcpHandler(
-    () => {
-      const server = new McpServer(
-        { name: SERVER_NAME, version: VERSION },
-        { instructions: SERVER_INSTRUCTIONS },
-      )
-      registerTools(server, deps)
-      return server
-    },
-    {
-      // The subscription bus is created once per handler (not per request), which
-      // is what lets a background watcher publish a turn-settlement event after
-      // the tool call that started the turn has already returned.
-      bus: pushes.eventBus,
-      // `legacy: 'stateless'` answers every legacy request from a fresh server
-      // instance, which is what makes this endpoint usable from a connectionless
-      // caller. The default response mode is kept deliberately: forcing
-      // `responseMode: 'json'` makes the SDK warn on every boot and does not
-      // change the legacy framing, which is `text/event-stream` either way —
-      // so `bin/mcp-stdio.mjs` reads both framings.
-      legacy: 'stateless',
-      onerror: (error) => log.warn('[dsh-as-mcp] request rejected:', error.message),
-    },
-  )
+  // One shared factory defines the endpoint's surface once, so the modern
+  // per-request leg, the 2025-era stateless fallback and every stateful 2025
+  // session can never drift apart.
+  const factory: McpServerFactory = () => {
+    const server = new McpServer(
+      { name: SERVER_NAME, version: VERSION },
+      { instructions: SERVER_INSTRUCTIONS },
+    )
+    registerTools(server, deps)
+    return server
+  }
+
+  // The modern (2026-07-28) leg is served per request: `createMcpHandler` owns
+  // its lifetime, and our tools are stateless beyond the driver. `legacy:
+  // 'reject'` keeps it strict — 2025-era traffic is routed to the stateful
+  // manager below instead of this entry's stateless fallback.
+  const handler = createMcpHandler(factory, {
+    // The subscription bus is created once per handler (not per request), which
+    // is what lets a background watcher publish a turn-settlement event after
+    // the tool call that started the turn has already returned.
+    bus: pushes.eventBus,
+    // The default response mode is kept deliberately: forcing
+    // `responseMode: 'json'` makes the SDK warn on every boot and drops
+    // mid-call notifications. Both eras read either framing.
+    legacy: 'reject',
+    onerror: (error) => log.warn('[dsh-as-mcp] request rejected:', error.message),
+  })
   // The driver arms watchers before this handler exists, so the link is made
   // here, once: publishes go through the handler's own bus and its per-stream
   // filtering.
   pushes.attach(handler.notify)
+
+  // The 2025-era stateful leg. Its sessions are the other subscriber the push
+  // surface must feed: a settled turn reaches a 2025 client as
+  // `notifications/resources/updated` on its long-lived GET stream.
+  const legacy = new LegacySessionManager({ factory, log })
+  pushes.attachLegacy({
+    hasSessions: () => legacy.size > 0,
+    resourceUpdated: (uri) => legacy.notifyResourceUpdated(uri),
+  })
 
   const node = toNodeHandler(handler, {
     onerror: (error) => log.warn('[dsh-as-mcp] transport error:', error.message),
@@ -364,7 +730,36 @@ export function createRequestHandler(options: RequestHandlerOptions): RequestHan
     const prompt = promptCallOf(body)
     if (prompt !== undefined) promptRequests.set(prompt.requestId, prompt.sessionId)
     try {
-      await node(req, res, body)
+      const abort = new AbortController()
+      res.on('close', () => abort.abort())
+      if (res.destroyed === true) abort.abort()
+      let request: Request
+      try {
+        // The body was parsed above; building the Web request from that value
+        // keeps the Node stream unread (it is only ever read for a POST) and
+        // gives both the era decision and the 2025-era transport one request.
+        request = await toWebRequest(req, body, {
+          signal: abort.signal,
+          maxRequestBodySize: MAX_REQUEST_BYTES,
+        })
+      } catch (error) {
+        log.warn('[dsh-as-mcp] could not convert the request:', errorText(error))
+        deny(res, 500, 'internal error')
+        return
+      }
+
+      if (await isLegacyRequest(request, body)) {
+        // 2025-era traffic — the stateful session flow, or the stateless
+        // fallback for clients that ignore the session header. The manager
+        // hands back a Web Response, which is streamed to the Node response.
+        await writeWebResponse(res, await legacy.handle(request, body), (error) => {
+          log.warn('[dsh-as-mcp] 2025-era response failed:', error.message)
+        })
+      } else {
+        // 2026-07-28 traffic keeps the SDK adapter (and its per-request
+        // lifetime); the body is handed over parsed, never re-read.
+        await node(req, res, body)
+      }
     } finally {
       if (prompt !== undefined) promptRequests.delete(prompt.requestId)
     }
@@ -373,10 +768,24 @@ export function createRequestHandler(options: RequestHandlerOptions): RequestHan
   return {
     handle: guard,
     close: async () => {
+      // Stop the 2025-era sessions first: closing a transport ends its SSE
+      // stream, which is what lets an in-flight write finish and the listener
+      // close cleanly.
+      await legacy.close()
       await handler.close()
     },
   }
 }
+
+/**
+ * How long {@link startListener}'s dispose lets in-flight exchanges finish
+ * before the remaining sockets are dropped.
+ *
+ * A settings change or a plugin unload cannot wait for a long-lived SSE client
+ * to go away, but a short grace keeps an ordinary request that is just finishing
+ * from being cut off needlessly.
+ */
+const LISTENER_DRAIN_MS = 500
 
 /** Start the plugin-owned listener. */
 export async function startListener(input: {
@@ -434,7 +843,24 @@ export async function startListener(input: {
   return {
     url,
     dispose: async () => {
-      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await new Promise<void>((resolve) => {
+        let settled = false
+        let forceTimer: ReturnType<typeof setTimeout> | undefined
+        const finish = (): void => {
+          if (settled) return
+          settled = true
+          if (forceTimer !== undefined) clearTimeout(forceTimer)
+          resolve()
+        }
+        server.close(finish)
+        // `server.close` waits for every active connection to end, and a 2025-era
+        // GET notification stream (like a modern `subscriptions/listen` stream)
+        // is active by design and never ends on its own. After a short grace for
+        // ordinary in-flight requests, drop the sockets: otherwise a settings
+        // change on unload would hang until every client disconnects.
+        forceTimer = setTimeout(() => server.closeAllConnections(), LISTENER_DRAIN_MS)
+        if (typeof forceTimer === 'object' && 'unref' in forceTimer) forceTimer.unref()
+      })
     },
   }
 }

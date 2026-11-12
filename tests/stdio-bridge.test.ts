@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import type { IncomingHttpHeaders, ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { TOKEN, boot, stubDriver } from './harness.js'
 
@@ -64,6 +68,424 @@ async function runBridge(input: {
   const code = await new Promise<number | null>((resolve) => child.on('close', resolve))
   return { stdout, stderr, code }
 }
+
+/** One request the bridge sent to a fake endpoint, as the fake saw it. */
+interface FakeRequest {
+  method: string
+  url: string
+  headers: IncomingHttpHeaders
+  body: string
+}
+
+/** A fake Streamable HTTP endpoint the bridge can run against. */
+interface FakeEndpoint {
+  url: string
+  requests: FakeRequest[]
+  close: () => Promise<void>
+}
+
+/**
+ * Start a fake endpoint on an ephemeral loopback port.
+ *
+ * The handler gets a fully buffered request; hanging SSE responses are tracked
+ * and ended by `close()`, so a broken assertion cannot leak the test process.
+ */
+async function startFakeEndpoint(
+  handle: (request: FakeRequest, response: ServerResponse) => void,
+): Promise<FakeEndpoint> {
+  const requests: FakeRequest[] = []
+  const responses = new Set<ServerResponse>()
+  const server = createServer((request, response) => {
+    responses.add(response)
+    response.on('close', () => responses.delete(response))
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(chunk))
+    request.on('end', () => {
+      const fake: FakeRequest = {
+        method: request.method ?? '',
+        url: request.url ?? '',
+        headers: request.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }
+      requests.push(fake)
+      try {
+        handle(fake, response)
+      } catch (error) {
+        response.destroy(error instanceof Error ? error : undefined)
+      }
+    })
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address() as AddressInfo
+  return {
+    url: `http://127.0.0.1:${address.port}/mcp`,
+    requests,
+    close: async () => {
+      const closed = new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()))
+      })
+      for (const response of responses) {
+        if (!response.writableEnded) response.end()
+      }
+      server.closeAllConnections()
+      await closed
+    },
+  }
+}
+
+/** Answer a bridge POST the way a minimal stateful MCP endpoint would. */
+function respondToPost(
+  request: FakeRequest,
+  response: ServerResponse,
+  options: { sessionId?: string } = {},
+): void {
+  const message = JSON.parse(request.body) as { id?: number; method?: string }
+  if (message.method === 'initialize') {
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    if (options.sessionId) headers['mcp-session-id'] = options.sessionId
+    response.writeHead(200, headers)
+    response.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: message.id,
+      result: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        serverInfo: { name: 'fake-endpoint', version: '0' },
+      },
+    }))
+    return
+  }
+  if (message.method === 'tools/list') {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: message.id,
+      result: { tools: [{ name: 'dsh_info' }] },
+    }))
+    return
+  }
+  // Notifications are acknowledged without a body.
+  response.writeHead(202)
+  response.end()
+}
+
+/** Begin a text/event-stream response and flush its headers to the bridge. */
+function startEventStream(response: ServerResponse): void {
+  response.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  })
+  response.flushHeaders()
+}
+
+/** Write one SSE event carrying a JSON-RPC payload. */
+function writeEvent(response: ServerResponse, payload: unknown, id?: string): void {
+  const lines: string[] = []
+  if (id !== undefined) lines.push(`id: ${id}`)
+  lines.push('event: message', `data: ${JSON.stringify(payload)}`, '', '')
+  response.write(lines.join('\n'))
+}
+
+const INITIALIZE_REQUEST = {
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'initialize',
+  params: {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'vitest-bridge', version: '0' },
+  },
+}
+
+/**
+ * A live bridge child with polling helpers.
+ *
+ * The push tests need to observe stderr and server state at arbitrary times, so
+ * they cannot use `runBridge` (which resolves on a stdout line count and closes
+ * stdin immediately). Waiting is always a poll on real state, never a fixed
+ * sleep.
+ */
+class BridgeRun {
+  private readonly child: ChildProcessWithoutNullStreams
+  private readonly lines: string[] = []
+  private readonly exited: Promise<number | null>
+  private stdoutBuffer = ''
+  private stderr = ''
+
+  constructor(env: Record<string, string>) {
+    this.child = spawn(process.execPath, [bridgePath], {
+      env: { ...process.env, ...env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    this.exited = new Promise((resolve) => {
+      this.child.on('close', resolve)
+    })
+    this.child.on('error', (error) => {
+      this.stderr += `\n[bridge spawn error] ${error.message}`
+    })
+    this.child.stdout.setEncoding('utf8')
+    this.child.stdout.on('data', (chunk: string) => {
+      this.stdoutBuffer += chunk
+      let newline = this.stdoutBuffer.indexOf('\n')
+      while (newline >= 0) {
+        const line = this.stdoutBuffer.slice(0, newline).trim()
+        this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1)
+        if (line !== '') this.lines.push(line)
+        newline = this.stdoutBuffer.indexOf('\n')
+      }
+    })
+    this.child.stderr.setEncoding('utf8')
+    this.child.stderr.on('data', (chunk: string) => {
+      this.stderr += chunk
+    })
+  }
+
+  send(message: unknown): void {
+    this.child.stdin.write(`${JSON.stringify(message)}\n`)
+  }
+
+  stdoutLines(): string[] {
+    return [...this.lines]
+  }
+
+  stderrText(): string {
+    return this.stderr
+  }
+
+  /** Poll until `check` is true; fail with the collected stderr on timeout. */
+  async waitFor(check: () => boolean, description: string, timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!check()) {
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${description}; stderr:\n${this.stderr}`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+
+  /** Close stdin and resolve with the exit code. */
+  async close(): Promise<number | null> {
+    if (this.child.exitCode === null) this.child.stdin.end()
+    return await this.exited
+  }
+
+  kill(): void {
+    if (this.child.exitCode === null) this.child.kill('SIGKILL')
+  }
+}
+
+describe('stdio bridge push channel', () => {
+  const bridges: BridgeRun[] = []
+
+  function startBridge(env: Record<string, string>): BridgeRun {
+    const bridge = new BridgeRun(env)
+    bridges.push(bridge)
+    return bridge
+  }
+
+  afterEach(() => {
+    for (const bridge of bridges.splice(0)) bridge.kill()
+  })
+
+  it('forwards notifications and server requests from the GET stream while requests keep working', async () => {
+    const fake = await startFakeEndpoint((request, response) => {
+      if (request.method === 'GET') {
+        startEventStream(response)
+        writeEvent(response, { jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+        // A server→client request must be forwarded too, with its id intact.
+        writeEvent(response, {
+          jsonrpc: '2.0',
+          id: 'srv-1',
+          method: 'sampling/createMessage',
+          params: { maxTokens: 8 },
+        })
+        writeEvent(response, {
+          jsonrpc: '2.0',
+          method: 'notifications/resources/updated',
+          params: { uri: 'dsh://session/session-1/turn' },
+        }, '5')
+        return
+      }
+      respondToPost(request, response, { sessionId: 'fake-session-a' })
+    })
+    const bridge = startBridge({ DSH_AS_MCP_URL: fake.url, DSH_AS_MCP_TOKEN: TOKEN })
+
+    try {
+      bridge.send(INITIALIZE_REQUEST)
+      bridge.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+      bridge.send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+      await bridge.waitFor(
+        () => bridge.stdoutLines().length >= 5,
+        'the two request replies and the three pushed messages',
+      )
+
+      // Every line is a complete JSON document: no partial or concatenated writes.
+      const messages = bridge.stdoutLines().map((line) => JSON.parse(line) as {
+        id?: number | string
+        method?: string
+        result?: { tools?: { name: string }[] }
+      })
+      expect(messages).toHaveLength(5)
+      expect(messages.filter((message) => message.id === 1)).toHaveLength(1)
+      expect(messages.find((message) => message.id === 2)?.result?.tools?.map((tool) => tool.name))
+        .toContain('dsh_info')
+      expect(messages.map((message) => message.method).filter(Boolean)).toEqual([
+        'notifications/tools/list_changed',
+        'sampling/createMessage',
+        'notifications/resources/updated',
+      ])
+      expect(messages.find((message) => message.id === 'srv-1')?.method).toBe('sampling/createMessage')
+
+      // Pushed messages are stdout-only: nothing is echoed back over HTTP.
+      const posted = fake.requests
+        .filter((request) => request.method === 'POST')
+        .map((request) => (JSON.parse(request.body) as { method?: string }).method)
+      expect(posted).not.toContain('sampling/createMessage')
+
+      // The channel is opened with the stateful headers the protocol requires.
+      const getRequests = fake.requests.filter((request) => request.method === 'GET')
+      expect(getRequests).toHaveLength(1)
+      const headers = getRequests[0]?.headers ?? {}
+      expect(headers['mcp-session-id']).toBe('fake-session-a')
+      expect(headers['mcp-protocol-version']).toBe('2025-06-18')
+      expect(headers.authorization).toBe(`Bearer ${TOKEN}`)
+      expect(String(headers.accept)).toContain('text/event-stream')
+      expect(bridge.stderrText()).not.toContain('push disabled')
+    } finally {
+      // Clean up the endpoint first: a failing assertion below must not leak it.
+      const code = await bridge.close()
+      await fake.close()
+      expect(code).toBe(0)
+    }
+  })
+
+  it('stays push-silent when initialize issues no session id', async () => {
+    const fake = await startFakeEndpoint((request, response) => {
+      if (request.method === 'GET') {
+        response.writeHead(405)
+        response.end()
+        return
+      }
+      // A stateless endpoint: no mcp-session-id on the initialize reply.
+      respondToPost(request, response)
+    })
+    const bridge = startBridge({ DSH_AS_MCP_URL: fake.url, DSH_AS_MCP_TOKEN: TOKEN })
+
+    try {
+      bridge.send(INITIALIZE_REQUEST)
+      await bridge.waitFor(
+        () => bridge.stderrText().includes('push disabled'),
+        'the stateless push-disabled note',
+      )
+      expect(bridge.stderrText()).toContain('mcp-session-id')
+
+      bridge.send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+      await bridge.waitFor(
+        () => bridge.stdoutLines().some((line) => (JSON.parse(line) as { id?: number }).id === 2),
+        'the tools/list reply from the stateless endpoint',
+      )
+    } finally {
+      const code = await bridge.close()
+      await fake.close()
+      const stderr = bridge.stderrText()
+      expect(code).toBe(0)
+      // One note, and no GET is attempted at all on a stateless endpoint.
+      expect(stderr.match(/push disabled/g)).toHaveLength(1)
+      expect(fake.requests.filter((request) => request.method === 'GET')).toHaveLength(0)
+    }
+  })
+
+  it('logs one push-disabled note after a 405 GET and keeps request/reply working', async () => {
+    const fake = await startFakeEndpoint((request, response) => {
+      if (request.method === 'GET') {
+        response.writeHead(405, { allow: 'POST' })
+        response.end('method not allowed')
+        return
+      }
+      respondToPost(request, response, { sessionId: 'fake-session-b' })
+    })
+    const bridge = startBridge({ DSH_AS_MCP_URL: fake.url, DSH_AS_MCP_TOKEN: TOKEN })
+
+    try {
+      bridge.send(INITIALIZE_REQUEST)
+      await bridge.waitFor(
+        () => bridge.stderrText().includes('push disabled'),
+        'the one push-disabled note',
+      )
+      expect(bridge.stderrText()).toContain('405')
+      expect(bridge.stderrText().match(/push disabled/g)).toHaveLength(1)
+
+      // The request/reply path must be untouched by a stateless endpoint.
+      bridge.send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+      await bridge.waitFor(
+        () => bridge.stdoutLines().some((line) => (JSON.parse(line) as { id?: number }).id === 2),
+        'the tools/list reply after push was disabled',
+      )
+      const reply = bridge.stdoutLines()
+        .map((line) => JSON.parse(line) as { id?: number; result?: { tools?: unknown[] } })
+        .find((message) => message.id === 2)
+      expect((reply?.result?.tools ?? []).length).toBeGreaterThan(0)
+    } finally {
+      const code = await bridge.close()
+      await fake.close()
+      const stderr = bridge.stderrText()
+      expect(code).toBe(0)
+      // Never retried: one note, one GET attempt, even after shutdown.
+      expect(stderr.match(/push disabled/g)).toHaveLength(1)
+      expect(fake.requests.filter((request) => request.method === 'GET')).toHaveLength(1)
+    }
+  })
+
+  it('reconnects the GET stream with backoff and replays the last SSE id', async () => {
+    const getStartedAt: number[] = []
+    const fake = await startFakeEndpoint((request, response) => {
+      if (request.method === 'GET') {
+        getStartedAt.push(Date.now())
+        startEventStream(response)
+        if (getStartedAt.length === 1) {
+          writeEvent(response, { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }, '7')
+          response.end()
+        }
+        return
+      }
+      respondToPost(request, response, { sessionId: 'fake-session-c' })
+    })
+    const bridge = startBridge({ DSH_AS_MCP_URL: fake.url, DSH_AS_MCP_TOKEN: TOKEN })
+
+    try {
+      bridge.send(INITIALIZE_REQUEST)
+      await bridge.waitFor(
+        () => fake.requests.filter((request) => request.method === 'GET').length >= 2,
+        'a second GET after the first stream closed',
+      )
+
+      const getRequests = fake.requests.filter((request) => request.method === 'GET')
+      expect(getRequests[0]?.headers['mcp-session-id']).toBe('fake-session-c')
+      expect(getRequests[1]?.headers['mcp-session-id']).toBe('fake-session-c')
+      // The first stream had no resume point; the second replays the SSE id.
+      expect(getRequests[0]?.headers['last-event-id']).toBeUndefined()
+      expect(getRequests[1]?.headers['last-event-id']).toBe('7')
+      // Backoff is real: the reconnect waited close to the 500 ms base delay
+      // instead of spinning on a dead stream.
+      expect((getStartedAt[1] ?? 0) - (getStartedAt[0] ?? 0)).toBeGreaterThanOrEqual(400)
+
+      // The notification delivered before the close is forwarded exactly once.
+      const notifications = bridge.stdoutLines()
+        .map((line) => JSON.parse(line) as { method?: string })
+        .filter((message) => message.method === 'notifications/tools/list_changed')
+      expect(notifications).toHaveLength(1)
+    } finally {
+      // Clean up the endpoint first: a failing assertion below must not leak it.
+      const code = await bridge.close()
+      await fake.close()
+      expect(code).toBe(0)
+    }
+  })
+})
 
 describe('stdio ⇄ HTTP bridge', () => {
   let url: string

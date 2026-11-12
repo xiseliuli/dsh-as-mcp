@@ -218,7 +218,9 @@ advertised models (`catalog.providerModels`): that asks the adapters, some of wh
 discovery, so it is opt-in and time-boxed per provider — and it is the reliable way to pick a valid
 `session_create.model` or `session_set_model.model`. Every catalog field is optional and independently
 guarded, and `catalog.unavailable` names whichever read could not be answered, so a missing entry means
-"this profile does not say" rather than "nothing is allowed".
+"this profile does not say" rather than "nothing is allowed". Its `notes` also name the push feeds and the
+two transports this endpoint serves, so a caller can find the subscription surface without reading this
+README.
 
 ## Tools
 
@@ -228,7 +230,7 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 
 | Tool | What it does |
 | --- | --- |
-| `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, the `catalog` of accepted providers, agent presets and sandbox mode, and `toolAvailability` — the tools that passed every rule (`availableTools`, comparable with `tools/list`), those this deployment cannot serve, and why. `probeSearch` additionally exercises a real search to say whether the index answers, rather than just whether the tool is enabled. |
+| `dsh_info` | Endpoint, version and uptime, token source, enabled groups, available harness services, usage/cost availability, the `catalog` of accepted providers, agent presets and sandbox mode, `toolAvailability` — the tools that passed every rule (`availableTools`, comparable with `tools/list`), those this deployment cannot serve, and why — and the push feed URIs in `notes`. `probeSearch` additionally exercises a real search to say whether the index answers, rather than just whether the tool is enabled. |
 | `workspace_create` | Register a directory as a DSH workspace (creating it if needed; pass `createDirectory: false` to require that it already exists). |
 | `workspace_list` | Every registered workspace with id, path, title, directory status, and the sessions **attached to the registration** (created with `workspaceId`) — that count is not the number of sessions whose `cwd` happens to be the directory; `session_list { cwd }` answers that. |
 | `workspace_delete` | Unregister a workspace (files and session history untouched); idempotent. |
@@ -353,29 +355,107 @@ into its rows. The full host-side contract — service signatures, grouping proo
 the recommended order of operations — is `docs/WORKTREE-INTEGRATION-CONTRACT.md`; the capability
 audit behind this release is `docs/NEW-CAPABILITIES-0.2.2.md`.
 
-## Turn notifications for modern clients
+## Server push and the two transports
 
-`session_prompt { wait: false }` returns as soon as the message is admitted, so the universal
-reporting path is polling `session_status` (optionally with `waitMs`). A client speaking the modern
-**2026-07-28** MCP protocol can be *told* instead of polling, over that protocol's
-`subscriptions/listen` stream:
+An MCP server cannot call a client on its own, so every "something changed" travels as a
+resource notification. This endpoint publishes one change-feed surface over both standard push
+channels, and each notification is **payload-less**: it names a synthetic resource, and the
+client reads that resource for the JSON. No tools were added for this — the surface is still the
+35 in the table above — and push has no configuration key: it is always on and costs nothing
+while nobody subscribes.
 
-1. **Before prompting**, open one `subscriptions/listen` request and keep it open, naming the feed
-   you want: `notifications: { resourceSubscriptions: ["dsh://session/<sessionId>/turn"] }`. The
-   server answers `notifications/subscriptions/acknowledged` on that stream.
-2. Call `session_prompt` with `wait: false`.
-3. When that turn settles — completed, failed, cancelled, or gone without an ending — the server
-   publishes `notifications/resources/updated` for that URI on the stream. `resources/read` on the
-   same URI returns the same payload as `session_status`, including `failure` and `lastTurn`.
+| Client era | Handshake | Server→client channel | How push is requested |
+| --- | --- | --- | --- |
+| **2026-07-28 (modern)** | `server/discover`; every request carries its own `_meta` envelope plus the `mcp-protocol-version` / `mcp-method` headers, so there is no session | one long-lived `subscriptions/listen` stream | name the feeds in `notifications.resourceSubscriptions`; the server answers `notifications/subscriptions/acknowledged` and then publishes `notifications/resources/updated` |
+| **2025-era Streamable HTTP** | `initialize` answers with an `Mcp-Session-Id`; later `POST`/`DELETE` carry it | that session's long-lived `GET` with `Accept: text/event-stream` | the endpoint advertises `resources.subscribe` and publishes its feeds to every live stateful session, so the same `notifications/resources/updated` frames arrive on the stream; `resources/read` fetches the payload |
+| **stdio** (`bin/mcp-stdio.mjs`) | the bridge POSTs `initialize` over HTTP and keeps the issued session id | its own long-lived `GET` on that session | each notification, and any server→client request, is written to stdout as one JSON line; the channel reconnects with 500 ms→30 s backoff |
 
-Two bounds are deliberate. The stream must be open **before** the prompt is admitted: a prompt
-admitted while nothing is listening arms no watcher, so a later subscription may miss that event.
-And push exists only in the modern protocol: 2025-era clients — including `bin/mcp-stdio.mjs` and
-the bundled smoke/exercise scripts — have no listen method. They are unaffected: polling stays the
-universal path, and a fire-and-forget prompt with no subscriber costs exactly one durable read, as
-before. The watcher is the same wait a blocking `session_prompt` performs (same `promptTimeoutMs`
-bound, same cancellation behaviour), one per request id, and a watch that timed out publishes
-nothing rather than claiming an ending it never saw.
+The bridge reacts to a stateless endpoint — an `initialize` that carried no session id, or a `GET`
+answered `404`/`405` — by printing one push-disabled note and leaving request/reply untouched.
+
+A concrete modern exchange (a 2025 client replaces steps 1–2 with the stateful handshake and its
+GET stream; the payloads are identical):
+
+```json
+// 1. open one stream and name the feeds. Session feeds exist with tools.session,
+//    the job feeds with tools.shell; resources/list and resources/templates/list
+//    advertise them.
+{ "jsonrpc": "2.0", "id": 1, "method": "subscriptions/listen",
+  "params": { "notifications": { "resourceSubscriptions": [
+    "dsh://sessions",
+    "dsh://session/<sessionId>/events",
+    "dsh://session/<sessionId>/assistant",
+    "dsh://jobs" ] } } }
+
+// 2. the acknowledgement names the subset the server honored
+{ "jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged",
+  "params": { "notifications": { "resourceSubscriptions": [ … ] } } }
+
+// 3. every change is one payload-less frame …
+{ "jsonrpc": "2.0", "method": "notifications/resources/updated",
+  "params": { "uri": "dsh://session/<sessionId>/events" } }
+
+// 4. … and resources/read on that URI returns the data
+{ "jsonrpc": "2.0", "id": 2, "method": "resources/read",
+  "params": { "uri": "dsh://session/<sessionId>/events" } }
+```
+
+| Feed URI | Payload | Published when |
+| --- | --- | --- |
+| `dsh://sessions` | the session list as `session_list` reports it, minus titles (`sessions`, `total`) | a session is added, removed, created or disposed, starts or stops running, changes activity or status, or a subagent starts or ends |
+| `dsh://session/{id}/events` | the newest durable events, projected to `{seq, type, at, turn, step, summary, error}` with `asOfSeq` (at most 64 events per read; `summary` is a bounded preview and `error` marks a failed tool result or an abnormal turn end) | every durable append to that session |
+| `dsh://session/{id}/assistant` | live assistant frames `{seq, at, turn, step, kind, text, done}` with `asOfSeq` and `truncated`; `kind` is `start`, `text`, `reasoning`, `tool`, `finish` or `end`, and `seq` is monotonic per session | while a model turn streams — a frame for its start and end, then one per text, reasoning or tool-call delta, plus the finish frame |
+| `dsh://session/{id}/status` | the same payload as `session_status` | any new durable event for that session, or a change in the agent's status |
+| `dsh://session/{id}/projections` | the allowlisted projection values: `workingDirectory`, `worktree`, `goal`, `plan`, `todos`, `agentPreset`, `title` | a turn ends, an agent preset is selected, a user message is appended, or the goal changes |
+| `dsh://jobs` | every background shell job this endpoint started (`jobs`) | a job starts or settles, or its status or pending bytes change |
+| `dsh://jobs/{id}` | one job plus its retained output tail (`tail`, `tailTruncated`) | its output tail grows or its status changes |
+| `dsh://session/{id}/turn` | the same payload as `session_status` | that turn settles — the resource from 0.52.86, still published immediately rather than coalesced |
+
+**Backpressure, so a token stream does not become a request storm.** Publishes are coalesced per
+URI: the first one goes out at once, later ones for the same URI collapse into a single trailing
+publish after 150 ms (`PUSH_COALESCE_MS`), and different URIs never wait on each other. A token
+stream therefore costs at most one notification per 150 ms per URI rather than one per token.
+Turn settlement is the exception — it is a discrete event a caller is waiting for, so it is
+published immediately. A notification is payload-less, so a burst of deltas costs one
+`resources/read`, not one reply-sized payload per token. The live feeds are bounded in process:
+the assistant buffer keeps at most 256 KiB / 2,000 frames per session, and a read returns at most
+200 frames and roughly 32 KiB of text (newest first, with `truncated` when older frames were
+dropped or not returned), an events read is capped at 64 events, and a job read returns at most
+the last 8,192 characters of a tail retained at 16 KiB. The job feed is polled about once a
+second, and only while somebody is subscribed: with no subscriber the collectors return early and
+no harness service is read, so a fire-and-forget prompt with no listener costs exactly what it
+did before. The job tail is deliberately non-consuming — `shell_output` still owns the delivery
+buffer, so watching `dsh://jobs/{id}` cannot steal bytes from the caller that polls it.
+
+**The 2025-era leg is stateful, and the old stateless behavior is preserved.** A 2025 `initialize`
+now answers with an `mcp-session-id` header; requests carrying it are served by a per-session
+server and transport, so `GET` (the notification stream) and `DELETE` (session teardown) work,
+and `notifications/resources/updated` reaches a 2025 client at last. At most 8 sessions are kept:
+the least recently used is evicted when a ninth opens, and a session silent for 30 minutes is
+closed, after which its id answers `404 Session not found` and the client re-initializes. A
+client that never takes the session id keeps the previous stateless serving unchanged — every later
+`POST` (one that is not another `initialize`) is answered from a fresh instance — and its
+`GET`/`DELETE` are `405`: the stateless legacy GET is **not** a push channel, a *stateful session's*
+GET is. Push has no replay store: a dropped stream reconnects without a cursor (`Last-Event-ID` is
+not honored), which is safe precisely because notifications carry no payload — the client re-reads
+the resource it was told about.
+
+**Security and scope.** Every request goes through the bearer check — the long-lived 2025 `GET`
+stream and session `DELETE` included — so there is no unauthenticated push path; a rejected
+request answers `401` with `WWW-Authenticate: Bearer realm="dsh-as-mcp"`. `session.scope:
+"owned"` gates notifications as well as reads: only a session this endpoint created or forked
+(the recorded owned ids) produces a frame, so the channel cannot be used to enumerate other
+sessions' ids. An owned session's own subagent sessions therefore produce no frames either —
+their parent's feeds publish, and their feeds remain readable because reads follow the owned
+tree like the tools do. The `dsh://jobs` feeds are not session-scoped: they show the background
+jobs this endpoint started.
+
+One bound is unchanged and still deliberate: for the turn feed, the stream must be open **before**
+the prompt is admitted; a prompt admitted while nothing is listening arms no watcher, so a later
+subscription may miss that settlement. The watcher is the same wait a blocking `session_prompt`
+performs (same `promptTimeoutMs` bound, same cancellation behaviour), one per request id, and a
+watch that timed out publishes nothing rather than claiming an ending it never saw. Push does not
+replace polling: a client that subscribes to nothing behaves exactly as before.
 
 ## Usage accounting
 
@@ -943,6 +1023,15 @@ but a deployment can switch the capability off.
   included) *before* the plugin is imported; an incompatible install is refused unless the host
   grants an exact-version exemption (`dsh plugin allow-version`).
 - **Node** `^22.19.0 || >=24.0.0`.
+- **MCP protocol eras.** One URL serves both the modern 2026-07-28 per-request protocol
+  (`server/discover`, self-contained requests) and the 2025-era Streamable HTTP flow
+  (`initialize` → `Mcp-Session-Id`, then stateful `POST`/`GET`/`DELETE`). A 2025 client that never
+  takes the session id keeps the previous stateless serving unchanged, where `GET`/`DELETE` answer
+  `405`; only a stateful session's `GET` is the push channel. Stateful sessions are capped at 8 and
+  closed after 30 minutes idle (an evicted client re-initializes on the `404`), and the server does
+  not implement resumability: `Last-Event-ID` replay is deliberately absent because every
+  notification is payload-less, so a reconnecting client just re-reads the resource. The bundled
+  `bin/mcp-stdio.mjs` uses the same stateful flow and forwards the stream's frames to stdout.
 - The `@deepseek-ai/dsh` peer is declared **optional**, purely so `dsh plugin add` does not pull
   a full harness install into every profile just to satisfy it. Optional only changes
   installation — DSH's compatibility gate reads `peerDependencies` regardless of
@@ -1036,6 +1125,16 @@ but a deployment can switch the capability off.
   `session_pin`/`session_unpin` write the same registry sets the DSH sidebar's actions write, and
   `session_list` reports each row's `archived`/`pinned` flags. Archiving keeps the log and is
   reversible; nothing here removes a transcript.
+- **Push is a change signal, not a payload.** Every feed is a synthetic resource: a notification
+  names one URI and `resources/read` returns the JSON, which is the only payload-carrying event a
+  2026-07-28 subscription can receive and the same shape a 2025 session's GET stream can carry
+  unchanged. One publish surface feeds both transports — the modern handler's subscription bus and
+  every live stateful 2025 session — so the two eras cannot disagree about which resource changed.
+  Publishes are coalesced per URI at 150 ms (turn settlement immediate), the assistant buffer is
+  bounded and only collects while a feed has subscribers, the job feed reads a retained,
+  non-consuming tail, and a dropped stream is recoverable by one read because the notification
+  itself carried nothing to lose. `session.scope: "owned"` applies to publishes as well as reads,
+  so the push channel cannot be used to probe session ids the tools would refuse.
 
 ## Development
 

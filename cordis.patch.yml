@@ -43,6 +43,13 @@
         # pin a real secret.
         tools:
           workspace: true
+          # Push feeds (session events, assistant stream, status, projections and
+          # background jobs) are always on: there is no configuration key for them.
+          # They ride the MCP subscription transport (a 2026-07-28
+          # `subscriptions/listen` stream, or a stateful 2025 session's GET SSE
+          # stream) and cost nothing while no client subscribes. The session-group
+          # feeds need `session`; the job feeds need `shell`.
+          #
           # The session group: 18 tools — create/list/search/status/prompt/
           # transcript/tool-result/queue/cancel/fork/rename/set_model, the
           # worktree pair, and archive/unarchive + pin/unpin. The worktree tools

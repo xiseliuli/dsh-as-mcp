@@ -6,6 +6,59 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.54.0
+
+- Server push now covers the whole run instead of one turn-ending signal. The existing
+  `subscriptions/listen` stream carries a feed set as readable synthetic resources — no new tools,
+  so the surface stays at 35: `dsh://sessions` (add/remove/activity/status and subagent starts and
+  ends), `dsh://session/<id>/events` (the newest durable events projected to
+  `{seq, type, at, turn, step, summary, error}`, published on every append, at most 64 per read),
+  `dsh://session/<id>/assistant` (live `start`/`text`/`reasoning`/`tool`/`finish`/`end` frames with
+  a monotonic `seq`, sourced from `agent/assistant-stream`), `dsh://session/<id>/status` (the
+  `session_status` payload), `dsh://session/<id>/projections` (the allowlisted
+  `workingDirectory`/`worktree`/`goal`/`plan`/`todos`/`agentPreset`/`title` values), and
+  `dsh://jobs` / `dsh://jobs/<id>` (background shell jobs; the job tail read is non-consuming, so
+  watching it cannot steal bytes from `shell_output`). The `dsh://session/<id>/turn` settlement
+  resource from 0.52.86 remains and is now one feed among the set instead of the only one.
+  `resources/list` and `resources/templates/list` advertise the feeds; `dsh_info.notes` names them
+  too.
+- Publishes are coalesced per URI at 150 ms (`PUSH_COALESCE_MS`): the first publish of a window
+  goes out immediately, later ones collapse into one trailing publish, and different URIs never
+  wait on each other — so a token stream costs at most one notification per window per URI instead
+  of one per token. Turn settlement stays deliberately immediate. The live tails are bounded in
+  process: assistant frames keep 256 KiB / 2 000 frames per session and a read returns at most 200
+  frames and roughly 32 KiB of text (newest first, `truncated` when older frames were dropped), an
+  events read stops at 64, a job read returns at most the newest 8 192 characters of a 16 KiB
+  retained tail, and the job feed polls about once a second only while somebody is subscribed. No
+  subscriber means no work: the collectors return early and no harness service is read, so a
+  fire-and-forget prompt with no listener costs what it did before. `session.scope: "owned"` gates
+  notifications as well as reads — a session this endpoint did not create or fork produces no
+  frame (its subagent sessions included: their parent's feeds publish, and their own feeds remain
+  readable through the owned tree) — so the push channel cannot be used to enumerate ids the
+  tools would refuse.
+- A stateful 2025-era Streamable HTTP leg now sits beside the modern one. An `initialize` answers
+  with an `mcp-session-id` header; `POST`/`GET`/`DELETE` carrying it are served by a per-session
+  server and transport, and the long-lived `GET` with `Accept: text/event-stream` is the
+  notification channel — so `notifications/resources/updated` finally reaches 2025-era clients
+  that have no `subscriptions/listen`. Sessions are capped at 8 (least recently used evicted) and
+  closed after 30 minutes idle, answering `404 Session not found` so the client re-initializes.
+  Resumability is deliberately absent: `Last-Event-ID` replay is not implemented because every
+  notification is payload-less and a reconnect re-reads. Clients that never take the session id
+  keep the previous stateless serving unchanged — later `POST`s answered from a fresh stateless
+  instance, `GET`/`DELETE` still `405` (the stateless legacy GET is not a push channel; a stateful
+  session's GET is).
+- `bin/mcp-stdio.mjs` opens that GET stream after a stateful `initialize` and forwards every
+  server notification and server→client request to stdout as one JSON line, reconnecting with
+  500 ms→30 s backoff (a stream that delivered messages restarts at the base delay) and sending
+  the last SSE id it saw (harmless: the server ignores it). A stateless endpoint — no session id,
+  or a GET answered `404`/`405` — prints one push-disabled note and keeps the old request/reply
+  behavior. `src/mcp/feeds.ts` owns the collectors, reads and buffers, `src/mcp/push.ts` the
+  per-URI coalescing and the 2025 fanout, `src/mcp/http.ts` the stateful session manager;
+  `tests/feeds.test.ts`, `tests/feed-resources.test.ts`, `tests/legacy-http.test.ts` and
+  `tests/stdio-bridge.test.ts` pin each half, and both READMEs gain a "Server push and the two
+  transports" section with the era table, the feed table and the backpressure bounds. The tool
+  surface, the tool schemas and every configuration key are unchanged.
+
 ## 0.53.0
 
 - The endpoint now covers Git worktrees and the sidebar's session organization. Six new tools —

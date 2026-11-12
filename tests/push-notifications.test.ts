@@ -3,8 +3,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { DshDriver } from '../src/dsh/driver.js'
 import type { DshSessionEvent } from '../src/dsh/types.js'
-import { EndpointPushes, turnResourceUri } from '../src/mcp/push.js'
-import { boot, readJsonRpc, rpc, stubDriver, testConfig } from './harness.js'
+import { EndpointPushes, PUSH_COALESCE_MS, turnResourceUri } from '../src/mcp/push.js'
+import { TOKEN, boot, readJsonRpc, rpc, stubDriver, testConfig } from './harness.js'
 
 /**
  * The server-push surface.
@@ -60,6 +60,77 @@ describe('EndpointPushes', () => {
     expect(published).toEqual(['dsh://session/session-1/turn'])
     off()
     expect(pushes.hasSubscribers()).toBe(false)
+  })
+
+  it('coalesces rapid updates of one URI, keeping the first immediate and one trailing publish', () => {
+    vi.useFakeTimers()
+    try {
+      const pushes = new EndpointPushes()
+      const { published, notifier } = recorder()
+      pushes.attach(notifier)
+      pushes.resourceUpdated('dsh://sessions')
+      expect(published).toEqual(['dsh://sessions'])
+      for (let index = 0; index < 5; index += 1) pushes.resourceUpdated('dsh://sessions')
+      expect(published).toEqual(['dsh://sessions'])
+      vi.advanceTimersByTime(PUSH_COALESCE_MS)
+      expect(published).toEqual(['dsh://sessions', 'dsh://sessions'])
+      // Different URIs never wait on each other's window.
+      pushes.resourceUpdated('dsh://jobs')
+      expect(published).toHaveLength(3)
+      pushes.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('publishes turn settlement immediately, bypassing the coalescing window', () => {
+    vi.useFakeTimers()
+    try {
+      const pushes = new EndpointPushes()
+      const { published, notifier } = recorder()
+      pushes.attach(notifier)
+      pushes.resourceUpdated('dsh://sessions')
+      pushes.turnSettled('session-1')
+      // The settlement is the event a waiting caller asked for; it must not be
+      // folded into a trailing publish behind some other feed's window.
+      expect(published).toEqual(['dsh://sessions', turnResourceUri('session-1')])
+      pushes.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('fans out to stateful 2025 sessions and counts them as subscribers', () => {
+    const pushes = new EndpointPushes()
+    const legacy: string[] = []
+    pushes.attachLegacy({
+      hasSessions: () => true,
+      resourceUpdated: (uri) => legacy.push(uri),
+    })
+    // No modern listen stream is open, yet a legacy session makes the endpoint a
+    // subscriber: watchers must be armed for it too.
+    expect(pushes.hasSubscribers()).toBe(true)
+    pushes.resourceUpdatedNow('dsh://session/session-1/events')
+    pushes.turnSettled('session-1')
+    expect(legacy).toEqual(['dsh://session/session-1/events', turnResourceUri('session-1')])
+    pushes.attachLegacy({ hasSessions: () => false, resourceUpdated: () => {} })
+    expect(pushes.hasSubscribers()).toBe(false)
+  })
+
+  it('drops a queued trailing publish when disposed', () => {
+    vi.useFakeTimers()
+    try {
+      const pushes = new EndpointPushes()
+      const { published, notifier } = recorder()
+      pushes.attach(notifier)
+      pushes.resourceUpdated('dsh://sessions')
+      pushes.resourceUpdated('dsh://sessions')
+      pushes.dispose()
+      vi.advanceTimersByTime(PUSH_COALESCE_MS * 4)
+      expect(published).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('is inert before the HTTP handler attaches', () => {
@@ -257,5 +328,63 @@ describe('settlement pushes for a fire-and-forget prompt', () => {
     expect(gate).toHaveBeenCalled()
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(settled).toEqual([])
+  })
+})
+
+/**
+ * The 2025-era stateful superset.
+ *
+ * A 2025 client may ignore the session header and keep the stateless flow, but a
+ * client that follows the spec: initialize, then resources/subscribe on the URIs
+ * it wants, then read the GET stream. `resources/subscribe` is not part of the
+ * SDK's default handler set, so it is registered explicitly; without it a spec
+ * client got "Method not found" for the very capability this endpoint advertises.
+ */
+describe('2025-era stateful subscriptions', () => {
+  it('opens a session and acknowledges resources/subscribe + unsubscribe', async () => {
+    const booted = await boot(stubDriver())
+    try {
+      const init = await rpc(booted.url, {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vitest', version: '0' } },
+      })
+      const sessionId = init.headers.get('mcp-session-id')
+      expect(sessionId, 'a stateful initialize must hand out a session id').toBeTruthy()
+      const initialized = await rpc(booted.url, { jsonrpc: '2.0', method: 'notifications/initialized' }, {})
+      void initialized
+      const subscribe = (method: string, id: number) => fetch(booted.url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: `Bearer ${TOKEN}`,
+          'mcp-session-id': sessionId as string,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id, method, params: { uri: 'dsh://sessions' } }),
+      })
+      for (const [method, id] of [['resources/subscribe', 2], ['resources/unsubscribe', 3]] as const) {
+        const response = await subscribe(method, id)
+        expect(response.status, method).toBe(200)
+        const body = (await readJsonRpc(response, id)) as { result?: Record<string, unknown>; error?: unknown }
+        expect(body.error, method).toBeUndefined()
+        expect(body.result, method).toEqual({})
+      }
+      // An unknown session id is refused the same way the transport refuses it.
+      const stale = await fetch(booted.url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: `Bearer ${TOKEN}`,
+          'mcp-session-id': 'not-a-session',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/list', params: {} }),
+      })
+      expect(stale.status).toBe(404)
+    } finally {
+      await booted.stop()
+    }
   })
 })

@@ -7,6 +7,7 @@ import type { DshLogger } from '../dsh/types.js'
 import type { EndpointStatus } from '../status.js'
 import { VERSION } from '../version.js'
 import { describeToolAvailability } from './availability.js'
+import type { FeedResource, FeedSurface } from './feeds.js'
 
 /** Where external agents should connect, reported by `dsh_info`. */
 export interface ConnectionInfo {
@@ -37,6 +38,12 @@ export interface ToolDeps {
   /** Live endpoint state, so a caller can tell "not listening" from "no such tool". */
   readonly status: () => EndpointStatus
   readonly log: DshLogger
+  /**
+   * The server-push feeds, when this host started them. Optional so a test or an
+   * embedder can serve the tool surface without the resource layer; the tools never
+   * read from it, only the resource registrations do.
+   */
+  readonly feeds?: FeedSurface
 }
 
 /**
@@ -209,13 +216,59 @@ function progressReporter(ctx: ServerContext | undefined): ((message: string, pr
 }
 
 /**
+ * Register the synthetic push resources of one tool group.
+ *
+ * A URI template becomes a `ResourceTemplate` (so `resources/templates/list`
+ * advertises it and a client can subscribe to the concrete URI); a static URI
+ * registers directly. Every read answers one JSON payload — that is the whole
+ * contract a push notification depends on: notify a URI, read it for the data.
+ */
+function registerFeedResources(server: McpServer, feeds: FeedSurface, group: FeedResource['group']): void {
+  for (const resource of feeds.resources) {
+    if (resource.group !== group) continue
+    const metadata = {
+      title: resource.title,
+      description: resource.description,
+      mimeType: 'application/json',
+    }
+    if (resource.uriTemplate.includes('{')) {
+      server.registerResource(
+        resource.name,
+        new ResourceTemplate(resource.uriTemplate, { list: undefined }),
+        metadata,
+        async (uri, variables) => ({
+          contents: [{
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(await resource.read(uri, variables as Readonly<Record<string, string>>)),
+          }],
+        }),
+      )
+    } else {
+      server.registerResource(
+        resource.name,
+        resource.uriTemplate,
+        metadata,
+        async (uri) => ({
+          contents: [{
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(await resource.read(uri, {})),
+          }],
+        }),
+      )
+    }
+  }
+}
+
+/**
  * Register every enabled tool on one MCP server instance.
  *
  * `createMcpHandler` builds a fresh server from a factory per request, so this
  * runs on every call; keep the bodies thin and push work into {@link DshDriver}.
  */
 export function registerTools(server: McpServer, deps: ToolDeps): void {
-  const { driver, getConfig, connection, status, log } = deps
+  const { driver, getConfig, connection, status, log, feeds } = deps
   const enabled = getConfig().tools
 
   server.registerTool(
@@ -347,6 +400,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'workspace_* and session_* drive this DSH instance directly; work appears live in the DSH UI.',
           'session_create { worktree } and worktree_create/worktree_restore need a worktrees service (the forge bundle in DSH Desktop/Web); harnessServices.worktrees reports it. A workspaceId-created session that enters a worktree keeps its workspace group and works in the new checkout (a cwd-only session stays ungrouped); session_status.workingDirectory and session_list { includeWorktree } show where each session is working.',
           'session_archive/unarchive and session_pin/unpin write the same registry sets the DSH sidebar uses; session_list reports each row\'s archived and pinned flags. The harness has no session delete, and these tools do not add one.',
+          ...(feeds === undefined ? [] : ['Push feeds: modern clients open one subscriptions/listen stream and name resources — dsh://sessions, dsh://session/<id>/turn|events|assistant|status|projections, dsh://jobs, dsh://jobs/<id>. 2025-era clients get the same notifications on a stateful session\'s GET SSE stream after resources/subscribe. Reads return JSON; event and assistant feeds carry a monotonic seq so a client can drop repeats.']),
           'session_prompt waits for the turn to settle by default and returns the agent reply plus its tool calls.',
           'DSH has no "session ended" event; call session_usage after your last prompt to collect the final tally.',
           'catalog.providers and catalog.agentPresets are the values session_create accepts; a field that could not be read is named in catalog.unavailable.',
@@ -354,6 +408,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       })
     }),
   )
+
+  // `resources.subscribe` is what makes the SDK's `subscriptions/listen` ack honor
+  // `resourceSubscriptions` (`honoredSubset` drops a feed it cannot advertise, and
+  // the client then never hears about it). The session group owns the turn and
+  // session feeds, the shell group owns the job feeds, so the capability is
+  // advertised whenever either exists — not only when session tools are on.
+  if (enabled.session || enabled.shell) {
+    server.server.registerCapabilities({ resources: { subscribe: true } })
+  }
 
   if (enabled.workspace) {
     server.registerTool(
@@ -415,12 +478,6 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
   }
 
   if (enabled.session) {
-    // The push feed a modern client subscribes to. `resources.subscribe` is what
-    // makes the SDK's `subscriptions/listen` ack honor `resourceSubscriptions`
-    // (`honoredSubset` drops the feed silently otherwise), and the template is
-    // what makes the announced URI readable: `resources/read` on it reports the
-    // same live state as `session_status`, including a failure block.
-    server.server.registerCapabilities({ resources: { subscribe: true } })
     server.registerResource(
       'session-turn',
       new ResourceTemplate('dsh://session/{sessionId}/turn', { list: undefined }),
@@ -444,6 +501,19 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         }
       },
     )
+    // The progress feeds. Every one is a readable synthetic resource published
+    // through the same listen channel; the collector decides when it is stale.
+    if (feeds !== undefined) registerFeedResources(server, feeds, 'session')
+
+    // A 2025-era client expresses "tell me when this changes" with
+    // resources/subscribe. The SDK has no default handler for it, so a
+    // spec-following client that had just seen resources.subscribe advertised got
+    // "Method not found". The endpoint fans every known feed out to every live
+    // stateful session (see LegacySessionManager), so acknowledging the
+    // subscription is enough: the notifications arrive on its GET stream either
+    // way, and filtering by URI is then the client's own concern.
+    server.server.setRequestHandler('resources/subscribe', async () => ({}))
+    server.server.setRequestHandler('resources/unsubscribe', async () => ({}))
     server.registerTool(
       'session_create',
       {
@@ -1753,6 +1823,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         jobs: driver.listShellJobs(args.running === undefined ? {} : { running: args.running }),
       })),
     )
+    // Job feeds live with the shell group: they only exist when the endpoint can
+    // start jobs in the first place.
+    if (feeds !== undefined) registerFeedResources(server, feeds, 'shell')
   }
 
   if (enabled.agentTools) {

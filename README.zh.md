@@ -204,7 +204,8 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 `includeModels: true` 还会读每个路由声明的模型（`catalog.providerModels`）：这会去问 adapter，所以默认关闭、
 每个 provider 都有超时，但这是选对 `session_create.model` 或 `session_set_model.model` 最可靠的办法。
 每个字段都是可选的、各自独立兜底，`catalog.unavailable` 会点名哪个读取没能回答，所以缺字段表示
-「这个 profile 没说」，不是「什么都不允许」。
+「这个 profile 没说」，不是「什么都不允许」。它的 `notes` 里还会列出本端点的推送 feed 与两种传输，
+调用方不必读这份 README 也能找到订阅面。
 
 ## 工具
 
@@ -214,7 +215,7 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 
 | 工具 | 作用 |
 | --- | --- |
-| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`，以及 `toolAvailability`（通过全部规则的 `availableTools`，可与 `tools/list` 对照；以及本部署无法服务的工具及原因）；`probeSearch` 可验证搜索是否真的可用。 |
+| `dsh_info` | 端点、版本与运行时长、token 来源、已启用的工具组、可用的 harness 服务、用量/费用是否可用、可接受的 provider/agent preset/sandbox 模式 `catalog`、`toolAvailability`（通过全部规则的 `availableTools`，可与 `tools/list` 对照；以及本部署无法服务的工具及原因），以及 `notes` 里的推送 feed URI；`probeSearch` 可验证搜索是否真的可用。 |
 | `workspace_create` | 把一个目录注册成 DSH 工作区（目录不存在时先创建；传 `createDirectory: false` 则要求它已存在）。 |
 | `workspace_list` | 列出所有工作区：id、路径、标题、目录是否还在，以及**挂在该注册下**的会话数（用 `workspaceId` 创建的会话）——这不是"cwd 恰好是该目录"的会话数，后者由 `session_list { cwd }` 回答。 |
 | `workspace_delete` | 注销一个工作区（文件与会话历史不受影响）；幂等。 |
@@ -323,27 +324,89 @@ profile 能读 session projection 时，`session_status` 会报 `workingDirector
 分组证明、失败矩阵与推荐操作顺序——见 `docs/WORKTREE-INTEGRATION-CONTRACT.md`；本次发布背后的能力审计是
 `docs/NEW-CAPABILITIES-0.2.2.md`。
 
-## 现代客户端的 turn 结束通知
+## 服务端推送与两种传输
 
-`session_prompt { wait: false }` 在消息被接收后立刻返回，所以通用的上报路径是轮询
-`session_status`（可带 `waitMs`）。而说现代 **2026-07-28** MCP 协议的客户端不必轮询：它可以
-用该协议的 `subscriptions/listen` 流被**主动告知**：
+MCP 服务无法主动调用客户端，所以「有什么变了」只能以资源通知的形式送出去。本端点把同一套变更 feed 发布到
+两种标准的推送通道上，而且每条通知都**不携带负载**：它只点名一个合成资源，客户端再去读那个资源拿 JSON。
+这件事没有新增任何工具——工具面仍是上面表格里的 35 个——推送也没有配置键：它始终开启，且在无人订阅时
+零成本。
 
-1. **先订阅再发 prompt**：开一个保持打开的 `subscriptions/listen` 请求，声明要听的 feed：
-   `notifications: { resourceSubscriptions: ["dsh://session/<sessionId>/turn"] }`，服务端会在
-   该流上回 `notifications/subscriptions/acknowledged`。
-2. 用 `wait: false` 调 `session_prompt`。
-3. 这一轮结束时——完成、失败、被取消，或没有 `turn/end` 而消失——服务端在该流上推送
-   `notifications/resources/updated`（带这个 URI）。对同一 URI 调 `resources/read` 会返回与
-   `session_status` 相同的 JSON，包括 `failure` 与 `lastTurn`。
+| 客户端时代 | 握手 | 服务端→客户端通道 | 如何请求推送 |
+| --- | --- | --- | --- |
+| **2026-07-28（现代）** | `server/discover`；每个请求自带 `_meta` 信封以及 `mcp-protocol-version` / `mcp-method` 头，因此没有会话 | 一条长期打开的 `subscriptions/listen` 流 | 在 `notifications.resourceSubscriptions` 里点名 feed；服务端回 `notifications/subscriptions/acknowledged`，之后推 `notifications/resources/updated` |
+| **2025 时代 Streamable HTTP** | `initialize` 的回复带 `Mcp-Session-Id`；之后的 `POST`/`DELETE` 都带它 | 该会话长期打开的 `GET`（`Accept: text/event-stream`） | 端点宣布 `resources.subscribe`，并把 feed 发布给每个存活的 stateful 会话，因此同样的 `notifications/resources/updated` 帧会出现在这条流上；数据仍用 `resources/read` 取 |
+| **stdio**（`bin/mcp-stdio.mjs`） | 桥接脚本经 HTTP 发 `initialize`，并保留服务端给出的会话 id | 它在同一会话上自己开一条长期 `GET` | 流上每条通知（以及任何服务端→客户端请求）都作为一行 JSON 写到 stdout；通道断开后按 500 ms→30 s 退避重连 |
 
-有两条边界是有意为之。第一，流必须在 prompt 被接收**之前**打开：没有任何监听者时不会为
-fire-and-forget 的 prompt 安排 watcher，因此之后再订阅可能错过那一次事件。第二，推送只存在于
-现代协议里：2025 客户端（包括 `bin/mcp-stdio.mjs` 与仓库自带的 smoke/exercise 脚本）没有
-listen 方法。它们不受影响：轮询仍是通用路径，没有订阅者的 fire-and-forget prompt 仍然只多花
-一次持久日志读取。watcher 就是阻塞式 `session_prompt` 用的同一个等待（同样的
-`promptTimeoutMs` 上限、同样的取消行为），每个 request id 一个；等到超时的 watcher 什么也不推，
-不会宣称一个它没看见的结束。
+遇到 stateless 端点时——`initialize` 没带会话 id，或 `GET` 回答 `404`/`405`——桥接脚本只打印一条
+「push disabled」提示，请求/应答行为不变。
+
+一个具体的现代交互（2025 客户端把第 1–2 步换成 stateful 握手与它的 GET 流；负载完全相同）：
+
+```json
+// 1. 开一条流并点名 feed。会话类 feed 需要 tools.session，任务类 feed 需要
+//    tools.shell；resources/list 与 resources/templates/list 会公布它们。
+{ "jsonrpc": "2.0", "id": 1, "method": "subscriptions/listen",
+  "params": { "notifications": { "resourceSubscriptions": [
+    "dsh://sessions",
+    "dsh://session/<sessionId>/events",
+    "dsh://session/<sessionId>/assistant",
+    "dsh://jobs" ] } } }
+
+// 2. 确认里列出服务端真正接受的子集
+{ "jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged",
+  "params": { "notifications": { "resourceSubscriptions": [ … ] } } }
+
+// 3. 每次变化就是一条不带负载的帧……
+{ "jsonrpc": "2.0", "method": "notifications/resources/updated",
+  "params": { "uri": "dsh://session/<sessionId>/events" } }
+
+// 4. ……再对那个 URI 调 resources/read 拿数据
+{ "jsonrpc": "2.0", "id": 2, "method": "resources/read",
+  "params": { "uri": "dsh://session/<sessionId>/events" } }
+```
+
+| feed URI | 负载 | 何时发布 |
+| --- | --- | --- |
+| `dsh://sessions` | 与 `session_list` 一致的会话列表，但不含标题（`sessions`、`total`） | 会话被新增、移除、创建或销毁，开始/停止运行，活动或状态变化，或 subagent 开始/结束 |
+| `dsh://session/{id}/events` | 最新的持久事件，投影为 `{seq, type, at, turn, step, summary, error}` 并带 `asOfSeq`（单次读取至多 64 个事件；`summary` 是有界预览，`error` 标记失败的 tool 结果或异常结束的轮次） | 该会话每次持久追加 |
+| `dsh://session/{id}/assistant` | 实时的 assistant 帧 `{seq, at, turn, step, kind, text, done}`，带 `asOfSeq` 与 `truncated`；`kind` 为 `start`、`text`、`reasoning`、`tool`、`finish` 或 `end`，`seq` 每会话单调递增 | 模型轮次流式输出期间——开始时一帧、结束时一帧，每个 text、reasoning 或 tool-call 增量各一帧，另有 finish 帧 |
+| `dsh://session/{id}/status` | 与 `session_status` 相同的负载 | 该会话出现新的持久事件，或 agent 状态变化 |
+| `dsh://session/{id}/projections` | 白名单内的 projection 值：`workingDirectory`、`worktree`、`goal`、`plan`、`todos`、`agentPreset`、`title` | 轮次结束、选定 agent preset、追加用户消息，或 goal 变化 |
+| `dsh://jobs` | 本端点启动的每个后台 shell 任务（`jobs`） | 任务开始或结束，或其状态、待读字节数变化 |
+| `dsh://jobs/{id}` | 单个任务及其保留的输出尾部（`tail`、`tailTruncated`） | 它的输出尾部增长或状态变化 |
+| `dsh://session/{id}/turn` | 与 `session_status` 相同的负载 | 该轮结算——0.52.86 就有的资源，仍然立即发布、不参与合并 |
+
+**背压：别让 token 流变成请求风暴。** 发布按 URI 合并：窗口内第一次立即发出，同一个 URI 的后续发布合并成
+150 ms（`PUSH_COALESCE_MS`）后的一次尾随发布，不同 URI 之间互不等待。因此一段 token 流对每个 URI 至多
+每 150 ms 产生一条通知，而不是每个 token 一条。轮次结算是例外——那是调用方正在等的离散事件，所以立即发布。
+通知不携带负载，所以一串增量只花一次 `resources/read`，而不是每个 token 一份与回复等大的负载。实时 feed 在
+进程内是有界的：assistant 缓冲每会话至多保留 256 KiB / 2,000 帧，单次读取至多返回 200 帧、约 32 KiB 文本
+（从新到旧；更旧的帧被丢弃或未返回时带 `truncated`），事件读取上限 64 条，任务读取至多返回 16 KiB 保留尾部
+里的最后 8,192 个字符。任务 feed 大约每秒轮询一次，而且只在有人订阅时轮询：没有订阅者时采集器提前返回、
+不读任何 harness 服务，所以没有监听者的 fire-and-forget prompt 成本和以前完全一样。任务尾部刻意设计成
+**不消费**：投递缓冲仍归 `shell_output`，因此盯 `dsh://jobs/{id}` 不会从轮询它的调用方那里偷走字节。
+
+**2025 时代那条腿是有状态的，旧的 stateless 行为照旧保留。** 2025 的 `initialize` 现在会在回复里带
+`mcp-session-id` 头；带这个头的请求由每会话的 server 与 transport 服务，所以 `GET`（通知流）与 `DELETE`
+（会话拆除）都能用，`notifications/resources/updated` 也终于能到达 2025 客户端。同时最多保留 8 个会话：
+开第 9 个时淘汰最久未使用的那个；静默 30 分钟的会话会被关闭，之后它的 id 回答
+`404 Session not found`，客户端重新 initialize。从不接收会话 id 的客户端保持此前的 stateless 服务不变——
+之后每个 `POST`（不是再次 `initialize` 的那种）都由一个全新实例应答——它的 `GET`/`DELETE` 仍是 `405`：
+stateless 的旧式 GET **不是**推送通道，有状态会话的 GET 才是。推送没有重放存储：断开的流重连时没有游标
+（不认 `Last-Event-ID`），这之所以安全，正是因为通知不携带负载——客户端重新读一遍它被告知的资源即可。
+
+**安全与作用域。** 每个请求都要过 bearer 校验——包括长期打开的 2025 `GET` 流和会话 `DELETE`，所以不存在
+未鉴权的推送路径；被拒绝的请求返回 `401` 并带 `WWW-Authenticate: Bearer realm="dsh-as-mcp"`。
+`session.scope: "owned"` 同样约束通知，而不只是读取：只有本端点创建或 fork 的会话（记录在 owned id 集合
+里的那些）才会产生帧，因此这条通道无法用来枚举其他会话的 id。于是一个 owned 会话自己的 subagent 会话也不
+会产生帧——它父会话的 feed 照常发布，而这些 subagent 的 feed 仍**可读**，因为读取和工具一样沿 owned 树
+放行。`dsh://jobs` 系列 feed 不按会话划分作用域：它们显示的是本端点启动的后台任务。
+
+有一条边界没有变，而且仍是有意为之：对 turn feed 来说，流必须在 prompt 被接收**之前**打开；在没有任何
+监听者时接收的 prompt 不会安排 watcher，之后再订阅可能错过那一次结算。watcher 就是阻塞式
+`session_prompt` 用的同一个等待（同样的 `promptTimeoutMs` 上限、同样的取消行为），每个 request id 一个；
+等到超时的 watcher 什么也不推，不会宣称一个它没看见的结束。推送不取代轮询：什么都不订阅的客户端行为
+和以前完全一样。
 
 ## 用量统计
 
@@ -832,6 +895,13 @@ profile 推导同一份映射；不过配置 profile 的人应当能在一处读
   唯一那个运行时版本做 semver 比对（预发布版也参与比对）；不兼容的安装会被拒载，除非宿主显式
   给出精确版本豁免（`dsh plugin allow-version`）。
 - **Node** `^22.19.0 || >=24.0.0`。
+- **两种 MCP 协议时代。** 同一个 URL 同时服务现代 2026-07-28 的逐请求协议（`server/discover`、请求自包含）
+  与 2025 时代的 Streamable HTTP 流程（`initialize` → `Mcp-Session-Id`，之后是有状态的
+  `POST`/`GET`/`DELETE`）。从不接收会话 id 的 2025 客户端保持此前的 stateless 服务不变，其中
+  `GET`/`DELETE` 回答 `405`；只有有状态会话的 `GET` 才是推送通道。有状态会话上限 8 个、静默 30 分钟后
+  关闭（被淘汰的客户端会在 `404` 上重新 initialize），并且服务端不实现可恢复性：刻意不做
+  `Last-Event-ID` 重放，因为每条通知都不携带负载，重连的客户端重新读一次资源即可。随包的
+  `bin/mcp-stdio.mjs` 走同一套有状态流程，并把流上的帧转发到 stdout。
 - `@deepseek-ai/dsh` 这个 peer 声明为**可选**，纯粹是为了不让 `dsh plugin add` 为了满足它就把
   一整个 harness 装进每个 profile。可选只影响安装行为——DSH 的兼容性检查不看
   `peerDependenciesMeta`，只读 `peerDependencies`，所以上面那条版本校验照样生效，一条都不少。
@@ -903,6 +973,13 @@ profile 推导同一份映射；不过配置 profile 的人应当能在一处读
   同样不提供。`session_archive`/`session_unarchive` 与 `session_pin`/`session_unpin` 写入的正是
   DSH 侧边栏动作写入的那组 registry 集合，`session_list` 会报出每行的 `archived`/`pinned` 标志；
   归档保留日志且可逆，这里没有任何操作会删掉对话记录。
+- **推送只是变更信号，不是负载。** 每个 feed 都是一个合成资源：通知只点名一个 URI，`resources/read`
+  返回 JSON——这既是 2026-07-28 订阅能收到的唯一一种带负载事件，也正是 2025 会话 GET 流可以原样承载的
+  形状。同一套发布面同时喂两种传输——现代 handler 的订阅总线与每个存活的 stateful 2025 会话——所以两个
+  时代不可能对「哪个资源变了」给出不同答案。发布按 URI 以 150 ms 合并（轮次结算立即发出），assistant
+  缓冲有界且只在有订阅者时采集，任务 feed 读的是不消费的保留尾部；断开的流读一次即可恢复，因为通知本身
+  没有可丢失的内容。`session.scope: "owned"` 同样作用于发布而不只是读取，因此推送通道无法被用来试探
+  工具会拒绝的会话 id。
 
 ## 开发
 

@@ -7,6 +7,15 @@
  * stdio: it forwards each newline-delimited JSON-RPC message to the endpoint
  * over HTTP and writes the reply back as a line.
  *
+ * When the endpoint is stateful (its `initialize` reply carries an
+ * `mcp-session-id`), the bridge also keeps the protocol's server→client
+ * notification channel open: a long-lived `GET` with `accept: text/event-stream`
+ * on the same endpoint. Every JSON-RPC message that channel carries is written
+ * to stdout as its own line, so a stdio client sees notifications and
+ * server→client requests without polling. The channel reconnects with
+ * exponential backoff while stdin is open; a stateless endpoint (no session id,
+ * or a GET answered with 404/405) disables it with one stderr note.
+ *
  * Configuration (environment variables):
  *   DSH_AS_MCP_URL    endpoint URL, default http://127.0.0.1:8790/mcp
  *   DSH_AS_MCP_TOKEN  bearer token; when unset, read from
@@ -97,6 +106,21 @@ let sessionId
 /** Protocol revision negotiated by `initialize`, echoed on later requests. */
 let protocolVersion
 
+/** Reconnect delays for the notification channel: start fast, back off, cap. */
+const PUSH_RETRY_BASE_MS = 500
+const PUSH_RETRY_MAX_MS = 30_000
+
+/** Abort handle for the running notification channel, when one is open. */
+let pushAbort
+/** Whether the notification channel has been started (it may be reconnecting). */
+let pushStarted = false
+/** Set once the endpoint is known to be stateless: push is never retried. */
+let pushDisabled = false
+/** The session the running channel was opened for, to detect a re-initialize. */
+let pushSessionId
+/** Most recent SSE `id:` seen on the channel, replayed on reconnect. */
+let lastEventId
+
 function log(message) {
   process.stderr.write(`[dsh-as-mcp] ${message}\n`)
 }
@@ -126,6 +150,186 @@ async function readEventStream(response) {
     }
   }
   return payloads
+}
+
+/** Write one server→client JSON-RPC message as a single stdout line. */
+function emitPushPayload(payload) {
+  process.stdout.write(`${JSON.stringify(payload)}\n`)
+}
+
+/**
+ * Read the long-lived notification stream and forward each message.
+ *
+ * The reader never writes a partial line: a payload is emitted only once a
+ * complete JSON document has arrived (one `data:` line is the server's normal
+ * framing; a multi-line `data:` payload is assembled through its blank-line
+ * terminator). Returns whether anything was delivered, which tells the caller
+ * whether the connection was actually useful before it ended.
+ */
+async function readPushStream(response) {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  /** `data:` lines of the event currently being assembled. */
+  let dataLines = []
+  let delivered = false
+
+  const flush = () => {
+    if (dataLines.length === 0) return
+    const data = dataLines.join('\n')
+    dataLines = []
+    if (data === '') return
+    let payload
+    try {
+      payload = JSON.parse(data)
+    } catch {
+      log(`dropped an unparsable push payload: ${data.slice(0, 200)}`)
+      return
+    }
+    emitPushPayload(payload)
+    delivered = true
+  }
+
+  for await (const chunk of response.body) {
+    buffer += decoder.decode(chunk, { stream: true })
+    let newline = buffer.indexOf('\n')
+    while (newline >= 0) {
+      const raw = buffer.slice(0, newline)
+      buffer = buffer.slice(newline + 1)
+      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
+      if (line === '') {
+        // Blank line terminates an event.
+        flush()
+      } else if (line.startsWith(':')) {
+        // Comment / keep-alive; nothing to forward.
+      } else if (line.startsWith('data:')) {
+        const value = line.slice(5)
+        dataLines.push(value.startsWith(' ') ? value.slice(1) : value)
+        // Dispatch as soon as the accumulated data is a complete JSON document,
+        // so a one-data-line message is forwarded immediately rather than only
+        // at the next blank line.
+        try {
+          JSON.parse(dataLines.join('\n'))
+          flush()
+        } catch {
+          // Multi-line payload: wait for the blank-line terminator.
+        }
+      } else if (line.startsWith('id:')) {
+        const id = line.slice(3).trim()
+        if (id !== '') lastEventId = id
+      }
+      // `event:` and `retry:` need no handling here.
+      newline = buffer.indexOf('\n')
+    }
+  }
+  // A stream that ends without its final blank line still carries a message.
+  flush()
+  return delivered
+}
+
+/** Sleep, but wake up immediately when the channel is stopped. */
+function pause(ms, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms)
+    function finish() {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    signal.addEventListener('abort', finish, { once: true })
+  })
+}
+
+/**
+ * Keep the server→client notification channel open, reconnecting with
+ * exponential backoff (500 ms doubling to a 30 s cap) while stdin is open.
+ */
+async function runPushChannel(signal) {
+  let failures = 0
+  let loggedInterruption = false
+  while (!signal.aborted) {
+    const channelSession = sessionId
+    if (!channelSession) return
+
+    const headers = { accept: 'text/event-stream' }
+    if (token) headers.authorization = `Bearer ${token}`
+    headers['mcp-session-id'] = channelSession
+    if (protocolVersion) headers['mcp-protocol-version'] = protocolVersion
+    // Resumability is optional on the server; replaying the id is harmless.
+    if (lastEventId !== undefined) headers['last-event-id'] = lastEventId
+
+    let delivered = false
+    try {
+      const response = await fetch(endpoint, { method: 'GET', headers, signal })
+      if (response.status === 404 || response.status === 405) {
+        pushDisabled = true
+        log(
+          `push disabled: the notification channel answered HTTP ${response.status} `
+          + '(stateless endpoint); request/reply continue',
+        )
+        await response.body?.cancel().catch(() => {})
+        return
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {})
+        throw new Error(`HTTP ${response.status} ${response.statusText}`)
+      }
+      loggedInterruption = false
+      failures = 0
+      delivered = await readPushStream(response)
+    } catch (error) {
+      if (signal.aborted) return
+      const text = error instanceof Error ? error.message : String(error)
+      if (!loggedInterruption) {
+        log(`push channel interrupted: ${text}; reconnecting with backoff`)
+        loggedInterruption = true
+      }
+    }
+
+    if (signal.aborted) return
+    // A stream that delivered messages starts over at the base delay; one that
+    // keeps ending or failing without delivering backs off exponentially.
+    if (!delivered) failures += 1
+    const delay = Math.min(
+      PUSH_RETRY_BASE_MS * 2 ** Math.max(failures - 1, 0),
+      PUSH_RETRY_MAX_MS,
+    )
+    await pause(delay, signal)
+  }
+}
+
+/**
+ * Start the notification channel after a successful `initialize`.
+ *
+ * A stateful endpoint issues an `mcp-session-id` header; a stateless one does
+ * not, and then push stays off permanently — request/reply is unaffected.
+ */
+function maybeStartPush() {
+  if (pushDisabled) return
+  if (!sessionId) {
+    pushDisabled = true
+    log(
+      'push disabled: the initialize response carried no mcp-session-id '
+      + '(stateless endpoint); request/reply continue',
+    )
+    return
+  }
+  if (pushStarted && pushSessionId === sessionId) return
+  // A re-initialize can hand out a new session: drop the old stream first.
+  stopPushChannel()
+  pushStarted = true
+  pushSessionId = sessionId
+  pushAbort = new AbortController()
+  runPushChannel(pushAbort.signal).catch((error) => {
+    log(`push channel stopped: ${error instanceof Error ? error.message : String(error)}`)
+  })
+}
+
+/** Stop the notification channel (stdin closed, or a new session replaced it). */
+function stopPushChannel() {
+  pushStarted = false
+  pushSessionId = undefined
+  pushAbort?.abort()
+  pushAbort = undefined
 }
 
 /** POST one JSON-RPC message and return the JSON-RPC payloads it produced. */
@@ -182,6 +386,12 @@ async function handleLine(line) {
       }
       process.stdout.write(`${JSON.stringify(reply)}\n`)
     }
+    // Only an answered `initialize` can establish the stateful leg: its response
+    // header carries the session id and its result the negotiated revision the
+    // notification channel echoes back.
+    if (message && typeof message === 'object' && message.method === 'initialize') {
+      maybeStartPush()
+    }
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error)
     log(`request failed: ${text}`)
@@ -236,5 +446,8 @@ for await (const line of lines) {
 }
 
 await Promise.allSettled([...pending])
+
+// stdin is gone: the client is done, so stop reconnecting the push channel.
+stopPushChannel()
 
 process.exit(0)

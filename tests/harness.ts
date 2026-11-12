@@ -2,6 +2,8 @@ import type { Config } from '../src/config.js'
 import { DEFAULT_AGENT_TOOLS } from '../src/defaults.js'
 import type { EndpointStatus } from '../src/status.js'
 import type { DshLogger } from '../src/dsh/types.js'
+import type { FeedSurface } from '../src/mcp/feeds.js'
+import { EndpointPushes } from '../src/mcp/push.js'
 import { createRequestHandler, startListener, type EndpointHandle } from '../src/mcp/http.js'
 import type { ConnectionInfo, McpDriver } from '../src/mcp/tools.js'
 
@@ -163,9 +165,15 @@ export function testConfig(overrides: Partial<Config['tools']> = {}, port = 0): 
 }
 
 /** Bring up one listener over the given driver and return its URL plus teardown. */
-export async function boot(driver: McpDriver, config: Config = testConfig()): Promise<{
+export async function boot(
+  driver: McpDriver,
+  config: Config = testConfig(),
+  options: { feeds?: FeedSurface; pushes?: EndpointPushes } = {},
+): Promise<{
   url: string
   stop: () => Promise<void>
+  /** The push surface this endpoint published on (created when not supplied). */
+  pushes: EndpointPushes
 }> {
   const connection = (): ConnectionInfo => ({
     url: 'http://127.0.0.1:0/mcp',
@@ -184,14 +192,24 @@ export async function boot(driver: McpDriver, config: Config = testConfig()): Pr
     tokenFile: '/tmp/dsh-as-mcp/token',
     enabledToolGroups: ['workspace', 'session', 'files'],
   })
+  const pushes = options.pushes ?? new EndpointPushes()
   const requestHandler = createRequestHandler({
-    deps: { driver, getConfig: () => config, connection, status, log: silentLog },
+    deps: {
+      driver,
+      getConfig: () => config,
+      connection,
+      status,
+      log: silentLog,
+      ...(options.feeds === undefined ? {} : { feeds: options.feeds }),
+    },
     getToken: () => TOKEN,
     log: silentLog,
+    pushes,
   })
   const handle: EndpointHandle = await startListener({ config, handler: requestHandler.handle, log: silentLog })
   return {
     url: handle.url,
+    pushes,
     stop: async () => {
       await handle.dispose()
       await requestHandler.close()

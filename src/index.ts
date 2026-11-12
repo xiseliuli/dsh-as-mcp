@@ -17,6 +17,7 @@ import {
 } from './mcp/http.js'
 import { maskToken, resolveToken } from './mcp/token.js'
 import { EndpointPushes } from './mcp/push.js'
+import { EventFeeds } from './mcp/feeds.js'
 import type { ConnectionInfo, ToolDeps } from './mcp/tools.js'
 import { installSettingsPagePolicy } from './settings.js'
 import { STATUS_ROUTE, type EndpointStatus } from './status.js'
@@ -207,7 +208,20 @@ export function apply(ctx: Context, config: unknown): void {
   // handler attaches its notifier here, once.
   const pushes = new EndpointPushes()
   const driver = new DshDriver(ctx, getConfig, pushes)
-  const deps: ToolDeps = { driver, getConfig, connection, status, log }
+  // The push feeds read the same driver surface the tools do and publish on the
+  // same push object: one event surface, two transports (modern listen streams and
+  // 2025-era stateful GET streams). Started here so the collectors exist before the
+  // first request can subscribe; disposal is tied to the plugin's own fiber.
+  const feeds = new EventFeeds({ ctx, driver, pushes, log, getConfig })
+  ctx.effect(() => {
+    const stopFeeds = feeds.start()
+    return () => {
+      stopFeeds()
+      feeds.dispose()
+      pushes.dispose()
+    }
+  }, 'dsh-as-mcp push feeds')
+  const deps: ToolDeps = { driver, getConfig, connection, status, log, feeds }
 
   const requestHandler = createRequestHandler({
     deps,

@@ -176,6 +176,9 @@ const MODEL_DISCOVERY_TIMEOUT_MS = 2_000
 /** How many background shell jobs may exist at once (running plus recently finished). */
 const MAX_SHELL_JOBS = 16
 
+/** Bytes of the most recent output retained for non-consuming peek/feed reads. */
+const MAX_SHELL_TAIL_BYTES = 16 * 1024
+
 /** Bytes retained per background job for output the caller has not read yet. */
 const MAX_SHELL_BUFFER_BYTES = 128 * 1024
 
@@ -594,6 +597,48 @@ export interface RestoreWorktreeReply {
   readonly branchRecreated: boolean
 }
 
+/**
+ * One durable session event projected for a push feed.
+ *
+ * Deliberately not the raw event: the feed is a change signal, and shipping whole
+ * assistant messages or tool results through it would duplicate the transcript and
+ * blow up the resource payload. `summary` carries the first few hundred characters
+ * of content; the full record stays available through `session_messages`.
+ */
+export interface SessionEventFeedEvent {
+  readonly seq: number
+  readonly type: string
+  /** ISO timestamp of the event. */
+  readonly at: string
+  readonly turn?: number
+  readonly step?: number
+  /** Bounded human-readable summary, when the event type has one. */
+  readonly summary?: string
+  /** Set on a failed tool result or an abnormally ended turn. */
+  readonly error?: boolean
+}
+
+/** The `dsh://session/{id}/events` resource payload. */
+export interface SessionEventFeed {
+  readonly sessionId: string
+  /** Newest event sequence included; a client tracks it to tell a fresh read from a repeat. */
+  readonly asOfSeq: number
+  readonly events: readonly SessionEventFeedEvent[]
+}
+
+/**
+ * One background shell job as a non-consuming feed snapshot.
+ *
+ * Extends {@link ShellJobSummary} with the retained output tail, for callers that
+ * want to watch a job without consuming the bytes `shell_output` delivers.
+ */
+export interface ShellJobPeek extends ShellJobSummary {
+  /** Last {@link MAX_SHELL_TAIL_BYTES} of output, UTF-8, oldest first. */
+  readonly tail: string
+  /** True when the retained tail dropped older bytes. */
+  readonly tailTruncated: boolean
+}
+
 /** One background shell job, as listed to a caller. */
 export interface ShellJobSummary {
   readonly jobId: string
@@ -637,6 +682,13 @@ interface ShellJobState {
   handle: DshShellProcess
   /** Output read from the process but not yet delivered to a caller. */
   buffer: string
+  /**
+   * Most recent output, retained so a non-consuming feed read can show progress
+   * without stealing bytes the `shell_output` caller has not received yet.
+   */
+  tail: string
+  /** True when `tail` dropped older bytes. */
+  tailTruncated: boolean
   /** True when `buffer` was trimmed because it exceeded the retained cap. */
   truncated: boolean
   /** True when the service dropped bytes; the spill paths point at the full stream. */
@@ -2327,6 +2379,59 @@ export class DshDriver {
   }
 
   /**
+   * A bounded, projected view of the newest durable events of one session.
+   *
+   * This is the read half of the `dsh://session/{id}/events` push feed: the
+   * notification says "something changed", this says what. It intentionally
+   * projects rather than returning raw events — the feed is a progress signal, and
+   * a whole assistant message or tool result belongs in `session_messages`.
+   *
+   * @param request.sessionId - session whose newest events are wanted.
+   * @param request.maxEvents - ceiling on returned events (default 64, max 200).
+   */
+  async sessionEventTail(request: {
+    sessionId: string
+    maxEvents?: number
+  }): Promise<SessionEventFeed> {
+    await this.assertSessionVisible(request.sessionId, 'session events feed')
+    const events = await this.readEvents(request.sessionId)
+    const limit = Math.max(1, Math.min(request.maxEvents ?? 64, 200))
+    return {
+      sessionId: request.sessionId,
+      asOfSeq: events.at(-1)?.seq ?? 0,
+      events: events.slice(-limit).map((event) => projectSessionEvent(event)),
+    }
+  }
+
+  /**
+   * The projection values a feed or status read reports for one session.
+   *
+   * Only an allowlisted set is returned: the raw projection map also carries the
+   * inbox, tool catalog and attachment limits, which are not progress signals and
+   * are not this endpoint's to mirror. `worktree` is derived from the harness's
+   * `forgeWorktree` projection; the rest are passed through as the harness reports
+   * them. An unreadable projection returns `{}` rather than failing the read.
+   */
+  async sessionProjectionValues(request: {
+    sessionId: string
+  }): Promise<Record<string, unknown>> {
+    await this.assertSessionVisible(request.sessionId, 'session projections feed')
+    const values = await this.readProjectionValues(request.sessionId)
+    if (values === undefined) return {}
+    const picked: Record<string, unknown> = {}
+    // `workingDirectory` and the forge record are the two the status/list surface
+    // already reports; the plan/goal/todo projections are what a supervising client
+    // wants to see change during a long session.
+    for (const key of ['workingDirectory', 'goal', 'plan', 'todos', 'agentPreset'] as const) {
+      if (values[key] !== undefined) picked[key] = values[key]
+    }
+    if (values['title'] !== undefined) picked['title'] = values['title']
+    const worktree = worktreeInfoOf(values['forgeWorktree'])
+    if (worktree !== undefined) picked['worktree'] = worktree
+    return picked
+  }
+
+  /**
    * One session's live state, optionally held open until it changes.
    *
    * `waitMs` turns a poll into a long-poll: the call returns as soon as anything
@@ -2440,12 +2545,32 @@ export class DshDriver {
    * actually mattered.
    */
   private async readSessionViews(sessionId: string): Promise<SessionViews> {
+    const values = await this.readProjectionValues(sessionId)
+    return values === undefined ? {} : viewsOfProjectionValues(values)
+  }
+
+  /**
+   * The raw projection values of one session, from the cheapest available reader.
+   *
+   * `sessionController.projections` is cold-safe and does not activate the
+   * session, so it is preferred; the `sessionQuery.observeSession` lease is the
+   * fallback for a profile without that controller method, and is disposed
+   * immediately because not releasing it pins the prepared-session cache. A
+   * profile with neither reader, or a session whose projections cannot be
+   * computed, answers `undefined` — every caller treats that as "not reported"
+   * rather than failing the read that actually mattered.
+   */
+  private async readProjectionValues(sessionId: string): Promise<Record<string, unknown> | undefined> {
     const controller = this.sessionController()
     const projections = controller?.projections
     if (typeof projections === 'function') {
       try {
-        const value = await projections.call(controller as DshSessionController, { sessionId }, new AbortController().signal)
-        return viewsOfProjectionValues(value?.values)
+        const value = await projections.call(
+          controller as DshSessionController,
+          { sessionId },
+          new AbortController().signal,
+        )
+        return value?.values
       } catch (error) {
         this.log.debug(
           '[dsh-as-mcp] could not read the projections of session %s: %s',
@@ -2456,7 +2581,7 @@ export class DshDriver {
     }
     const query = this.sessionQuery()
     const read = query?.observeSession
-    if (typeof read !== 'function') return {}
+    if (typeof read !== 'function') return undefined
     let observation
     try {
       observation = await read.call(query, sessionId, { projectionMode: 'all' })
@@ -2466,10 +2591,10 @@ export class DshDriver {
         sessionId,
         error instanceof Error ? error.message : String(error),
       )
-      return {}
+      return undefined
     }
     try {
-      return viewsOfProjectionValues(observation.projections?.values)
+      return observation.projections?.values
     } finally {
       observation[Symbol.dispose]?.()
     }
@@ -5024,6 +5149,8 @@ export class DshDriver {
       startedAt: Date.now(),
       handle,
       buffer: '',
+      tail: '',
+      tailTruncated: false,
       truncated: false,
     }
     if (request.timeoutMs !== undefined) {
@@ -5066,6 +5193,29 @@ export class DshDriver {
       .filter((job) => options.running === undefined || (job.handle.status === 'running') === options.running)
       .sort((left, right) => right.startedAt - left.startedAt)
       .map((job) => this.summarizeShellJob(job))
+  }
+
+  /**
+   * One background job as a non-consuming feed snapshot.
+   *
+   * `shell_output` is consuming by design: the caller that polls owns the bytes.
+   * A push feed cannot consume them, or it would steal output from that caller, so
+   * this returns the retained tail instead. `drainShellJob` still runs here — it
+   * is what moves bytes from the process into the buffers — but the delivery
+   * buffer is left untouched.
+   *
+   * @param jobId - job id from `shell_start` or `shell_list`.
+   * @returns the summary plus the retained tail, or `undefined` for an unknown job.
+   */
+  peekShellJob(jobId: string): ShellJobPeek | undefined {
+    const job = this.shellJobs.get(jobId)
+    if (job === undefined) return undefined
+    this.drainShellJob(job)
+    return {
+      ...this.summarizeShellJob(job),
+      tail: job.tail,
+      tailTruncated: job.tailTruncated,
+    }
   }
 
   /**
@@ -5146,7 +5296,16 @@ export class DshDriver {
       )
       return
     }
-    if (read.delta !== '') job.buffer += read.delta
+    if (read.delta !== '') {
+      job.buffer += read.delta
+      job.tail += read.delta
+      const tailBytes = Buffer.byteLength(job.tail, 'utf8')
+      if (tailBytes > MAX_SHELL_TAIL_BYTES) {
+        const rawTail = Buffer.from(job.tail, 'utf8')
+        job.tail = rawTail.subarray(rawTail.byteLength - MAX_SHELL_TAIL_BYTES).toString('utf8')
+        job.tailTruncated = true
+      }
+    }
     if (read.lossy) {
       // The distinction matters to a caller: `truncated` means something was not
       // delivered, `lossy` means *this service* already dropped bytes (the spill
@@ -5708,6 +5867,75 @@ function viewsOfProjectionValues(values: Readonly<Record<string, unknown>> | und
   return {
     ...(directory === null || typeof directory === 'string' ? { workingDirectory: directory } : {}),
     ...(worktree === undefined ? {} : { worktree }),
+  }
+}
+
+/** Characters of message content a feed event carries; the transcript has the rest. */
+const FEED_SUMMARY_CHARS = 240
+
+/** First text blocks of a message-shaped payload, joined and truncated. */
+function feedTextOf(data: Readonly<Record<string, unknown>> | undefined): string | undefined {
+  if (data === undefined) return undefined
+  const message = (data['message'] ?? data) as Readonly<Record<string, unknown>> | undefined
+  const content = message?.['content']
+  if (!Array.isArray(content)) return undefined
+  const texts: string[] = []
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue
+    const entry = block as { readonly type?: unknown; readonly text?: unknown }
+    if (entry.type === 'text' && typeof entry.text === 'string' && entry.text !== '') texts.push(entry.text)
+  }
+  if (texts.length === 0) return undefined
+  return truncateText(texts.join(' '), FEED_SUMMARY_CHARS)
+}
+
+/**
+ * Project one durable event onto the bounded shape the events feed reports.
+ *
+ * The projection is deliberately lossy: a feed event says what happened and how
+ * it ended, not what the whole message or tool result contained. Content stays in
+ * `session_messages`/`session_tool_result`, which have their own bounds.
+ */
+function projectSessionEvent(event: DshSessionEvent): SessionEventFeedEvent {
+  const data = (typeof event.data === 'object' && event.data !== null ? event.data : undefined) as
+    | Readonly<Record<string, unknown>>
+    | undefined
+  const turn = typeof data?.['turn'] === 'number' ? data['turn'] as number : undefined
+  const step = typeof data?.['step'] === 'number' ? data['step'] as number : undefined
+  const base: SessionEventFeedEvent = {
+    seq: event.seq,
+    type: event.type,
+    at: isoOfEventTime(event.time) ?? new Date(0).toISOString(),
+    ...(turn === undefined ? {} : { turn }),
+    ...(step === undefined ? {} : { step }),
+  }
+  switch (event.type) {
+    case 'user/message':
+    case 'assistant/message': {
+      const summary = feedTextOf(data)
+      return summary === undefined ? base : { ...base, summary }
+    }
+    case 'tool/call': {
+      const name = data?.['name']
+      return typeof name === 'string' ? { ...base, summary: `called ${name}` } : base
+    }
+    case 'tool/result': {
+      const message = data?.['message'] as Readonly<Record<string, unknown>> | undefined
+      const isError = message?.['isError'] === true || data?.['isError'] === true
+      return isError ? { ...base, error: true } : base
+    }
+    case 'turn/end': {
+      const reason = data?.['reason'] as { readonly kind?: unknown } | undefined
+      const kind = typeof reason?.kind === 'string' ? reason.kind : undefined
+      if (kind === undefined) return base
+      return {
+        ...base,
+        summary: `turn ended: ${kind}`,
+        ...(kind === 'completed' ? {} : { error: true }),
+      }
+    }
+    default:
+      return base
   }
 }
 
