@@ -6,6 +6,52 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.55.0
+
+- Three new tools in the `session` group — `session_command_list`, `session_command` and
+  `session_goal` — bring the surface from 35 to 38 (the group from 18 to 21). A slash command
+  executes **without a model turn** (the registry parses the line and invokes the handler directly),
+  so `session_command` is the cheap half of "do what a human typing into the DSH composer would
+  do": compact a long session, export its log, enter plan mode or set a goal. `session_command_list`
+  reports every command the session's agent can see, with its description and input hint, and marks
+  each `permitted` instead of hiding the refused ones; `session_command` takes the line with or
+  without its leading slash and with arguments in the same string (`"compact"`, `"/export"`,
+  `"/goal <objective>"`, `"/plan off"`), and the run goes through the harness's own command
+  registry, so it is the same execution a human typing the line produces (the reply carries the
+  harness's `commandId`, `ok`, the handler's `text` and the `sourceEventSeq` it recorded). The
+  admitted set is explicit — `/compact`, `/plan`, `/goal`, `/export` — not "anything the registry
+  lists": `/permission` would change the session's permission preset (a remote caller must not
+  escalate its own session) and `/feedback` writes the user's own review records, so both are
+  refused **before** any handler runs — a refused call writes nothing to the session log — and an
+  unknown name is refused with the admitted set listed. A handler that reports an error comes back
+  as `ok: false` with its text, while a name/argument the registry did not admit is an error saying
+  nothing was logged.
+- `session_goal` reads and mutates the session's **durable goal** — the long-running objective the
+  harness's round driver keeps advancing across turns, which is how a caller delegates multi-hour
+  work instead of holding one turn open. `action` is `get` (the goal, or `null`) or
+  `create`/`edit`/`pause`/`resume`/`complete`/`clear`; `create` needs `objective`, `edit` needs
+  `objective` and/or `maxGoalRounds`, and every other action acts on the goal that exists now, so
+  its ref comes from a read rather than from the caller. `expectedRevision` (from a previous read) is
+  the lost-update guard: a mutation whose goal changed underneath — say the user edited it in the DSH
+  UI a moment ago — is refused instead of silently applied, the same spirit as the UI's conflict
+  handling. A goal reports `id`, `revision`, `objective`, `phase` (`active`/`paused`/`blocked`/
+  `complete`), `activation` (`armed`/`disarmed`), `maxGoalRounds`, `roundsStarted`, `blockedReason`
+  when blocked and its timestamps; `clear` returns `goal: null` with `cleared: true`, and `complete`
+  returns the completed goal.
+- `dsh_info.harnessServices` reports two more probes, `commands` and `goals` (29 in total, up from
+  27), and `toolAvailability` pre-flights the three tools against `sessionController` +
+  `sessionController.resolveAgent` plus the matching service, so an agent-scoped command or goal
+  service that a profile does not mount is reported unavailable instead of failing at call time.
+  `dsh_info.notes` gains one paragraph per surface: commands run without a model turn and only the
+  user-plane set is admitted, and goal mutations carry the harness's revision guard.
+- No new configuration keys: push, the two transports, the tool groups and the settings panel are
+  unchanged. Both READMEs gain the three tool rows, a "Session orchestration" flow and a
+  deployment-requirements row; `docs/CAPABILITY-GAPS.md` is re-counted to 38 tools and 29 probes and
+  marks slash commands and durable goals as shipped, with `resolveAgent` named as the bridging layer.
+  `tests/orchestration.test.ts` pins the new driver surface (allow-list before the handler, slash
+  normalization, the revision guard, projection of the goal view) and `tests/mcp-endpoint.test.ts`
+  the argument passthrough; `tests/availability.test.ts` covers the new pre-flight rules.
+
 ## 0.54.0
 
 - Server push now covers the whole run instead of one turn-ending signal. The existing

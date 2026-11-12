@@ -237,6 +237,9 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `session_unarchive` | 把归档的会话放回它在 DSH 界面里记录的位置。幂等：对未归档的 id 不算错误；日志从未被动过，因此会话重新可见、可继续 prompt。 |
 | `session_pin` | 把会话置顶到 DSH 界面的会话列表（与侧边栏置顶写入同一个 pin 集合）。会话必须存在且未归档；置顶幂等。 |
 | `session_unpin` | 把会话从 DSH 界面的 pin 集合里移除。幂等：对未置顶的 id 不算错误。 |
+| `session_command_list` | 列出该会话 agent 能运行的斜杠命令——每条带一句描述、可选的 `input` 提示与 `permitted` 标记——因此调用方能看到某个命令存在、而本端点故意不运行它（放行集是 `/compact`、`/plan`、`/goal`、`/export`；`/permission` 与 `/feedback` 刻意拒绝）。命令**不消耗模型轮次**（直接调用 handler），所以这是压缩长会话、导出日志、进入 plan 模式或设置目标最便宜的办法——与人在 DSH 输入框里敲命令完全一致。只读；用 `session_command` 运行其中一条。 |
+| `session_command` | 对会话的 agent 执行一条斜杠命令，不花模型轮次，就像人真的在 DSH 输入框里敲了它：`command` 可带可不带前导斜杠，参数写在同一字符串里（`"compact"`、`"/export"`、`"/goal <objective>"`、`"/plan off"`）。执行走 harness 自己的命令注册表，因此与真人敲同一行的执行完全一致，会话日志也会记录；回复带 harness 的 `commandId`、`ok`（handler 自己报告错误结果时为 `false`）、handler 的 `text`，以及它报告时记录的 `sourceEventSeq`。只放行用户面命令（`/compact`、`/plan`、`/goal`、`/export`）；`/permission`（会改变会话的 permission preset）与 `/feedback`（会写入你自己的评审记录）在任何 handler 运行之前就被拒绝，因此被拒调用**不会向会话日志写入任何东西**；本 profile 未注册的命令名会被拒绝并列出放行集。注册表没有接收的名字或参数返回错误并说明什么都没写进日志。先调 `session_command_list` 看该 agent 接受的确切名字与输入提示。 |
+| `session_goal` | 读取或修改会话的持久目标（durable goal）——即 harness 的轮次驱动会在多轮之间持续推进的长期目标，调用方因此可以委派多小时的任务，而不必一直挂着一轮。`action` 取 `get`（返回 `goal` 或 `null`），或 `create`（需要 `objective`）、`edit`（需要 `objective` 和/或 `maxGoalRounds`）、`pause`、`resume`、`complete`、`clear` 之一；除 `create` 外的动作都作用于当前存在的目标，其 ref 来自一次读取而不是调用方。传 `expectedRevision`（来自之前的读取）可拒绝"目标已在脚下被改过"的修改——相当于 DSH 界面的冲突处理。目标报出 `id`、`revision`、`objective`、`phase`（`active`/`paused`/`blocked`/`complete`）、`activation`（`armed`/`disarmed`）、`maxGoalRounds`、`roundsStarted`、被阻塞时的 `blockedReason` 与 `createdAt`/`updatedAt`；`clear` 返回 `goal: null`（并带 `cleared: true`），`complete` 返回已完成的目标。 |
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。传 `sessionIds` 可一次结算多个已知会话，传 `cwd` 可汇总某个工作目录里跑过的所有会话。 |
 | `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件（两者都是**字节**偏移，因此 EOF 处或之后的偏移是空的完整读取），`maxBytes` 用更小的窗口降低单次开销；`sha256: true` 返回整个文件的哈希，作为后续写入/编辑的比较并交换值。 |
 | `file_read_image` | 读取图片（png/jpeg/gif/webp/bmp，按字节嗅探）并以 MCP image block 返回，让你直接看截图或图表而不是靠猜。上限 8 MiB。 |
@@ -288,6 +291,29 @@ workspace_create { path: "/Users/me/project" }
 
 运维方可以通过 `agentTools.allow` 有意放宽，或用 `agentTools.deny` 从默认集合里减去。
 
+### 会话编排
+
+有些活不是一次 prompt 能装下的。压缩长会话、导出日志、进入 plan 模式、设置目标，都是人在 DSH 输入框里
+敲一条斜杠命令就能完成的用户面动作；持久目标还会把"一次请求"变成 harness 的轮次驱动会跨轮持续推进的
+目标。这两条路本身都不消耗模型轮次。预期流程：
+
+```
+session_command_list { sessionId }                                    # 该 agent 接受什么；permitted 标出放行集
+  -> session_command { sessionId, command: "/compact" }               # 运行一条；不花模型轮次
+  -> session_goal { sessionId, action: "create", objective: "完成迁移", maxGoalRounds: 20 }
+  -> session_goal { sessionId, action: "get" }                        # 轮询 phase/revision……
+     或订阅 dsh://session/<id>/projections                               # ……或等它在变化时通知你
+  -> session_goal { sessionId, action: "pause", expectedRevision: 3 } # 之后 resume / complete / clear
+```
+
+`session_command_list` 报出每条命令的 `permitted` 标记而不是把被拒命令藏起来，调用方因此能看到该 profile
+上确实有 `/permission` 与 `/feedback`、而本端点故意不运行它们：`/permission` 会改变会话的权限 preset，
+`/feedback` 会写入用户自己的评审记录；两者都到不了 handler，也不会向会话日志写入任何东西。
+`session_status` 报的是会话的轮次与日志状态，不含目标本身；目标的 phase 与 revision 来自
+`session_goal { action: "get" }`，而 `dsh://session/<id>/projections` feed（其中含 `goal`）会在目标变化时
+发布，因此跟进一个目标是轮询或订阅，而不是每轮都发 prompt。不带 `expectedRevision` 的修改作用于当时存在
+的目标；若可能有两个监督者竞争，请传回读取时拿到的 revision。
+
 ## 工作树
 
 一个会话可以在一份自己的、来自同一仓库的 Git 检出里工作。这正是 DSH 界面「New worktree」选项做的事：
@@ -328,7 +354,7 @@ profile 能读 session projection 时，`session_status` 会报 `workingDirector
 
 MCP 服务无法主动调用客户端，所以「有什么变了」只能以资源通知的形式送出去。本端点把同一套变更 feed 发布到
 两种标准的推送通道上，而且每条通知都**不携带负载**：它只点名一个合成资源，客户端再去读那个资源拿 JSON。
-这件事没有新增任何工具——工具面仍是上面表格里的 35 个——推送也没有配置键：它始终开启，且在无人订阅时
+这件事没有新增任何工具——工具面仍是上面表格里的 38 个——推送也没有配置键：它始终开启，且在无人订阅时
 零成本。
 
 | 客户端时代 | 握手 | 服务端→客户端通道 | 如何请求推送 |
@@ -880,6 +906,7 @@ profile 推导同一份映射；不过配置 profile 的人应当能在一处读
 | `worktree_create` / `worktree_restore` / `session_create { worktree }` | `worktrees` **且** `sessionController.resolveAgent` | 服务由 DSH Desktop/Web 的 forge bundle（`@deepseek-ai/dsh-experimental-forge-bundle`）提供；裸 profile 没有它，`dsh_info.toolAvailability` 会把这些工具报成不可用，`session_create { worktree }` 在创建会话之前就被拒绝。会话的执行环境里还需要 Git 与 Node |
 | `session_status.workingDirectory` / `session_status.worktree` / `session_list { includeWorktree }` | 可读的 session projection（`sessionController.projections` 或 `sessionQuery.observeSession`） | 可选：没有它时两个回复都省略这两个字段，其余内容不变 |
 | `session_archive` / `session_unarchive` / `session_pin` / `session_unpin` | `workspaceRegistry.archiveSession` / `pinSession` | 与 DSH 侧边栏动作写入同一组 registry 集合；方法缺失时这些工具被报成不可用 |
+| `session_command_list` / `session_command` / `session_goal` | `sessionController.resolveAgent` **且** `commands` / `goals` | 两个服务都是 agent 作用域的，会话的实时 agent 就是桥；profile 没有它们时 `dsh_info.toolAvailability` 会把这三个工具报成不可用，每次调用也会点名缺少的服务与提供它的 bundle |
 | `workspace_*` | `workspaceRegistry` | 常规 profile 由 base bundle 提供 |
 | `file_*` | `fs` | 部署的沙箱策略照样生效；`file_read_image` 还需要受支持的图片格式 |
 | `shell_*` | `shell` | `shell_run` 有 `run()` 用 `run()`、否则 `execute()`；后台任务需要 `start()` 或 `execute()` |
@@ -1011,13 +1038,13 @@ node scripts/exercise.mjs    # 约 60 项断言：建工作区、开会话、让
 
 | 启用的工具组 | 公布工具数 | 最近结果 |
 | --- | --- | --- |
-| 全部六组 | 35 | `--with-model --with-subagent` 下 live-checks 195/195；验收 166/166，同一轮启动、搜索索引开启 |
-| 仅 `session`、`usage` | 20 | `--with-model` 下 live-checks 95/95（文件/shell/工作区段落跳过） |
-| `workspace`、`session`、`agentTools`、`usage` | 25 | live-checks 64/64（被关闭的组会在原因里点名 `tools.<group>` 开关） |
+| 全部六组 | 38 | `--with-model --with-subagent` 下 live-checks 195/195；验收 166/166，同一轮启动、搜索索引开启 |
+| 仅 `session`、`usage` | 23 | `--with-model` 下 live-checks 95/95（文件/shell/工作区段落跳过） |
+| `workspace`、`session`、`agentTools`、`usage` | 28 | live-checks 64/64（被关闭的组会在原因里点名 `tools.<group>` 开关） |
 | 仅 `files`、`shell` | 11 | live-checks 68/68（会话/用量/队列/搜索段落跳过） |
 
-"公布工具数"一列是当前工具面（0.53.0：session 组 18 个、总计 35 个）；"最近结果"一列记录的是
-针对 0.52.86（尚无这六个新工具）的实测，本次发布没有重测。
+"公布工具数"一列是当前工具面（0.55.0：session 组 21 个、总计 38 个）；"最近结果"一列记录的是
+针对 0.52.86（尚无 0.53.0 新增工具）的实测，此后未重测。
 
 第五个形态 `mountonly` 以 `http.enabled: false` + `mountOnWebServer: true` 启动，经 DSH 自己的
 web 服务器验证端点：109/109，全部廉价，其中包含 `dsh_info` 必须报 `listening: false`、

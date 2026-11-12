@@ -50,13 +50,14 @@
           # stream) and cost nothing while no client subscribes. The session-group
           # feeds need `session`; the job feeds need `shell`.
           #
-          # The session group: 18 tools — create/list/search/status/prompt/
+          # The session group: 21 tools — create/list/search/status/prompt/
           # transcript/tool-result/queue/cancel/fork/rename/set_model, the
-          # worktree pair, and archive/unarchive + pin/unpin. The worktree tools
+          # worktree pair, archive/unarchive + pin/unpin, and the orchestration
+          # trio (slash commands + durable goal). The worktree tools
           # also need the worktrees service (the forge bundle in Desktop/Web,
           # probed as `dsh_info.harnessServices.worktrees`); archive/pin write the
           # same registry sets the DSH sidebar's actions write. Disabling the
-          # group removes all 18 at once; `dsh_info.toolAvailability` names the
+          # group removes all 21 at once; `dsh_info.toolAvailability` names the
           # ones a profile cannot serve.
           session: true
           files: true

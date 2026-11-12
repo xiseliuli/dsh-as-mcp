@@ -14,6 +14,8 @@ const FULL = {
   sessionModel: true,
   worktrees: true,
   agentResolve: true,
+  commands: true,
+  goals: true,
   sessionViews: true,
   sessionArchive: true,
   sessionPin: true,
@@ -42,10 +44,10 @@ describe('describeToolAvailability', () => {
   it('reports every advertised tool available when every probe is true', () => {
     const report = describeToolAvailability(allOn().tools, FULL, allOn())
     expect(report.unavailable).toEqual([])
-    // dsh_info plus the 34 other registered tools (35 advertised in total).
-    expect(report.available).toBe(35)
-    expect(report.availableTools).toHaveLength(35)
-    expect(new Set(report.availableTools).size).toBe(35)
+    // dsh_info plus the 37 other registered tools (38 advertised in total).
+    expect(report.available).toBe(38)
+    expect(report.availableTools).toHaveLength(38)
+    expect(new Set(report.availableTools).size).toBe(38)
     expect(report.availableTools[0]).toBe('dsh_info')
     expect(report.notes ?? []).toEqual([])
   })
@@ -57,17 +59,18 @@ describe('describeToolAvailability', () => {
       'shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list',
     ])
     expect(report.unavailable[0]?.reason).toMatch(/tools\.shell: false/)
-    expect(report.available).toBe(30)
+    expect(report.available).toBe(33)
     expect(report.availableTools).not.toContain('shell_run')
   })
 
-  it('counts the 18-tool session group, including the worktree and archive additions', () => {
+  it('counts the 21-tool session group, including the worktree, archive and orchestration additions', () => {
     const config = allOn({ session: false })
     const report = describeToolAvailability(config.tools, FULL, config)
     const sessionTools = [
       'session_create', 'worktree_create', 'worktree_restore', 'session_search', 'session_status', 'session_list',
       'session_prompt', 'session_messages', 'session_tool_result', 'session_queue', 'session_cancel', 'session_fork',
       'session_rename', 'session_set_model', 'session_archive', 'session_unarchive', 'session_pin', 'session_unpin',
+      'session_command_list', 'session_command', 'session_goal',
     ]
     expect(report.unavailable.map((entry) => entry.tool)).toEqual(sessionTools)
     expect(report.available).toBe(17)
@@ -121,7 +124,11 @@ describe('describeToolAvailability', () => {
 
   it('separates the worktree service from the agent bridge it needs', () => {
     const report = describeToolAvailability(allOn().tools, { ...FULL, agentResolve: false }, allOn())
-    expect(report.unavailable.map((entry) => entry.tool)).toEqual(['worktree_create', 'worktree_restore'])
+    // Commands and goals are agent-scoped too, so the same missing bridge takes
+    // them out as well.
+    expect(report.unavailable.map((entry) => entry.tool)).toEqual([
+      'worktree_create', 'worktree_restore', 'session_command_list', 'session_command', 'session_goal',
+    ])
     expect(report.unavailable[0]?.reason).toMatch(/sessionController\.resolveAgent\(\)/)
   })
 
@@ -146,7 +153,7 @@ describe('describeToolAvailability', () => {
     const report = describeToolAvailability(allOn().tools, { ...FULL, sessionViews: false }, allOn())
     // Neither tool is blocked: the views are additive diagnostics.
     expect(report.unavailable).toEqual([])
-    expect(report.available).toBe(35)
+    expect(report.available).toBe(38)
     expect(report.notes?.join('\n')).toMatch(/session_status and session_list cannot report workingDirectory/)
   })
 })

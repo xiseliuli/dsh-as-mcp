@@ -195,6 +195,58 @@ describe('MCP Streamable HTTP endpoint', () => {
     expect(payload.workspace.title).toBe('Example')
   })
 
+  it('routes the orchestration arguments through to the driver', async () => {
+    const calls: Record<string, unknown>[] = []
+    const recording = await boot(stubDriver({
+      runSessionCommand: async (request) => {
+        // The request also carries the client's abort signal; the assertion is
+        // about the arguments, so only the meaningful fields are recorded.
+        calls.push({ tool: 'session_command', sessionId: request.sessionId, command: request.command })
+        return { sessionId: request.sessionId, commandId: 'c-1', ok: true, text: 'compacted' }
+      },
+      mutateSessionGoal: async (request) => {
+        calls.push({ tool: 'session_goal', ...request })
+        return { sessionId: request.sessionId, action: request.action, goal: null, cleared: true }
+      },
+    }))
+    try {
+      const listed = await callTool(recording.url, 'session_command_list', { sessionId: 'session-1' })
+      expect(JSON.parse(listed.text)).toMatchObject({ sessionId: 'session-1' })
+      const ran = await callTool(recording.url, 'session_command', {
+        sessionId: 'session-1',
+        command: '/compact',
+      })
+      expect(JSON.parse(ran.text)).toMatchObject({ ok: true, text: 'compacted' })
+      const goal = await callTool(recording.url, 'session_goal', {
+        sessionId: 'session-1',
+        action: 'create',
+        objective: 'ship the release',
+        maxGoalRounds: 6,
+        expectedRevision: 2,
+      })
+      expect(JSON.parse(goal.text)).toMatchObject({ action: 'create', cleared: true })
+      // Every schema option must reach the driver: an accepted-but-dropped argument
+      // is the drift the release check exists to prevent.
+      expect(calls).toEqual([
+        { tool: 'session_command', sessionId: 'session-1', command: '/compact' },
+        {
+          tool: 'session_goal',
+          sessionId: 'session-1',
+          action: 'create',
+          objective: 'ship the release',
+          maxGoalRounds: 6,
+          expectedRevision: 2,
+        },
+      ])
+      // A read action must not be routed through the mutator.
+      const read = await callTool(recording.url, 'session_goal', { sessionId: 'session-1', action: 'get' })
+      expect(JSON.parse(read.text)).toEqual({ sessionId: 'session-1', goal: null })
+      expect(calls).toHaveLength(2)
+    } finally {
+      await recording.stop()
+    }
+  })
+
   it('reports a harness failure as a tool error, not a transport error', async () => {
     const failing = await boot(
       stubDriver({
@@ -332,7 +384,7 @@ describe('MCP Streamable HTTP endpoint', () => {
         'session_create', 'worktree_create', 'worktree_restore', 'session_search', 'session_status', 'session_list',
         'session_prompt', 'session_messages', 'session_tool_result', 'session_queue', 'session_cancel',
         'session_fork', 'session_rename', 'session_set_model', 'session_archive', 'session_unarchive',
-        'session_pin', 'session_unpin',
+        'session_pin', 'session_unpin', 'session_command_list', 'session_command', 'session_goal',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -348,7 +400,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(35)
+      expect(all).toHaveLength(38)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {

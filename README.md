@@ -252,6 +252,9 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | `session_unarchive` | Return an archived session to its recorded position in the DSH UI. Idempotent: an id that is not archived is not an error, and the log was never touched, so the session is visible and promptable again. |
 | `session_pin` | Pin a session to the top of the DSH UI's session list (the same pin set the sidebar writes). The session must exist and must not be archived; pinning is idempotent. |
 | `session_unpin` | Remove a session from the DSH UI's pin set. Idempotent: an id that is not pinned is not an error. |
+| `session_command_list` | The slash commands this session's agent can run — each with a one-line description, an optional `input` hint and a `permitted` flag — so a caller can see that a command exists while this endpoint deliberately will not run it (the admitted set is `/compact`, `/plan`, `/goal`, `/export`; `/permission` and `/feedback` are refused on purpose). A command executes without a model turn — the handler is invoked directly — which makes this the cheap way to compact a long session, export its log, enter plan mode or set a goal, exactly as a human typing into the DSH composer would. Read-only; run one with `session_command`. |
+| `session_command` | Execute one slash command against a session's agent without spending a model turn, as if the human had typed it into the DSH composer: give the `command` with or without its leading slash, with its arguments in the same string (`"compact"`, `"/export"`, `"/goal <objective>"`, `"/plan off"`). The run goes through the harness's own command registry, so it is the same execution a human typing the line produces and the session log records it; the reply carries the harness's `commandId`, `ok` (`false` when the handler itself reported an error result), the handler's `text` and the `sourceEventSeq` it recorded when it reported one. Only the user-plane commands are admitted (`/compact`, `/plan`, `/goal`, `/export`); `/permission` (which would change the session permission preset) and `/feedback` (which would write the user's own review records) are refused before any handler runs, so a refused call writes nothing to the session log, and a name that is not registered on this profile is refused with the admitted set listed. A name or argument the registry did not admit is an error saying nothing was logged. Call `session_command_list` first to see the exact names and the input hint this agent accepts. |
+| `session_goal` | Read or mutate the session's durable goal — the long-running objective the harness's round driver keeps advancing across turns, which is how a caller delegates multi-hour work instead of holding one turn open. `action` is `get` (which returns the `goal` or `null`), or one of `create` (needs `objective`), `edit` (needs `objective` and/or `maxGoalRounds`), `pause`, `resume`, `complete`, `clear`; every action except `create` acts on the goal that exists now, so its ref comes from a read rather than from the caller. Pass `expectedRevision` (from a previous read) to refuse a mutation whose goal changed underneath you — the equivalent of the DSH UI's conflict handling. A goal reports `id`, `revision`, `objective`, `phase` (`active`/`paused`/`blocked`/`complete`), `activation` (`armed`/`disarmed`), `maxGoalRounds`, `roundsStarted`, `blockedReason` when blocked, and `createdAt`/`updatedAt`; `clear` returns `goal: null` (and `cleared: true`), while `complete` returns the completed goal. |
 | `session_usage` | Token usage per session (its subagents included by default): exact bucket counts, a per-model breakdown, optional per-turn detail, and money when a price plugin is installed. Pass `sessionIds` to tally several known sessions in one receipt, or `cwd` to total every session that ran in one workspace directory. |
 | `file_read` | Read a UTF-8 file through DSH's filesystem service. Bounded by a byte limit; `offset`/`nextOffset` page through a larger file (both are **byte** offsets, so an offset at or past EOF is an empty complete read), `maxBytes` asks for a smaller window so reading a slice costs less, and `sha256: true` returns the whole file's hash as the compare-and-swap value for a later write/edit. |
 | `file_read_image` | Read an image (png/jpeg/gif/webp/bmp, detected from the bytes) and return it as an MCP image block, preceded by a metadata block (path, mimeType, bytes), so you can look at a screenshot or chart instead of guessing. Capped at 8 MiB. |
@@ -311,6 +314,33 @@ refused *and* hidden from `dsh_tool_list`. The omissions that matter:
 An operator can widen this deliberately with the `agentTools.allow` setting, or subtract from
 the default with `agentTools.deny`.
 
+### Session orchestration
+
+Some work is not a single prompt. Compacting a long session, exporting its log, entering plan mode or
+setting a goal are user-plane actions a human performs by typing a slash command into the DSH
+composer; a durable goal also turns a one-turn request into an objective the harness's round driver
+keeps advancing across turns. Neither path costs a model turn of its own. The intended flow:
+
+```
+session_command_list { sessionId }                                    # what this agent accepts; permitted marks the admitted set
+  -> session_command { sessionId, command: "/compact" }               # run one; no model turn
+  -> session_goal { sessionId, action: "create", objective: "Finish the migration", maxGoalRounds: 20 }
+  -> session_goal { sessionId, action: "get" }                        # poll phase/revision...
+     or subscribe to dsh://session/<id>/projections                   # ...or be told when the goal changes
+  -> session_goal { sessionId, action: "pause", expectedRevision: 3 } # then resume / complete / clear
+```
+
+`session_command_list` reports each entry's `permitted` flag instead of hiding the refused commands, so
+a caller can see that `/permission` and `/feedback` exist on the profile and that this endpoint
+deliberately will not run them: `/permission` would change the session's permission preset and
+`/feedback` would write the user's own review records, and neither reaches a handler or writes anything
+to the session log. `session_status` reports the session's turn and log state, not the goal itself; the
+goal's phase and revision come from `session_goal { action: "get" }`, and the
+`dsh://session/<id>/projections` feed (which includes `goal`) publishes when it changes, so following a
+goal is a poll or a subscription rather than a prompt per turn. A mutation without `expectedRevision`
+acts on the goal that exists at that moment; pass the revision a read returned when two supervisors
+could race.
+
 ## Worktrees
 
 A session can work in its own Git checkout of the same repository. The operation is the one the
@@ -361,7 +391,7 @@ An MCP server cannot call a client on its own, so every "something changed" trav
 resource notification. This endpoint publishes one change-feed surface over both standard push
 channels, and each notification is **payload-less**: it names a synthetic resource, and the
 client reads that resource for the JSON. No tools were added for this — the surface is still the
-35 in the table above — and push has no configuration key: it is always on and costs nothing
+38 in the table above — and push has no configuration key: it is always on and costs nothing
 while nobody subscribes.
 
 | Client era | Handshake | Server→client channel | How push is requested |
@@ -1007,6 +1037,7 @@ but a deployment can switch the capability off.
 | `worktree_create` / `worktree_restore` / `session_create { worktree }` | `worktrees` **and** `sessionController.resolveAgent` | the forge bundle in DSH Desktop/Web provides the service (`@deepseek-ai/dsh-experimental-forge-bundle`); a bare profile has none, `dsh_info.toolAvailability` reports the tools unavailable, and `session_create { worktree }` is refused before the session exists. Git and Node must exist in the session's execution world |
 | `session_status.workingDirectory` / `session_status.worktree` / `session_list { includeWorktree }` | readable session projections (`sessionController.projections` or `sessionQuery.observeSession`) | optional: without them both replies omit those two fields and the rest is unchanged |
 | `session_archive` / `session_unarchive` / `session_pin` / `session_unpin` | `workspaceRegistry.archiveSession` / `pinSession` | the same registry sets the DSH sidebar's actions write; if the methods are missing the tools are reported unavailable |
+| `session_command_list` / `session_command` / `session_goal` | `sessionController.resolveAgent` **and** `commands` / `goals` | both services are agent-scoped, so the session's live agent is the bridge; a profile without them reports the three tools unavailable in `dsh_info.toolAvailability`, and each call names the missing service and the bundle that provides it |
 | `workspace_*` | `workspaceRegistry` | provided by the base bundle in normal profiles |
 | `file_*` | `fs` | the deployment's sandbox policy still applies; `file_read_image` additionally needs a supported image format |
 | `shell_*` | `shell` | `shell_run` uses `run()` when present and `execute()` otherwise; background jobs need `start()` or `execute()` |
@@ -1180,14 +1211,14 @@ build:
 
 | Tool groups enabled | Tools advertised | Last result |
 | --- | --- | --- |
-| all six | 35 | live-checks 195/195 with `--with-model --with-subagent` and acceptance 166/166 — one boot, search index open |
-| `session`, `usage` only | 20 | live-checks 95/95 with `--with-model` (file/shell/workspace sections skip) |
-| `workspace`, `session`, `agentTools`, `usage` | 25 | live-checks 64/64 (a disabled group's reason names its `tools.<group>` switch) |
+| all six | 38 | live-checks 195/195 with `--with-model --with-subagent` and acceptance 166/166 — one boot, search index open |
+| `session`, `usage` only | 23 | live-checks 95/95 with `--with-model` (file/shell/workspace sections skip) |
+| `workspace`, `session`, `agentTools`, `usage` | 28 | live-checks 64/64 (a disabled group's reason names its `tools.<group>` switch) |
 | `files`, `shell` only | 11 | live-checks 68/68 (session/usage/queue/search sections skip) |
 
-The advertised counts are the current surface (0.53.0: 18 session-group tools and 35 overall); the
-last-result column records runs made against 0.52.86, before the six new tools, and has not been
-re-measured for this release.
+The advertised counts are the current surface (0.55.0: 21 session-group tools and 38 overall); the
+last-result column records runs made against 0.52.86, before the 0.53.0 additions, and has not been
+re-measured since.
 
 A fifth shape, `mountonly`, boots with `http.enabled: false` and `mountOnWebServer: true` and
 checks the endpoint over DSH's own web server: 109/109, all cheap, including the assertions that

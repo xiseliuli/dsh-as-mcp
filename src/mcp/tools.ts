@@ -73,6 +73,10 @@ export type McpDriver = Pick<
   | 'unarchiveSession'
   | 'pinSession'
   | 'unpinSession'
+  | 'listSessionCommands'
+  | 'runSessionCommand'
+  | 'sessionGoal'
+  | 'mutateSessionGoal'
   | 'updateQueue'
   | 'readQueue'
   | 'probeSessionSearch'
@@ -400,6 +404,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'workspace_* and session_* drive this DSH instance directly; work appears live in the DSH UI.',
           'session_create { worktree } and worktree_create/worktree_restore need a worktrees service (the forge bundle in DSH Desktop/Web); harnessServices.worktrees reports it. A workspaceId-created session that enters a worktree keeps its workspace group and works in the new checkout (a cwd-only session stays ungrouped); session_status.workingDirectory and session_list { includeWorktree } show where each session is working.',
           'session_archive/unarchive and session_pin/unpin write the same registry sets the DSH sidebar uses; session_list reports each row\'s archived and pinned flags. The harness has no session delete, and these tools do not add one.',
+          'Slash commands execute without a model turn: session_command_list names what this session accepts and session_command runs one. Only the user-plane commands are admitted (/compact, /plan, /goal, /export); /permission and /feedback are refused before any handler runs, and a refused call writes nothing to the session log.',
+          'session_goal reads and mutates the session\'s durable goal (the round driver advances it across turns). Mutations carry the harness\'s own goal revision, so pass expectedRevision from a read to refuse a goal that changed underneath you.',
           ...(feeds === undefined ? [] : ['Push feeds: modern clients open one subscriptions/listen stream and name resources — dsh://sessions, dsh://session/<id>/turn|events|assistant|status|projections, dsh://jobs, dsh://jobs/<id>. 2025-era clients get the same notifications on a stateful session\'s GET SSE stream after resources/subscribe. Reads return JSON; event and assistant feeds carry a monotonic seq so a client can drop repeats.']),
           'session_prompt waits for the turn to settle by default and returns the agent reply plus its tool calls.',
           'DSH has no "session ended" event; call session_usage after your last prompt to collect the final tally.',
@@ -1343,6 +1349,108 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         annotations: { openWorldHint: false },
       },
       guard('session_unpin', log, async (args) => ok(await driver.unpinSession({ sessionId: args.sessionId }))),
+    )
+
+    server.registerTool(
+      'session_command_list',
+      {
+        title: 'List a DSH session\'s slash commands',
+        description:
+          'The slash commands this session\'s agent can run, with a one-line description and an input hint. '
+          + 'A command executes without a model turn — the handler runs directly — so this is the cheap way to '
+          + 'compact a long session, export its log, enter plan mode or set a goal, exactly as a human typing '
+          + 'into the DSH composer would. Each entry carries `permitted`: the endpoint only executes the '
+          + 'user-plane commands (`/compact`, `/plan`, `/goal`, `/export`) and refuses `/permission` and '
+          + '/feedback on purpose. Run one with session_command.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id from session_create or session_list.'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('session_command_list', log, async (args) => ok(await driver.listSessionCommands({
+        sessionId: args.sessionId,
+      }))),
+    )
+
+    server.registerTool(
+      'session_command',
+      {
+        title: 'Run a DSH slash command on a session',
+        description:
+          'Execute one slash command against a session\'s agent without spending a model turn. Give the '
+          + 'command with or without its leading slash, plus any arguments in the same string: "compact", '
+          + '"/export", "/goal finish the migration", "/plan off". The harness appends a command/run and '
+          + 'command/done event to the session log, so the human sees what was run. Only the user-plane '
+          + 'commands are permitted — `/permission` (would change the session permission preset) and '
+          + '/feedback (would write the user\'s own review records) are refused before any handler runs, and '
+          + 'a name that is not registered on this profile is refused with the admitted set. Call '
+          + 'session_command_list first to see the exact names and the input hint this agent accepts.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id from session_create or session_list.'),
+          command: z
+            .string()
+            .min(1)
+            .describe('Command line, e.g. "compact", "/export", "/goal <objective>", "/plan off".'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_command', log, async (args, ctx) => {
+        const signal = requestSignal(ctx)
+        return ok(await driver.runSessionCommand({
+          sessionId: args.sessionId,
+          command: args.command,
+          ...(signal === undefined ? {} : { signal }),
+        }))
+      }),
+    )
+
+    server.registerTool(
+      'session_goal',
+      {
+        title: 'Read or change a DSH session\'s durable goal',
+        description:
+          'A goal is the session\'s long-running objective: the harness\'s round driver keeps advancing it '
+          + 'across turns, which is how a caller delegates multi-hour work instead of holding one turn open. '
+          + 'With action "get" this returns the current goal (or null); "create" needs `objective`; "edit" '
+          + 'needs `objective` and/or `maxGoalRounds`; "pause", "resume", "complete" and "clear" act on the '
+          + 'goal that exists now. Pass `expectedRevision` (from a previous read) to refuse a mutation whose '
+          + 'goal changed underneath you — the equivalent of the UI\'s conflict handling. "complete" marks the '
+          + 'goal complete and reports it back with `phase: \"complete\"`; only "clear" removes it, and that '
+          + 'reply carries `goal: null` plus `cleared: true`. The objective text is what the DSH goal strip '
+          + 'shows.',
+        inputSchema: z.object({
+          sessionId: z.string().describe('Session id from session_create or session_list.'),
+          action: z
+            .enum(['get', 'create', 'edit', 'pause', 'resume', 'complete', 'clear'])
+            .describe('get reads; the rest mutate.'),
+          objective: z.string().optional().describe('New objective text (create, edit).'),
+          maxGoalRounds: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('Automatic continuation round cap (create, edit).'),
+          expectedRevision: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .describe('Refuse the mutation unless the goal is still at this revision.'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('session_goal', log, async (args) => {
+        if (args.action === 'get') {
+          return ok(await driver.sessionGoal({ sessionId: args.sessionId }))
+        }
+        return ok(await driver.mutateSessionGoal({
+          sessionId: args.sessionId,
+          action: args.action,
+          ...(args.objective === undefined ? {} : { objective: args.objective }),
+          ...(args.maxGoalRounds === undefined ? {} : { maxGoalRounds: args.maxGoalRounds }),
+          ...(args.expectedRevision === undefined ? {} : { expectedRevision: args.expectedRevision }),
+        }))
+      }),
     )
   }
 

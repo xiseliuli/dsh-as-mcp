@@ -50,6 +50,12 @@ import {
   type DshToolBatchInput,
   type DshToolExecutionInput,
   type DshToolExecutionResult,
+  DshCommandDescriptor,
+  DshCommandService,
+  DshGoalActivation,
+  DshGoalPhase,
+  DshGoalService,
+  DshGoalView,
 } from './types.js'
 
 /**
@@ -178,6 +184,19 @@ const MAX_SHELL_JOBS = 16
 
 /** Bytes of the most recent output retained for non-consuming peek/feed reads. */
 const MAX_SHELL_TAIL_BYTES = 16 * 1024
+
+/**
+ * Slash commands this endpoint will execute on a session's behalf.
+ *
+ * An allow-list, not a deny-list, for the same reason the agent-tool list is one:
+ * the command set belongs to the profile (plugins register commands), so a
+ * deny-list written today would miss a command a future bundle adds. Two shipped
+ * commands are deliberately absent — `/permission`, which changes the session's
+ * permission preset (a remote caller must not escalate itself), and `/feedback`,
+ * which writes the user's own review records. `/compact`, `/plan`, `/goal` and
+ * `/export` are user-plane actions on a session the caller can already prompt.
+ */
+const PERMITTED_COMMANDS: ReadonlySet<string> = new Set(['compact', 'plan', 'goal', 'export'])
 
 /** Bytes retained per background job for output the caller has not read yet. */
 const MAX_SHELL_BUFFER_BYTES = 128 * 1024
@@ -624,6 +643,34 @@ export interface SessionEventFeed {
   /** Newest event sequence included; a client tracks it to tell a fresh read from a repeat. */
   readonly asOfSeq: number
   readonly events: readonly SessionEventFeedEvent[]
+}
+
+/** The reply of one slash-command execution. */
+export interface SessionCommandResult {
+  readonly sessionId: string
+  /** The harness's own command id for this execution; usable in the log/transcript. */
+  readonly commandId: string
+  /** False when the handler itself reported an error result (`result.kind: 'error'`). */
+  readonly ok: boolean
+  /** Text the handler returned, when it returned any. */
+  readonly text?: string
+  /** The durable event the handler wrote, when it reported one. */
+  readonly sourceEventSeq?: number
+}
+
+/** One durable goal, as this endpoint projects it from the harness's `GoalView`. */
+export interface SessionGoalView {
+  readonly id: string
+  readonly revision: number
+  readonly objective: string
+  readonly phase: DshGoalPhase
+  /** Whether the round driver is currently advancing it. */
+  readonly activation: DshGoalActivation
+  readonly maxGoalRounds: number
+  readonly roundsStarted: number
+  readonly blockedReason?: { readonly code: string; readonly message: string }
+  readonly createdAt: number
+  readonly updatedAt: number
 }
 
 /**
@@ -1228,6 +1275,10 @@ export class DshDriver {
       // the forge bundle composes into Desktop/Web. A profile without it still
       // creates sessions; it just cannot isolate one in a checkout.
       worktrees: this.worktreeService() !== undefined,
+      // Slash commands and durable goals: both are agent-scoped services, the same
+      // bridge worktree creation and dsh_tool_call need.
+      commands: typeof this.commandService()?.execute === 'function',
+      goals: typeof this.goalService()?.create === 'function',
       // Creating or restoring a worktree needs the session's live agent as its
       // scope, the same bridge `dsh_tool_call` uses.
       agentResolve: typeof (this.sessionController() as { resolveAgent?: unknown } | undefined)?.resolveAgent
@@ -1434,6 +1485,52 @@ export class DshDriver {
 
   private sessionQuery(): DshSessionQuery | undefined {
     return serviceOf<DshSessionQuery>(this.ctx, 'sessionQuery')
+  }
+
+  /**
+   * `ctx.commands`, when the profile mounts the command registry.
+   *
+   * Every shipped DSH composition does (`dsh-base` mounts `@deepseek-ai/dsh-commands`
+   * together with the built-in command packages), so a missing service means a
+   * stripped-down profile rather than a version difference.
+   */
+  private commandService(): DshCommandService | undefined {
+    return serviceOf<DshCommandService>(this.ctx, 'commands')
+  }
+
+  /**
+   * `ctx.goals`, when the profile mounts the goal store.
+   *
+   * Shipped compositions mount it with `@deepseek-ai/dsh-tool-goal`; a profile that
+   * drops the goal bundle has no goal surface at all, which is why the probe is
+   * separate from `commands`.
+   */
+  private goalService(): DshGoalService | undefined {
+    return serviceOf<DshGoalService>(this.ctx, 'goals')
+  }
+
+  private requireCommandService(): DshCommandService {
+    const service = this.commandService()
+    if (service === undefined) {
+      throw new DshCapabilityError(
+        'commands',
+        'this DSH profile provides no commands service, so slash commands cannot be listed or run. '
+          + 'The @deepseek-ai/dsh-base bundle provides it together with the built-in commands.',
+      )
+    }
+    return service
+  }
+
+  private requireGoalService(): DshGoalService {
+    const service = this.goalService()
+    if (service === undefined) {
+      throw new DshCapabilityError(
+        'goals',
+        'this DSH profile provides no goals service, so this session cannot carry a durable goal. '
+          + 'The @deepseek-ai/dsh-base bundle provides it through the goal package.',
+      )
+    }
+    return service
   }
 
   /**
@@ -1822,6 +1919,195 @@ export class DshDriver {
       )
     }
     return { sessionId: request.sessionId, pinned: false }
+  }
+
+  // -------------------------------------------------------------------------
+  // Slash commands and durable goals
+  // -------------------------------------------------------------------------
+
+  /**
+   * The slash commands this session's agent can run, with the ones this endpoint
+   * will actually execute marked.
+   *
+   * A command runs **without a model turn** (the handler is invoked directly), so
+   * this is the cheap half of "do the thing a human would type into the composer".
+   * `permitted` is reported rather than filtered out: a caller should be able to
+   * see that `/permission` exists and that this endpoint deliberately will not run
+   * it, instead of guessing why a name is missing.
+   */
+  async listSessionCommands(request: { sessionId: string }): Promise<{
+    sessionId: string
+    commands: readonly (DshCommandDescriptor & { readonly permitted: boolean })[]
+  }> {
+    await this.assertSessionVisible(request.sessionId, 'session_command_list')
+    const service = this.requireCommandService()
+    const agent = await this.agentForSession(request.sessionId)
+    const commands = service.list(agent) ?? []
+    return {
+      sessionId: request.sessionId,
+      commands: commands.map((command) => ({
+        name: command.name,
+        description: command.description,
+        ...(command.input === undefined ? {} : { input: command.input }),
+        permitted: PERMITTED_COMMANDS.has(command.name),
+      })),
+    }
+  }
+
+  /**
+   * Run one slash command against a session's agent.
+   *
+   * The allow-list is explicit and lives in {@link PERMITTED_COMMANDS}: the set of
+   * commands a profile registers is not this endpoint's decision, and two of the
+   * shipped ones are deliberately excluded (`/permission` escalates the session's
+   * permission preset; `/feedback` writes the user's own review records). A
+   * command not on the list is refused **before** the handler runs, so nothing is
+   * logged into the session’s history for a refused call.
+   */
+  async runSessionCommand(request: {
+    sessionId: string
+    command: string
+    signal?: AbortSignal
+  }): Promise<SessionCommandResult> {
+    await this.assertSessionVisible(request.sessionId, 'session_command')
+    const service = this.requireCommandService()
+    const line = normalizeCommandLine(request.command)
+    const name = line.slice(1).split(/\s+/)[0] ?? ''
+    if (!PERMITTED_COMMANDS.has(name)) {
+      throw new Error(
+        `"${name === '' ? line : `/${name}`}" is not a command this endpoint runs. Permitted: `
+          + `${[...PERMITTED_COMMANDS].map((entry) => `/${entry}`).join(', ')}. `
+          + 'Refused on purpose: /permission (it changes the session permission preset) and '
+          + '/feedback (it writes your own review records). Use session_set_model or the DSH UI for '
+          + 'those, or dsh_tool_call for the underlying harness tool.',
+      )
+    }
+    const agent = await this.agentForSession(request.sessionId)
+    const execution = await service.execute(
+      agent,
+      line,
+      [],
+      request.signal ?? new AbortController().signal,
+    )
+    if (execution === undefined) {
+      throw new Error(
+        `"${line}" was not admitted by this session: the command name is unknown here, or its arguments `
+          + 'were rejected before a handler ran (nothing was logged). Call session_command_list to see '
+          + 'the names and the input hint this agent accepts.',
+      )
+    }
+    const result = execution.result
+    return {
+      sessionId: request.sessionId,
+      commandId: execution.commandId,
+      ok: result.kind === 'success',
+      ...(result.text === undefined ? {} : { text: result.text }),
+      ...(result.kind === 'success' && result.sourceEventSeq !== undefined
+        ? { sourceEventSeq: result.sourceEventSeq }
+        : {}),
+    }
+  }
+
+  /**
+   * The durable goal this session carries, if any.
+   *
+   * Goal state lives in the harness's own store and the round driver advances it
+   * across turns, so reading it is how a supervising caller answers "what is this
+   * session supposed to be doing, and is it paused".
+   */
+  async sessionGoal(request: { sessionId: string }): Promise<{
+    sessionId: string
+    goal: SessionGoalView | null
+  }> {
+    await this.assertSessionVisible(request.sessionId, 'session_goal')
+    const service = this.requireGoalService()
+    const agent = await this.agentForSession(request.sessionId)
+    const goal = service.get(agent)
+    return { sessionId: request.sessionId, goal: goal === undefined ? null : projectGoal(goal) }
+  }
+
+  /**
+   * Create, edit, pause, resume, complete or clear a session's durable goal.
+   *
+   * `expectedRevision` is the lost-update guard: the harness's own `GoalRef`
+   * carries a revision, and a mutation whose revision no longer matches is refused
+   * rather than silently rewriting a goal the user edited in the UI a moment ago.
+   */
+  async mutateSessionGoal(request: {
+    sessionId: string
+    action: 'create' | 'edit' | 'pause' | 'resume' | 'complete' | 'clear'
+    objective?: string
+    maxGoalRounds?: number
+    expectedRevision?: number
+  }): Promise<{
+    sessionId: string
+    action: string
+    goal: SessionGoalView | null
+    cleared?: true
+  }> {
+    await this.assertSessionVisible(request.sessionId, 'session_goal')
+    const service = this.requireGoalService()
+    const agent = await this.agentForSession(request.sessionId)
+
+    if (request.action === 'create') {
+      const objective = request.objective?.trim() ?? ''
+      if (objective === '') throw new Error('session_goal action "create" needs a non-empty objective')
+      const created = service.create(agent, {
+        objective,
+        ...(request.maxGoalRounds === undefined ? {} : { maxGoalRounds: request.maxGoalRounds }),
+      })
+      return {
+        sessionId: request.sessionId,
+        action: request.action,
+        goal: projectGoal(created),
+      }
+    }
+
+    // Every other action mutates the goal that exists right now, so its ref (id +
+    // revision) comes from a read rather than from the caller: a caller that has
+    // not read the goal first cannot address a stale one by accident.
+    const current = service.get(agent)
+    if (current === undefined) {
+      throw new Error(
+        `session ${request.sessionId} has no goal, so "${request.action}" has nothing to act on. `
+          + 'Create one with session_goal { action: "create", objective }.',
+      )
+    }
+    const ref = { id: current.id, revision: current.revision }
+    if (request.expectedRevision !== undefined && request.expectedRevision !== current.revision) {
+      throw new Error(
+        `session ${request.sessionId}'s goal changed since it was read: expected revision `
+          + `${request.expectedRevision}, the goal is at revision ${current.revision}. Re-read it with `
+          + 'session_goal { action: "get" } before mutating.',
+      )
+    }
+    switch (request.action) {
+      case 'edit': {
+        const objective = request.objective?.trim()
+        if (objective === undefined || objective === '') {
+          if (request.maxGoalRounds === undefined) {
+            throw new Error('session_goal action "edit" needs objective and/or maxGoalRounds')
+          }
+        }
+        const edited = service.edit(agent, ref, {
+          ...(objective === undefined || objective === '' ? {} : { objective }),
+          ...(request.maxGoalRounds === undefined ? {} : { maxGoalRounds: request.maxGoalRounds }),
+        })
+        return { sessionId: request.sessionId, action: request.action, goal: projectGoal(edited) }
+      }
+      case 'pause':
+        return { sessionId: request.sessionId, action: request.action, goal: projectGoal(service.pause(agent, ref)) }
+      case 'resume':
+        return { sessionId: request.sessionId, action: request.action, goal: projectGoal(service.resume(agent, ref)) }
+      case 'complete':
+        return { sessionId: request.sessionId, action: request.action, goal: projectGoal(service.complete(agent, ref)) }
+      case 'clear': {
+        service.clear(agent, ref)
+        return { sessionId: request.sessionId, action: request.action, goal: null, cleared: true }
+      }
+      default:
+        throw new Error(`unsupported goal action: ${String(request.action)}`)
+    }
   }
 
   private async toWorkspaceInfo(
@@ -5788,6 +6074,33 @@ function tailText(text: string, limit: number): string {
   const code = text.charCodeAt(start)
   if (code >= 0xdc00 && code <= 0xdfff) start += 1
   return text.slice(start)
+}
+
+/**
+ * Normalise a caller's command line to the `/name args` form the registry parses.
+ *
+ * Callers write both `"compact"` and `"/compact"`; the registry only accepts the
+ * slash form, and a leading slash the caller already typed must not be doubled.
+ */
+function normalizeCommandLine(input: string): string {
+  const trimmed = input.trim()
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+}
+
+/** Project the harness's `GoalView` onto the fields this endpoint reports. */
+function projectGoal(goal: DshGoalView): SessionGoalView {
+  return {
+    id: goal.id,
+    revision: goal.revision,
+    objective: goal.objective,
+    phase: goal.phase,
+    activation: goal.activation,
+    maxGoalRounds: goal.maxGoalRounds,
+    roundsStarted: goal.roundsStarted,
+    ...(goal.blockedReason === undefined ? {} : { blockedReason: goal.blockedReason }),
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+  }
 }
 
 function truncateText(text: string, limit: number): string {

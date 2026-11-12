@@ -658,6 +658,83 @@ export interface DshAgentHandle {
 }
 declare const brand: unique symbol
 
+/** One slash command a session's agent can run — `CommandDescriptor` in the 0.2.2 catalog. */
+export interface DshCommandDescriptor {
+  readonly name: string
+  readonly description: string
+  readonly input?: { readonly hint: string; readonly acceptsAttachments?: boolean }
+}
+
+/** The outcome of one command execution — `CommandResult` in the 0.2.2 catalog. */
+export type DshCommandResult =
+  | { readonly kind: 'success'; readonly text?: string; readonly sourceEventSeq?: number }
+  | { readonly kind: 'error'; readonly text: string }
+
+/**
+ * `ctx.commands` — the slash-command registry.
+ *
+ * Commands run without a model turn: they parse a line like `/compact` and invoke
+ * the registered handler directly. Both entry points are agent-scoped, which is
+ * what makes them reachable for a session this endpoint owns.
+ */
+export interface DshCommandService {
+  list(agent: DshAgentHandle): readonly DshCommandDescriptor[]
+  execute(
+    agent: DshAgentHandle,
+    line: string,
+    submittedAttachments: readonly unknown[],
+    signal: AbortSignal,
+  ): Promise<{ readonly commandId: string; readonly result: DshCommandResult } | undefined>
+}
+
+/** Durable goal phase — `GoalPhase` in the 0.2.2 catalog. */
+export type DshGoalPhase = 'active' | 'paused' | 'blocked' | 'complete'
+
+/** Whether the round driver is currently advancing the goal (`GoalActivation`). */
+export type DshGoalActivation = 'armed' | 'disarmed'
+
+/** A goal's identity plus its optimistic-concurrency revision — `GoalRef`. */
+export interface DshGoalRef {
+  readonly id: string
+  readonly revision: number
+}
+
+/** One durable goal — `GoalView` in the 0.2.2 catalog. */
+export interface DshGoalView extends DshGoalRef {
+  readonly objective: string
+  readonly phase: DshGoalPhase
+  readonly activation: DshGoalActivation
+  readonly maxGoalRounds: number
+  readonly roundsStarted: number
+  readonly blockedReason?: { readonly code: string; readonly message: string }
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+/**
+ * `ctx.goals` — the durable objective store the round driver advances.
+ *
+ * Every method takes the owning agent, so a goal belongs to one session and the
+ * harness refuses a mutation whose `GoalRef.revision` is stale.
+ */
+export interface DshGoalService {
+  get(agent: DshAgentHandle): DshGoalView | undefined
+  create(
+    agent: DshAgentHandle,
+    request: { readonly objective: string; readonly maxGoalRounds?: number },
+  ): DshGoalView
+  edit(
+    agent: DshAgentHandle,
+    ref: DshGoalRef,
+    request: { readonly objective?: string; readonly maxGoalRounds?: number },
+  ): DshGoalView
+  pause(agent: DshAgentHandle, ref: DshGoalRef): DshGoalView
+  resume(agent: DshAgentHandle, ref: DshGoalRef): DshGoalView
+  complete(agent: DshAgentHandle, ref: DshGoalRef): DshGoalView
+  clear(agent: DshAgentHandle, ref: DshGoalRef): DshGoalRef
+  disarm?(agent: DshAgentHandle): DshGoalView | undefined
+}
+
 /**
  * One created worktree — `CreatedWorktree` in
  * `packages/tool/worktree/src/index.ts` (harness 0.2.2-rc.1).

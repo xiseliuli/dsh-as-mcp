@@ -48,6 +48,38 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
     restoreWorktree: async ({ sessionId, path }) => ({ sessionId, path, branchRecreated: false }),
     listSessions: async () => ({ sessions: [], total: 0 }),
     searchSessions: async () => ({ items: [], hasMore: false }),
+    listSessionCommands: async ({ sessionId }) => ({
+      sessionId,
+      commands: [
+        { name: 'compact', description: 'Shrink the conversation', permitted: true },
+        { name: 'permission', description: 'Change the permission preset', permitted: false },
+      ],
+    }),
+    runSessionCommand: async ({ sessionId, command }) => ({
+      sessionId,
+      commandId: 'command-1',
+      ok: true,
+      text: `ran ${command}`,
+    }),
+    sessionGoal: async ({ sessionId }) => ({ sessionId, goal: null }),
+    mutateSessionGoal: async ({ sessionId, action }) => ({
+      sessionId,
+      action,
+      goal: action === 'clear'
+        ? null
+        : {
+          id: 'goal-1',
+          revision: 1,
+          objective: 'stub objective',
+          phase: 'active',
+          activation: 'armed',
+          maxGoalRounds: 8,
+          roundsStarted: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ...(action === 'clear' ? { cleared: true } : {}),
+    }),
     // A do-nothing status stub: the session is a cold, quiet log with no ending.
     sessionStatus: async ({ sessionId }) => ({
       sessionId,

@@ -158,7 +158,7 @@ async function main() {
     const listed = await rpc('tools/list', {})
     const names = new Set((listed.tools ?? []).map((entry) => entry.name))
     for (const name of NEW_TOOLS) check(`tools/list advertises ${name}`, names.has(name))
-    check('tools/list count matches the released surface', names.size >= 35, `${names.size} tools`)
+    check('tools/list count matches the released surface', names.size >= 38, `${names.size} tools`)
 
     const info = await tool('dsh_info', {})
     check('worktrees service is mounted', info.json.harnessServices?.worktrees === true)

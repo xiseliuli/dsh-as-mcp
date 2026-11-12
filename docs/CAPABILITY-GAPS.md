@@ -1,6 +1,6 @@
 # Capability gaps: what DSH can do that `dsh-as-mcp` cannot reach
 
-**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **35 tools** today.
+**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **38 tools** today.
 The author wants to know exactly what is missing, what is worth adding, and what should never be added.
 
 **Artifacts**
@@ -16,9 +16,10 @@ The author wants to know exactly what is missing, what is worth adding, and what
 > **Later work (plugin 0.2.x, harness 0.2.1-rc.5).** The audit below was written against 0.1.5-rc.1
 > and 0.1.7-rc.2. Since then the plugin shipped the items this page recommended as "what I would build
 > next": `dsh_tool_list`/`dsh_tool_call` (§2.1 G1), usage accounting (`session_usage` plus per-turn and
-> cumulative usage in every `session_prompt` reply), and the `dsh_info` catalog block (providers, agent
-> presets, sandbox mode, permission presets, session count). All of it works on 0.2.1-rc.5 as well; the
-> version-sensitive claims below were re-checked when those features landed.
+> cumulative usage in every `session_prompt` reply), the `dsh_info` catalog block (providers, agent
+> presets, sandbox mode, permission presets, session count), and — as of 0.55.0 — slash commands
+> (gap #2) and durable goals (gap #10) on top of the same `resolveAgent` bridge. All of it works on
+> 0.2.1-rc.5 as well; the version-sensitive claims below were re-checked when those features landed.
 
 **Evidence standard.** Anything marked **verified** was read first-hand in the source named. Citations of
 the form `api-catalog.ts:NNNN` without a second path refer to
@@ -57,7 +58,7 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 
 ### 1.2 Services probed vs. services used
 
-`describeCapabilities()` reports twenty probes, each answering "can this profile do it" rather than
+`describeCapabilities()` reports 29 probes, each answering "can this profile do it" rather than
 "which version is this" — the bridge is version-tolerant, so a missing service degrades one tool and
 `dsh_info.harnessServices` says which:
 
@@ -83,6 +84,12 @@ Registration: `src/mcp/tools.ts:98-372`. The `McpDriver` surface is a `Pick` of 
 | `sessionSearch` | `sessionController.search` | content search over sessions (`session_search`) |
 | `sessionRename` / `sessionModel` / `sessionFork` | `sessionController` members | controller features whose presence is version-dependent |
 | `shellBackground` | `shell` members | `start`/`execute` shape needed by background jobs |
+| `worktrees` | `worktrees` | `worktree_create` / `worktree_restore`; `session_create { worktree }` |
+| `commands` | `commands` | slash commands without a model turn (`session_command_list`, `session_command`) |
+| `goals` | `goals` | the session's durable goal (`session_goal`) |
+| `agentResolve` | `sessionController.resolveAgent` | agent scoping for `dsh_tool_*`, the worktree tools and the command/goal tools |
+| `sessionArchive` / `sessionPin` | `workspaceRegistry` members | `session_archive`/`unarchive` and `session_pin`/`unpin` |
+| `sessionViews` | `sessionController.projections` or `sessionQuery.observeSession` | `session_status.workingDirectory`/`worktree`, `session_list { includeWorktree }` |
 
 `connection` is not a capability probe: the status route is registered through `ctx.inject(['connection'], …)`,
 so it exists exactly as long as that service does.
@@ -168,7 +175,9 @@ session at `:186-215`. `ctx.agents.get(id)` (`api-catalog.ts:322`) is the non-re
 `agent` is not an object with methods — it is `{ id: SessionId }` (`packages/core/agent/src/types.ts:13-16`).
 Its value is *scoping*: `ctx.tools`, `ctx.commands`, `ctx.skills`, `ctx.jobs` and `ctx.goals` all key
 per-agent layers on it. Resolving it is what turns "a session I can prompt" into "a session whose agent I
-can address".
+can address". Since plugin 0.55.0 the same bridge also backs slash commands (gap #2) and durable goals
+(gap #10): `session_command_list`/`session_command` and `session_goal` take a `sessionId` and reach
+`ctx.commands`/`ctx.goals` through that session's live agent rather than around the harness.
 
 *Security:* none new. It is the identity the session already runs as, and every downstream call still
 passes through the same permission preset, sandbox and approval policy. It does not widen authority.
@@ -182,6 +191,7 @@ passes through the same permission preset, sandbox and approval policy. It does 
 | **1** | **Deterministic tool invocation** | `ctx.tools.schemas(scope)` `:2644`, `ctx.tools.execute(exec)` `:2656`; input `ToolExecutionInput` `:6054-6056` (`{callId, name, arguments, agent?, signal}`); success `ToolExecutionSuccess` `:6066` | Runs `read`/`write`/`edit`/`glob`/`grep`/`bash`/`web_search` **through DSH's own tool pipeline** — pre-policy, guards, sandbox, approval, spill, presentation — without paying a model turn to decide to call the tool. This is the difference between "chat with an agent" and "operate the agent's toolbox". | **No widening**: the pipeline *is* the permission model, and guards still deny. But it removes the model as a filter over tool *selection*; under `danger-full-access` it is no wider than `shell_run` already is, under `workspace-write` it is still fenced. | Low — the service is there; the work is an allow-list and a result projection. |
 | **Shipped.** `dsh_tool_list` and `dsh_tool_call` (group `tools.agentTools`, allow-list in `agentTools.allow`/`.deny`). The list is filtered on **both** sides: a name that is not permitted is absent from the listing *and* refused at execution, because `schemas()` still reports `run_code`, `cordis_*`, `workflow` … and a listing-only filter would be bypassable by guessing a name. A `sessionId` scopes the call to that session's live agent (`resolveAgent`), which is what makes the harness apply that session's policy and write the call into its transcript; omitting it resolves the deployment default, the same scope `file_*`/`shell_run` already use. |
 | **2** | **Slash commands** | `ctx.commands.list(agent)` `:686`, `ctx.commands.execute(agent, line, attachments, signal)` `:698`; registry `packages/interaction/commands/src/index.ts:280` | Executes a registered command **without a model turn and without tokens**. Concretely: `/compact` (`packages/compaction/command-compact/src/index.ts:101`), `/goal` (`packages/goal/command-goal/src/index.ts:191`), `/export` (`packages/session-query/session-log-export/src/index.ts:79`), `/plan` + `/exit-plan-mode` (`packages/plan/plan-mode/src/index.ts:226,272`), `/feedback` (`packages/feedback/command-feedback/src/index.ts:119`). | Mostly none — commands are user-plane actions on a session the caller can already prompt. **One exception: `/permission` (`packages/interaction/permission-presets/src/index.ts:257`) changes the session's permission preset and must be excluded.** So build an explicit allow-list, not "run anything in `commands.list()`". | Low, and it is the cheapest genuinely-new capability here. |
+| **Shipped.** `session_command_list` and `session_command` (group `tools.session`), built on the `resolveAgent` bridge. The allow-list is explicit (`PERMITTED_COMMANDS` in `driver.ts`): `/compact`, `/plan`, `/goal`, `/export` are admitted; `/permission` and `/feedback` are refused **before** any handler runs, so a refused call writes nothing to the session log, and a name that is not registered on the profile is refused with the admitted set listed. The line may be written with or without the leading slash and with arguments in the same string, and the reply separates "the command ran" (`ok`, `commandId`, `text`, `sourceEventSeq`) from "the registry did not admit it" (an error saying nothing was logged). |
 | **3** | **Surgical file edit** | `fs.editText(target, edit, expected?, signal?)` `:1036`; outcome `FsEditOutcome`; DSH's own tool is `edit` (`packages/fs/tool-fs/src/edit.ts:85`) and `str_replace_editor` (`packages/fs/tool-str-replace-editor/src/index.ts:429`) | Replace a span instead of the whole file. Today `file_write` re-sends the entire file and **re-reads it back** into the caller's context to know what it overwrote — quadratic in file size. `expected` also gives lost-update detection. | Same as `file_write`. No widening. | Low. **Be honest about the mechanism:** `sed -i` over `shell_run` reaches the same bytes, so what is *new* is atomicity, a version check, and the fs seam's observation policy — not reach. The economy is the argument, not novelty. |
 | **4** | **Background processes** | `shell.start(spec): ShellProcess` `:2135`; `ShellProcess` `:5586` (`readOutput()`, `kill()`, `exitCode`, `done`); one-shot is `shell.run` `:2129` | Dev servers, watchers, long builds: start without blocking, read **incremental** output (`readOutput` never repeats), kill explicitly. `shell_run` blocks to completion; `session_cancel` cancels a *turn*, not a process. | Same sandbox as `shell_run`. A live process outlives the call, so it needs a lifetime story. | Medium — a handle registry plus expiry. |
 | **5** | **Images as first-class MCP content** | `fs.readBytes(target, signal, maxBytes)` `:1012`; DSH's own `read_image` (`packages/fs/tool-fs/src/read-image.ts:210`); `attachments.readImage` `:512`, `readImageRequest` `:551` | The caller can *see* a screenshot, chart or diagram produced in the workspace. `file_read` decodes UTF-8 (`driver.ts:582`) and mangles binary into replacement characters, so today the bridge is blind to images. MCP carries `{type:'image', data, mimeType}` natively (`ImageContent`, SDK). | None new — reads files the `fs` seam already reads. Reuse DSH's own media-type and size gates. | Low. |
@@ -190,6 +200,7 @@ passes through the same permission preset, sandbox and approval policy. It does 
 | **8** | **Model and preset catalog** | `llm.listProviders()` `:1214`, `llm.listModels(provider)` `:1269`, `sessionController.modelCatalog()` `:1485`, `agentPresets.list()` `:139` / `resolve(id)` `:157` / `read(id)` `:184` | `session_create {provider, model, agentPreset}` are currently **blind string parameters** (`tools.ts:186-192` literally says "defaults to the harness default"). A caller that can enumerate them can actually choose. | Read-only. Discloses configured provider and preset ids — mild config disclosure, no keys. `agentPresets.read(id)` returns a profile document; keep it to `list`. | Trivial. |
 | **9** | **Session fork** | `sessionController.fork({sessionId, atSeq?})` `:1516`; `sessions.fork(source, boundary?, childSessionId?)` `:1919` | Branch a conversation from a point: "try this two ways from here". Not reproducible with `shell_run` — the session log format is owned by the persistence layer. | Creates a session under the same policy the caller can already create one under. None new. | Low. |
 | **10** | **Goals** | `ctx.goals.create/get/edit/pause/resume/complete/clear` `:1049-1098`; DSH's own `create_goal`/`get_goal`/`update_goal` (`packages/goal/tool-goal/src/index.ts:195,207,234`) | Sets a **long-running objective** on the DSH session that the harness's round driver keeps advancing across turns. That is an orchestration primitive, not a prompt: the caller can delegate a multi-hour objective and poll its phase, rather than holding one turn open. | No new *access* — it only makes DSH keep doing what the caller could already ask it to do. But it *sustains unattended execution*, so the blast radius is a long-running autonomous agent. Worth an explicit opt-in and a round cap. | Medium. |
+| **Shipped.** `session_goal` (group `tools.session`): `get`/`create`/`edit`/`pause`/`resume`/`complete`/`clear` over the session's durable goal, through `ctx.goals`. `create` needs `objective`; every other action acts on the goal that exists now, so its `GoalRef` comes from a read rather than from the caller. `expectedRevision` carries the harness's own lost-update guard, so a mutation into a goal that changed underneath (say the user edited it in the UI) is refused instead of overwriting it, and `maxGoalRounds` is the round cap this row asked for. |
 | **11** | **Plan mode as a caller-controlled gate** | `ctx.planMode.get(agent)` `:1388`, `set(agent, active)` `:1394` | "Plan first, then I approve execution" — the caller can hold a session in plan mode until it has read the plan. | **Reduces** risk; no widening. | Low. |
 | **12** | **Skill catalog** | `ctx.skills.list(options)` `:2185`, `snapshot(options)` `:2191`, `get(name, options)` `:2197` | The caller discovers the workspace and user skills and reads their bodies, so it can reuse instructions the user already wrote instead of inventing them. | Skill bodies are files the `fs` seam already reaches. None new. | Low. **Do this as tools, not as MCP prompts** — see §4.2. |
 | **13** | **Job observation** | `ctx.jobs.list(caller?)` `:1153`, `get` `:1160`, `read` `:1165`, `kill` `:1171`, `wait` `:1177`; DSH's own `job_list`/`job_output`/`job_kill` (`packages/jobs/tool-jobs/src/index.ts:302,342,362`) | Observe and stop the background work **the DSH agent started** — "is it still running", "what has it printed", "kill it". `session_messages` shows the tool call but not the live job. | Owner-fenced by session id (`:1153` "without exposing another session's labels"). None new. | Low. |
@@ -593,13 +604,13 @@ author chose specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 (35 as of plugin 0.53.0) |
+| MCP tools registered on 0.1.5-rc.1 | 12 (38 as of plugin 0.55.0) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |
-| Services the plugin probes (`dsh_info.harnessServices`) | 27 |
+| Services the plugin probes (`dsh_info.harnessServices`) | 29 |
 | Services the plugin meaningfully uses | 15 (+1 for plumbing: `webServer` for the mount) |
-| Driver methods exposed to tools | 39 |
+| Driver methods exposed to tools | 43 |
 | DSH built-in model-visible tools | 53 names / 55 registration sites |
 | Gaps classified "would add real capability" | 23 in the ranked table, plus the G1 bridge that enables several of them |
 | Gaps classified "should stay absent" | 13 surfaces |

@@ -40,7 +40,7 @@ const MODERN_VERSION = '2026-07-28'
 /** The newest 2025-era revision the stateful leg serves. */
 const LEGACY_VERSION = '2025-06-18'
 /** The endpoint's tool count; the push surface must not change it. */
-const TOOL_COUNT = 35
+const TOOL_COUNT = 38
 
 /** Parse `--flag value` arguments and reject unknown ones. */
 function parseArgs(argv) {
@@ -406,7 +406,7 @@ async function main() {
       return `supportedVersions=${JSON.stringify(versions)}`
     })
 
-    await runner.check('modern tools/list still reports the 35-tool surface', async () => {
+    await runner.check('modern tools/list still reports the released tool surface', async () => {
       const { body } = await client.modern('tools/list', {})
       if (body?.error !== undefined) throw new Error(JSON.stringify(body.error))
       const tools = body.result?.tools ?? []
