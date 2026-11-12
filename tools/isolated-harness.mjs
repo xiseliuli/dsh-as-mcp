@@ -28,7 +28,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { Socket, createServer } from 'node:net'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -204,13 +204,18 @@ async function start(options) {
 ${scopeLine}${approvalLines}`,
   )
 
-  const log = join(home, 'harness.log')
+  const log_file = join(home, 'harness.log')
+  const log = log_file
+  const out = openSync(log_file, 'a')
   const child = spawn(RUNTIME_CLI, ['--profile', PROFILE, '--no-open', '--port', String(webPort)], {
     env,
     cwd: home,
     detached: true,
-    stdio: ['ignore', 'ignore', 'ignore'],
+    // The plugin's own log lines are the only window into a headless boot, so the
+    // child's stderr is kept rather than discarded.
+    stdio: ['ignore', out, out],
   })
+  closeSync(out)
   child.unref()
   const startedAt = Date.now()
   let ready = false
