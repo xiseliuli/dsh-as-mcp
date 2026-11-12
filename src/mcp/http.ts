@@ -128,8 +128,28 @@ export interface RequestHandlerOptions {
 }
 
 /** The guarded Node request handler plus the handler's own teardown. */
+/**
+ * A human-in-the-loop channel: ask the most recently active stateful 2025-era client
+ * whether an approval request should be allowed.
+ *
+ * Resolves `undefined` when no client can be asked — no stateful session, no
+ * elicitation capability, or the request failed — so the caller falls back to the
+ * resource/tool path. `false` means the person said no.
+ */
+export type HumanApprovalElicitor = (input: {
+  message: string
+  timeoutMs: number
+}) => Promise<boolean | undefined>
+
 export interface RequestHandler {
   readonly handle: NodeMcpRequestHandler
+  /**
+   * Ask a 2025-era client for an approval decision, when one is connected.
+   *
+   * Absent when the handler was built without a 2025-era leg (a unit-test wiring),
+   * which is why callers treat it as optional.
+   */
+  readonly elicitApproval?: HumanApprovalElicitor
   close(): Promise<void>
 }
 
@@ -277,6 +297,20 @@ function queryToken(url: string | undefined): string | null {
   return new URLSearchParams(url.slice(queryAt + 1)).get('token')
 }
 
+/** Resolve `promise`, or reject after `ms`. */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), Math.max(1, ms))
+    if (typeof timer === 'object' && 'unref' in timer) timer.unref?.()
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 /** A human-readable message for an unknown thrown value. */
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -413,6 +447,52 @@ class LegacySessionManager {
         this.log.warn('[dsh-as-mcp] 2025-era push to session %s failed: %s', sessionId, errorText(error))
       }
     }
+  }
+
+  /**
+   * Ask the most recently active stateful session's client for a decision.
+   *
+   * Only one client is asked: prompting every connected client for the same approval
+   * would let two different people answer the same question, and the harness waterfall
+   * takes exactly one outcome. The most recently used session is the best guess at the
+   * caller that started the work. Every failure path is `undefined` — the caller then
+   * relies on the resource/tool path and the timeout, both of which fail closed.
+   */
+  async elicitApproval(input: { message: string; timeoutMs: number }): Promise<boolean | undefined> {
+    const candidates = [...this.sessions.values()].sort((left, right) => right.lastSeen - left.lastSeen)
+    for (const session of candidates.slice(0, 1)) {
+      const asking = session.server.server.elicitInput({
+        mode: 'form',
+        message: input.message,
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            approve: {
+              type: 'boolean',
+              title: 'Allow this action?',
+              description: 'true allows the tool to run once; false refuses it.',
+            },
+          },
+          required: ['approve'],
+        },
+      })
+      try {
+        const result = await withTimeout(asking, input.timeoutMs)
+        if (result.action === 'accept') {
+          const content = result.content as { approve?: unknown } | undefined
+          return content?.approve === true
+        }
+        // decline and cancel both mean "do not run it": the bridge fails closed.
+        return false
+      } catch (error) {
+        this.log.debug(
+          '[dsh-as-mcp] could not elicit an approval from a 2025-era client: %s',
+          error instanceof Error ? error.message : String(error),
+        )
+        return undefined
+      }
+    }
+    return undefined
   }
 
   /** Close every session and stop the sweep timer; safe to call twice. */
@@ -767,6 +847,7 @@ export function createRequestHandler(options: RequestHandlerOptions): RequestHan
 
   return {
     handle: guard,
+    elicitApproval: async (input) => await legacy.elicitApproval(input),
     close: async () => {
       // Stop the 2025-era sessions first: closing a transport ends its SSE
       // stream, which is what lets an in-flight write finish and the listener

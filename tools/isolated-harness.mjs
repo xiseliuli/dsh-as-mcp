@@ -69,6 +69,20 @@ function parseArgs(argv) {
       options['keep-home'] = true
       continue
     }
+    if (key === 'approval') {
+      const approval = argv[index + 1]
+      if (!['inherit', 'allow', 'human'].includes(approval)) throw new Error('--approval must be inherit, allow or human')
+      options.approval = approval
+      index += 1
+      continue
+    }
+    if (key === 'approval-timeout') {
+      const ms = Number(argv[index + 1])
+      if (!Number.isFinite(ms) || ms <= 0) throw new Error('--approval-timeout needs a positive number of ms')
+      options['approval-timeout'] = ms
+      index += 1
+      continue
+    }
     if (key === 'scope') {
       const scope = argv[index + 1]
       if (scope !== 'all' && scope !== 'owned') throw new Error('--scope must be "all" or "owned"')
@@ -172,6 +186,10 @@ async function start(options) {
   // `--scope owned` boots the containment mode so the schedule boundary can be
   // verified against a real profile rather than only in unit tests.
   const scopeLine = options.scope === undefined ? '' : `    session:\n      scope: ${options.scope}\n`
+  const approvalLines = options.approval === undefined
+    ? ''
+    : `    approval:\n      policy: ${options.approval}\n`
+      + (options['approval-timeout'] === undefined ? '' : `      humanTimeoutMs: ${options['approval-timeout']}\n`)
   writeFileSync(
     join(profileDir, 'cordis.patch.yml'),
     `# Live-verification overlay: a deterministic plugin port for the probe scripts.
@@ -183,7 +201,7 @@ async function start(options) {
       port: ${pluginPort}
       path: /mcp
       mountOnWebServer: false
-${scopeLine}`,
+${scopeLine}${approvalLines}`,
   )
 
   const log = join(home, 'harness.log')
@@ -215,6 +233,7 @@ ${scopeLine}`,
     home,
     profile: PROFILE,
     scope: options.scope ?? 'all',
+    approval: options.approval ?? 'inherit',
     bundles: options.bundles ?? [],
     tarball,
     pluginPort,

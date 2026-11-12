@@ -8,6 +8,7 @@ import type { EndpointStatus } from '../status.js'
 import { VERSION } from '../version.js'
 import { describeToolAvailability } from './availability.js'
 import type { FeedResource, FeedSurface } from './feeds.js'
+import { APPROVALS_URI, type ApprovalBroker } from './approvals.js'
 
 /** Where external agents should connect, reported by `dsh_info`. */
 export interface ConnectionInfo {
@@ -44,6 +45,14 @@ export interface ToolDeps {
    * read from it, only the resource registrations do.
    */
   readonly feeds?: FeedSurface
+  /**
+   * The human-in-the-loop approval queue, when `approval.policy: "human"` is in force.
+   *
+   * Optional so a test or an embedder can serve the tool surface without it; the
+   * `approval_*` tools report their absence as a capability error rather than
+   * pretending there is nothing to answer.
+   */
+  readonly approvals?: ApprovalBroker
 }
 
 /**
@@ -288,7 +297,7 @@ function registerFeedResources(server: McpServer, feeds: FeedSurface, group: Fee
  * runs on every call; keep the bodies thin and push work into {@link DshDriver}.
  */
 export function registerTools(server: McpServer, deps: ToolDeps): void {
-  const { driver, getConfig, connection, status, log, feeds } = deps
+  const { driver, getConfig, connection, status, log, feeds, approvals } = deps
   const enabled = getConfig().tools
 
   server.registerTool(
@@ -1920,6 +1929,107 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           ...(args.maxChars === undefined ? {} : { maxChars: args.maxChars }),
           ...(signal === undefined ? {} : { signal }),
         }))
+      }),
+    )
+
+    server.registerTool(
+      'approval_list',
+      {
+        title: 'List DSH approval requests waiting for a human',
+        description:
+          'The approval requests currently blocking a turn, oldest first: the `approvalId` to answer, the '
+          + '`sessionId` and `toolName` that raised it, the harness `reason` (and a localized `displayReason` '
+          + 'when it has one), plus `createdAt` and the `expiresAt` it will be answered `rejected` at. Only '
+          + 'populated when `approval.policy` is `"human"` — that is the setting that routes approvals raised by '
+          + 'sessions this endpoint created to a connected client instead of deciding them. `includeSettled` '
+          + 'also returns the recent decisions (who answered: a tool call, an elicitation, or the timeout), for '
+          + 'audit. Also published as `dsh://approvals`, so a client can subscribe and be told when something needs '
+          + 'an answer. Read-only.',
+        inputSchema: z.object({
+          includeSettled: z
+            .boolean()
+            .optional()
+            .describe('Also return recently decided requests (bounded ring, newest first).'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('approval_list', log, async (args) => {
+        if (approvals === undefined) {
+          return ok({ pending: [], settled: [], enabled: false, note: 'approval.policy is not "human", so this endpoint never holds an approval request.' })
+        }
+        return ok({
+          enabled: getConfig().approval.policy === 'human',
+          pending: approvals.pendingApprovals(),
+          ...(args.includeSettled === true ? { settled: approvals.settledApprovals() } : {}),
+          ...(approvals.hasElicitor ? {} : { elicitation: false }),
+        })
+      }),
+    )
+
+    server.registerTool(
+      'approval_decide',
+      {
+        title: 'Answer a DSH approval request',
+        description:
+          'Answer one pending approval request, as a human clicking Allow or Reject would: `decision: "allow"` '
+          + 'lets the tool run once (`allowed-once`), `"reject"` refuses it. The answer is applied to the request '
+          + 'the harness is blocking on, and the decided record is returned. An id that is no longer pending — it '
+          + 'timed out, the turn was cancelled, or another client answered first — returns `decided: false` with '
+          + 'the reason instead of an error, so a race is not a failure. Requires `approval.policy: "human"`; '
+          + 'nothing else holds requests.',
+        inputSchema: z.object({
+          approvalId: z.string().min(1).describe('Id from approval_list or dsh://approvals.'),
+          decision: z.enum(['allow', 'reject']).describe('allow runs the tool once; reject refuses it.'),
+          reason: z.string().optional().describe('Optional note recorded with the decision.'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('approval_decide', log, async (args) => {
+        if (approvals === undefined || getConfig().approval.policy !== 'human') {
+          throw new Error(
+            'approval_decide needs approval.policy: "human" — this endpoint is not holding any request. '
+              + 'Set approval.policy to "human" to route approvals raised by sessions it created to a client.',
+          )
+        }
+        const settled = approvals.decide(args.approvalId, args.decision, args.reason)
+        if (settled === undefined) {
+          const known = approvals.settledApprovals().find((entry) => entry.approvalId === args.approvalId)
+          return ok({
+            decided: false,
+            approvalId: args.approvalId,
+            ...(known === undefined
+              ? { reason: 'no request with this id is pending or was recently decided' }
+              : { reason: `already decided (${known.decision}) by ${known.decidedBy}`, settledAt: known.decidedAt }),
+          })
+        }
+        return ok({ decided: true, approval: settled })
+      }),
+    )
+
+    // The queue as a readable resource: `dsh://approvals`. A modern client can
+    // subscribe to it through subscriptions/listen, a 2025-era one through
+    // resources/subscribe — either way the push says "something needs an answer",
+    // and the read says what.
+    server.registerResource(
+      'approvals',
+      APPROVALS_URI,
+      {
+        title: 'DSH approval queue',
+        description:
+          'Approval requests waiting for a human answer, published whenever one is raised or decided. Populated '
+          + 'only when approval.policy is "human".',
+        mimeType: 'application/json',
+      },
+      async (uri) => ({
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            enabled: getConfig().approval.policy === 'human',
+            pending: approvals?.pendingApprovals() ?? [],
+            ...(approvals?.hasElicitor === true ? { elicitation: true } : {}),
+          }),
+        }],
       }),
     )
   }

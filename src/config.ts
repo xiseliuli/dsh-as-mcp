@@ -168,8 +168,22 @@ export interface ApprovalConfig {
    *   answerer for. The harness tells the agent about the switch; a session whose
    *   agent cannot be resolved reports `approvalPolicyError` instead of silently
    *   keeping the default.
+   * - `human`: ask a connected MCP client's user instead of deciding. An
+   *   approval request raised by a session this plugin created is published on
+   *   `dsh://approvals`, offered to a stateful 2025-era client as an MCP
+   *   `elicitation/create` request, and held until a client answers with
+   *   `approval_decide`, an elicitation answer arrives, or `humanTimeoutMs`
+   *   elapses. A timeout answers `rejected`: the failure mode of a human bridge
+   *   must be "deny", never a silent allow.
    */
-  policy: 'inherit' | 'allow'
+  policy: 'inherit' | 'allow' | 'human'
+  /**
+   * How long `approval.policy: "human"` waits for a decision.
+   *
+   * The harness's own approval channel is a blocking waterfall, so this bound is
+   * what keeps a client that vanished from stalling the turn forever.
+   */
+  humanTimeoutMs: number
 }
 
 /** Complete plugin configuration. */
@@ -184,7 +198,7 @@ export interface Config {
 }
 
 /** The approval policies a configuration may name. */
-export const APPROVAL_POLICIES = ['inherit', 'allow'] as const
+export const APPROVAL_POLICIES = ['inherit', 'allow', 'human'] as const
 
 /** Raised when a config value cannot be normalized. */
 export class ConfigValidationError extends Error {
@@ -374,7 +388,7 @@ export function normalizeConfig(input: unknown = {}): Config {
   rejectUnknown(limits, ['maxReadBytes', 'shellTimeoutMs', 'agentToolTimeoutMs'], 'limits', issues)
 
   const approval = section(root, 'approval', 'approval', issues)
-  rejectUnknown(approval, ['policy'], 'approval', issues)
+  rejectUnknown(approval, ['policy', 'humanTimeoutMs'], 'approval', issues)
 
   // Every reader below records into `issues` rather than throwing, so the
   // result must be built before the check — otherwise a bad field value would
@@ -420,6 +434,13 @@ export function normalizeConfig(input: unknown = {}): Config {
     },
     approval: {
       policy: oneOf(approval, 'policy', APPROVAL_POLICIES, fallback.approval.policy, 'approval', issues),
+      humanTimeoutMs: positiveInt(
+        approval,
+        'humanTimeoutMs',
+        fallback.approval.humanTimeoutMs,
+        'approval',
+        issues,
+      ),
     },
   }
 
@@ -501,10 +522,17 @@ export const Config = Schema.object({
       .description('Default timeout for dsh_tool_call.'),
   }).description('Bounds on one external call.'),
   approval: Schema.object({
-    policy: Schema.union([Schema.const('inherit'), Schema.const('allow')])
+    policy: Schema.union([Schema.const('inherit'), Schema.const('allow'), Schema.const('human')])
       .default(DEFAULT_APPROVAL.policy)
       .volatile()
-      .description('How sessions this plugin starts answer approval requests.'),
+      .description(
+        'How sessions this plugin starts answer approval requests. inherit leaves DSH policy alone; '
+        + 'allow approves them automatically; human holds each one for a connected MCP client to answer.',
+      ),
+    humanTimeoutMs: Schema.number().default(DEFAULT_APPROVAL.humanTimeoutMs).volatile()
+      .description(
+        'How long approval.policy=human waits for an answer; a timeout answers rejected, never allowed.',
+      ),
   }).description('Approval behaviour for plugin-started sessions.'),
 })
 

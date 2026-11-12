@@ -48,6 +48,7 @@ const GROUP_TOOLS: Record<keyof ToolToggles, readonly string[]> = {
     'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
     'forge_changes', 'forge_local_diff', 'forge_branches',
     'agent_list', 'subagent_tree', 'skill_list', 'skill_read',
+    'approval_list', 'approval_decide',
   ],
   files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list', 'file_delete', 'file_move'],
   shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],

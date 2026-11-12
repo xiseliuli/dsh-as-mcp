@@ -18,6 +18,7 @@ import {
 import { maskToken, resolveToken } from './mcp/token.js'
 import { EndpointPushes } from './mcp/push.js'
 import { EventFeeds } from './mcp/feeds.js'
+import { ApprovalBroker } from './mcp/approvals.js'
 import type { ConnectionInfo, ToolDeps } from './mcp/tools.js'
 import { installSettingsPagePolicy } from './settings.js'
 import { STATUS_ROUTE, type EndpointStatus } from './status.js'
@@ -207,6 +208,14 @@ export function apply(ctx: Context, config: unknown): void {
   // before either: the driver needs the gating call at prompt time, and the
   // handler attaches its notifier here, once.
   const pushes = new EndpointPushes()
+  // The human-in-the-loop bridge: the approval answerer below feeds it, the
+  // `approval_*` tools answer it, and the HTTP layer attaches the 2025-era
+  // elicitation channel once its listener exists.
+  const approvals = new ApprovalBroker({
+    log,
+    timeoutMs: () => getConfig().approval.humanTimeoutMs,
+    pushes,
+  })
   const driver = new DshDriver(ctx, getConfig, pushes)
   // The push feeds read the same driver surface the tools do and publish on the
   // same push object: one event surface, two transports (modern listen streams and
@@ -221,7 +230,7 @@ export function apply(ctx: Context, config: unknown): void {
       pushes.dispose()
     }
   }, 'dsh-as-mcp push feeds')
-  const deps: ToolDeps = { driver, getConfig, connection, status, log, feeds }
+  const deps: ToolDeps = { driver, getConfig, connection, status, log, feeds, approvals }
 
   const requestHandler = createRequestHandler({
     deps,
@@ -229,6 +238,21 @@ export function apply(ctx: Context, config: unknown): void {
     log,
     pushes,
   })
+  if (requestHandler.elicitApproval !== undefined) {
+    const elicit = requestHandler.elicitApproval
+    // The broker asks at most one client and bounds the wait itself; the extra bound
+    // here keeps a wedged transport from outliving the approval timeout.
+    approvals.attachElicitor(async (notice) => {
+      const answer = await elicit({
+        message:
+          `DSH session ${notice.sessionId} asks to run "${notice.toolName}"`
+          + `${notice.reason === undefined ? '' : `: ${notice.reason}`}. Allow it once?`,
+        timeoutMs: getConfig().approval.humanTimeoutMs,
+      })
+      if (answer === undefined) return undefined
+      return answer ? 'allow' : 'reject'
+    })
+  }
 
   /** Everything that decides *where* the endpoint lives. */
   const signatureOf = (current: DshAsMcpConfig): string => [
@@ -467,6 +491,7 @@ export function apply(ctx: Context, config: unknown): void {
       listener = undefined
       await current?.dispose()
       driver.disposeSettlementWatches()
+      approvals.dispose()
       await requestHandler.close()
     }
   }, 'dsh-as-mcp endpoint')
@@ -475,25 +500,59 @@ export function apply(ctx: Context, config: unknown): void {
   // is a pass-through unless the current policy is `allow` and the request
   // belongs to a session this plugin started.
   ctx.effect(() => {
+    // Prepended: `approval.policy` is an explicit operator choice, so this answerer
+    // claims a request for a session it owns before a composition-level answerer
+    // (which in a headless run may deny it) can. For `allow` that is belt and braces
+    // — the policy is already switched to `never` — and for `human` it is the point.
     const off = eventsOf(ctx).on('approval/request', (...args: unknown[]) => {
       const request = args[0] as
-        | { agent?: { id?: string; session?: { id?: string } } }
+        | {
+          agent?: { id?: string; session?: { id?: string } }
+          toolName?: string
+          callId?: string
+          reason?: string
+          displayReason?: Record<string, string>
+          signal?: AbortSignal
+        }
         | undefined
       const next = args[1] as (() => unknown) | undefined
-      if (getConfig().approval.policy !== 'allow') return typeof next === 'function' ? next() : undefined
+      const policy = getConfig().approval.policy
+      if (policy !== 'allow' && policy !== 'human') return typeof next === 'function' ? next() : undefined
       // `agent.id` is the SessionId the public `ApprovalRequestEvent` contract
       // declares, so it is read first. `agent.session.id` is the same value on
       // the shipped harness, but the published `Agent` declaration carries only
       // `id`; keeping it as a fallback costs nothing and survives a host that
       // exposes the richer object without the flat one.
       const sessionId = request?.agent?.id ?? request?.agent?.session?.id
-      if (sessionId !== undefined && deps.driver.ownsSession(sessionId)) return 'allowed-once'
-      return typeof next === 'function' ? next() : undefined
+      if (sessionId === undefined || !deps.driver.ownsSession(sessionId)) {
+        return typeof next === 'function' ? next() : undefined
+      }
+      if (policy === 'allow') return 'allowed-once'
+      // `human`: hold the request until a person answers. The outcome is always a
+      // decision — a timeout, a cancelled turn or a vanished client is `rejected`,
+      // never an implicit allow.
+      return approvals.request({
+        sessionId,
+        toolName: request?.toolName ?? 'unknown-tool',
+        ...(request?.callId === undefined ? {} : { callId: request.callId }),
+        ...(request?.reason === undefined ? {} : { reason: request.reason }),
+        ...(request?.displayReason === undefined ? {} : { displayReason: request.displayReason }),
+        ...(request?.signal === undefined ? {} : { signal: request.signal }),
+      })
     })
     return () => {
       off()
     }
   }, 'dsh-as-mcp approval answerer')
+
+  if (entry.approval.policy === 'human') {
+    log.warn(
+      '[dsh-as-mcp] approval.policy=human — approval requests raised by sessions this plugin created are '
+      + 'held for a connected MCP client to answer (approval_list / approval_decide, or an MCP elicitation '
+      + `request on a stateful 2025-era session). ${entry.approval.humanTimeoutMs} ms without an answer `
+      + 'answers rejected.',
+    )
+  }
 
   if (entry.approval.policy === 'allow') {
     log.warn(

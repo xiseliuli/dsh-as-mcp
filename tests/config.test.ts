@@ -59,7 +59,7 @@ describe('cordis.patch.yml', () => {
       agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [] },
       session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 900_000, scope: 'all' },
       limits: { maxReadBytes: 1_048_576, shellTimeoutMs: 120_000, agentToolTimeoutMs: 120_000 },
-      approval: { policy: 'inherit' },
+      approval: { policy: 'inherit', humanTimeoutMs: 120_000 },
     })
   })
 

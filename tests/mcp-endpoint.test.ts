@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { TOKEN, boot, callTool, readJsonRpc, rpc, silentLog, stubDriver, testConfig } from './harness.js'
 import { MAX_REQUEST_BYTES, createRequestHandler, declaresOversizedBody, startListener } from '../src/mcp/http.js'
+import { ApprovalBroker } from '../src/mcp/approvals.js'
 
 describe('endpoint admission', () => {
   it('answers 401 with a Bearer challenge so a standard client knows to authenticate', async () => {
@@ -442,6 +443,55 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('serves the approval queue and applies a decision', async () => {
+    const pending = []
+    const broker = new ApprovalBroker({
+      log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+      timeoutMs: () => 60_000,
+    })
+    const humanConfig = testConfig()
+    humanConfig.approval.policy = 'human'
+    humanConfig.approval.humanTimeoutMs = 60_000
+    const approvals = await boot(stubDriver(), humanConfig, { approvals: broker })
+    try {
+      const empty = await callTool(approvals.url, 'approval_list', {})
+      expect(JSON.parse(empty.text)).toMatchObject({ pending: [] })
+
+      // The endpoint's approval answerer would call this; here the test drives the
+      // broker directly, which is the same call the answerer makes.
+      pending.push(broker.request({ sessionId: 'session-1', toolName: 'bash', reason: 'writes outside' }))
+      const listed = await callTool(approvals.url, 'approval_list', { includeSettled: true })
+      const listedBody = JSON.parse(listed.text) as { pending: { approvalId: string }[]; settled: unknown[] }
+      expect(listedBody.pending).toHaveLength(1)
+      expect(listedBody.settled).toEqual([])
+
+      // The resource reports the same queue, so a subscriber can read it.
+      const read = await rpc(approvals.url, {
+        jsonrpc: '2.0', id: 70, method: 'resources/read', params: { uri: 'dsh://approvals' },
+      })
+      const readBody = (await readJsonRpc(read, 70)) as { result?: { contents?: { text?: string }[] } }
+      expect(JSON.parse(readBody.result?.contents?.[0]?.text ?? '{}')).toMatchObject({ pending: [{ toolName: 'bash' }] })
+
+      const decided = await callTool(approvals.url, 'approval_decide', {
+        approvalId: listedBody.pending[0]?.approvalId,
+        decision: 'allow',
+        reason: 'looks fine',
+      })
+      expect(JSON.parse(decided.text)).toMatchObject({ decided: true, approval: { decision: 'allow' } })
+      // The blocking request resolved.
+      await expect(pending[0]).resolves.toBe('allowed-once')
+      // Deciding again is data, not an error.
+      const again = await callTool(approvals.url, 'approval_decide', {
+        approvalId: listedBody.pending[0]?.approvalId,
+        decision: 'reject',
+      })
+      expect(JSON.parse(again.text)).toMatchObject({ decided: false })
+    } finally {
+      broker.dispose()
+      await approvals.stop()
+    }
+  })
+
   it('reports a harness failure as a tool error, not a transport error', async () => {
     const failing = await boot(
       stubDriver({
@@ -586,6 +636,7 @@ describe('MCP Streamable HTTP endpoint', () => {
         'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
         'forge_changes', 'forge_local_diff', 'forge_branches',
         'agent_list', 'subagent_tree', 'skill_list', 'skill_read',
+        'approval_list', 'approval_decide',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list', 'file_delete', 'file_move'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -601,7 +652,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(54)
+      expect(all).toHaveLength(56)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {

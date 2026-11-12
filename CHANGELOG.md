@@ -6,6 +6,34 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.60.0
+
+- **Human-in-the-loop approvals, opt-in.** `approval.policy` gains a third value, `human`: approval
+  requests raised by sessions this plugin created are no longer decided by the plugin but held for a
+  person. Two new tools answer them — `approval_list` (the pending queue: `approvalId`, `sessionId`,
+  `toolName`, the harness `reason`/`displayReason`, `createdAt`, and the `expiresAt` at which it will be
+  answered `rejected`, with `includeSettled` returning the recent decisions and who answered) and
+  `approval_decide` (`allow` runs the tool once, `reject` refuses it, an id that is no longer pending
+  returns `decided: false` rather than an error). The queue is also the `dsh://approvals` resource,
+  published whenever a request is raised or settled, so a client can subscribe instead of polling.
+- **The bridge also speaks MCP elicitation, where the protocol offers it.** A stateful **2025-era**
+  client gets an MCP `elicitation/create` request on its long-lived GET stream (the protocol's
+  push-style request channel); answering it settles the approval exactly like a tool decision. The
+  **2026-07-28** era replaced that channel with `input_required` results, which only exist inside a tool
+  call, so modern clients use the resource + tool path — documented rather than pretended.
+- **It fails closed, and it is bounded.** A timeout (`approval.humanTimeoutMs`, default 120000 ms), a
+  cancelled harness request, or a client that vanished answers `rejected`/`cancelled`; there is no path
+  where silence becomes consent. Only sessions this plugin owns can reach the broker (the answerer
+  refuses to claim a foreign request before it gets there), at most 32 requests are held at once and a
+  request beyond that is refused (rejected), and settled decisions live in a 50-entry ring for audit.
+  `approval.policy: "allow"` and `"inherit"` are unchanged.
+- Docs and tests: both READMEs document the third policy, the two tools, and the fail-closed timeout;
+  `cordis.patch.yml` restates the policy and the timeout; `docs/CAPABILITY-GAPS.md` moves to 56 tools.
+  `tests/approvals.test.ts` pins the broker (timeout/abort/dispose all fail closed, first answer wins,
+  the pending cap, the settled ring, elicitation settling when no tool decision arrives);
+  `tests/mcp-endpoint.test.ts` pins the two tools and the resource read; `tests/settings.test.ts` and
+  `tests/config.test.ts` cover the new policy value and the volatile leaf.
+
 ## 0.59.0
 
 - Four observability tools in the `session` group — `agent_list`, `subagent_tree`, `skill_list` and

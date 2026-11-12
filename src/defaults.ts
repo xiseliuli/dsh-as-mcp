@@ -117,7 +117,14 @@ export const DEFAULT_LIMITS = {
 } as const satisfies LimitsConfig
 
 /** {@link ApprovalConfig} defaults: never widen the harness policy implicitly. */
-export const DEFAULT_APPROVAL = { policy: 'inherit' } as const satisfies ApprovalConfig
+export const DEFAULT_APPROVAL = {
+  policy: 'inherit',
+  /**
+   * Two minutes is long enough for a human to notice the prompt and short enough
+   * that a client which disconnected does not stall the turn behind it.
+   */
+  humanTimeoutMs: 120_000,
+} as const satisfies ApprovalConfig
 
 /** Every default, as one configuration. */
 export function defaultConfig(): Config {

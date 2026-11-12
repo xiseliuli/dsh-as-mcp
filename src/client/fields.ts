@@ -170,7 +170,15 @@ export const GROUPS: readonly GroupSpec[] = [
         options: [
           { value: 'inherit', label: 'field.approval.policy.inherit' },
           { value: 'allow', label: 'field.approval.policy.allow' },
+          { value: 'human', label: 'field.approval.policy.human' },
         ],
+      },
+      {
+        kind: 'number',
+        path: ['approval', 'humanTimeoutMs'],
+        label: 'field.approval.humanTimeoutMs',
+        hint: 'field.approval.humanTimeoutMs.hint',
+        min: 1,
       },
     ],
   },

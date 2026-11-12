@@ -3,6 +3,7 @@ import { DEFAULT_AGENT_TOOLS } from '../src/defaults.js'
 import type { EndpointStatus } from '../src/status.js'
 import type { DshLogger } from '../src/dsh/types.js'
 import type { FeedSurface } from '../src/mcp/feeds.js'
+import type { ApprovalBroker } from '../src/mcp/approvals.js'
 import { EndpointPushes } from '../src/mcp/push.js'
 import { createRequestHandler, startListener, type EndpointHandle } from '../src/mcp/http.js'
 import type { ConnectionInfo, McpDriver } from '../src/mcp/tools.js'
@@ -278,7 +279,7 @@ export function testConfig(overrides: Partial<Config['tools']> = {}, port = 0): 
     agentTools: { allow: [...DEFAULT_AGENT_TOOLS.allow], deny: [...DEFAULT_AGENT_TOOLS.deny] },
     session: { agentPreset: '', provider: '', model: '', promptTimeoutMs: 1000, scope: 'all' },
     limits: { maxReadBytes: 1024, shellTimeoutMs: 1000, agentToolTimeoutMs: 1000 },
-    approval: { policy: 'inherit' },
+    approval: { policy: 'inherit', humanTimeoutMs: 120000 },
   }
 }
 
@@ -286,7 +287,7 @@ export function testConfig(overrides: Partial<Config['tools']> = {}, port = 0): 
 export async function boot(
   driver: McpDriver,
   config: Config = testConfig(),
-  options: { feeds?: FeedSurface; pushes?: EndpointPushes } = {},
+  options: { feeds?: FeedSurface; pushes?: EndpointPushes; approvals?: ApprovalBroker } = {},
 ): Promise<{
   url: string
   stop: () => Promise<void>
@@ -319,6 +320,7 @@ export async function boot(
       status,
       log: silentLog,
       ...(options.feeds === undefined ? {} : { feeds: options.feeds }),
+      ...(options.approvals === undefined ? {} : { approvals: options.approvals }),
     },
     getToken: () => TOKEN,
     log: silentLog,

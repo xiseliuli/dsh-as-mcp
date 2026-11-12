@@ -247,6 +247,8 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `subagent_tree` | 某个会话派生的会话，即 DSH Subagent 面板渲染的树：每个子项的 `id`、`createdAt`、`mode`（one-shot/external/continuable/unknown）以及有的话 `label`。带 `includeDescendants` 时还会返回整棵子树，每行带 `parentId` 与 `depth`；读不出来的子项带 `reason`（`corrupt`/`unsupported`/`unavailable`）出现而不是被丢掉。只读；`session.scope` 作用于父会话。 |
 | `skill_list` | DSH agent 可加载的指令库（harness 报告的形态）：每个技能的 `name`、`description`、`whenToUse`、`provider`、`source`（project/user/runtime/bundled）、模型/用户可调用性，以及它是文件时的 `path`。`cwd` 选择 project 作用域的 provider，因此同一实例可在不同 checkout 提供不同技能；`sessionId` 通过该会话的 agent preset 读取（shipped preset 自带的 bundled 技能就在这里，只读 host 目录会少看到）；`complete: false` 表示还有 provider 在加载、列表不完整。只读。`session.scope` 为 `"owned"` 时拒绝，因为该目录属于实例而不属于某个会话。 |
 | `skill_read` | 读取单个技能的完整定义（含指令正文）——与 DSH agent 加载的是同一份文本，调用方因此可以遵循用户自己的项目约定而不是另起一套。给出 `skill_list` 里的精确 `name`；`sessionId` 通过该会话的 preset 读取，`cwd` 选择 project 作用域。正文由 `maxChars` 限制（默认 32 KiB，最大 128 KiB），被截断时标 `textTruncated`。只读。`session.scope` 为 `"owned"` 时拒绝。 |
+| `approval_list` | 当前阻塞着某一轮的审批请求，最旧在前——要回答的 `approvalId`、发起它的 `sessionId`/`toolName`、harness 的 `reason`（有本地化 `displayReason` 时一并给出）、`createdAt`，以及到点将被答为 `rejected` 的 `expiresAt`。仅当 `approval.policy` 为 `"human"` 时有内容；正是该设置把本端点创建的会话的审批路由给已连接客户端而不是自行决定。`includeSettled` 还会返回最近的决定及作答方（`tool`、`elicitation`、`timeout`、`cancelled`），便于审计。同一队列也以 `dsh://approvals` 资源发布，客户端可订阅以便在需要作答时收到通知。只读。 |
+| `approval_decide` | 像人点「允许/拒绝」一样回答一个待决审批：`decision: "allow"` 放行本次，`"reject"` 拒绝，可选 `reason` 随结算一并记录。已不在待决状态的 id（超时、轮次取消、或另一个客户端已答）返回 `decided: false` 并说明原因，而不是报错——竞态不算失败。需要 `approval.policy: "human"`。 |
 | `schedule_create` | 创建一个 **Host 级** 定时任务：harness 会在每次触发时把指令投递到某个会话，无论本端点或任何客户端是否在线。时必须且只能给出一种形式——`rrule`（一行 `DTSTART` 加一行 `RRULE`，即 DSH「自动化」页面写出的 RFC 5545 子集，例如 `"DTSTART;TZID=Asia/Singapore:20260901T080000\nRRULE:FREQ=DAILY;COUNT=3"`）、`afterSeconds`（从现在起 N 秒后执行一次）、或 `everySeconds`（固定间隔）。`target` 决定投递落点：`"session"` 更新一个已有会话（需要 `sessionId`）、`"new_once"` 首次投递时新建一个会话并复用、`"new"` 每次投递都新建会话；后两种可带 `cwd` 与 `agentPreset`。给了 `sessionId` 时默认 `"session"`，否则默认 `"new"`。返回存下的任务，含生成的 id、`scheduledAt`、`status` 与具体时间形态字段。任务属于 Host 记录而不是会话记录，因此当 `session.scope` 为 `"owned"` 时整个 schedule 面会被拒绝。 |
 | `schedule_list` | Host 定时任务的一页，活动任务按下次触发时间在前，暂停/已结束的在后。`active: true` 只留活动任务，`false` 只留暂停与已结束的；不传则返回全部。`limit` 为 1–200（默认 20），`offset` 用于跳过。每行含任务 `id`、`title`、`prompt`、时间形态字段、`scheduledAt`、`status`、`target`，以及触发过之后的最近一次投递。列出的是任何会话创建的任务；`session.scope` 为 `"owned"` 时拒绝。 |
 | `schedule_view` | 按 `scheduleId` 读一个 Host 定时任务，字段与 `schedule_list` 相同并附投递目标细节。已不存在的 id 返回 `{ "found": false, "id": ... }` 而不是报错，清理循环因此保持幂等。`session.scope` 为 `"owned"` 时拒绝。 |
@@ -393,7 +395,7 @@ profile 能读 session projection 时，`session_status` 会报 `workingDirector
 
 MCP 服务无法主动调用客户端，所以「有什么变了」只能以资源通知的形式送出去。本端点把同一套变更 feed 发布到
 两种标准的推送通道上，而且每条通知都**不携带负载**：它只点名一个合成资源，客户端再去读那个资源拿 JSON。
-这件事没有新增任何工具——工具面是上面表格里的 54 个——推送也没有配置键：它始终开启，且在无人订阅时
+这件事没有新增任何工具——工具面是上面表格里的 56 个——推送也没有配置键：它始终开启，且在无人订阅时
 零成本。
 
 | 客户端时代 | 握手 | 服务端→客户端通道 | 如何请求推送 |
@@ -705,6 +707,11 @@ token 数字不受影响。钱覆盖会话内每一次 LLM 调用，而 token �
     的无人值守策略（`never`），harness 会把这次切换告知 agent；非本插件创建的会话保持你的策略，
     你手动操作的会话不受影响。这是让无人值守的 agent 任务能跑通的前提，也确实实质性地扩大了
     agent 可执行的范围。创建/fork 的回复会带 `approvalPolicy: "never"`，切换失败则带
+  - `human` — 本插件创建的会话所触发的审批**留给人来答**，而不是自动决定：请求出现在 `approval_list`
+    与 `dsh://approvals` 资源上（请求到达与结算时都会推送），有状态 2025 版客户端还会在 GET 流上收到
+    MCP `elicitation/create` 请求。用 `approval_decide`（`allow` → 本次放行，`reject` → 拒绝）或回答
+    elicitation 即可。`approval.humanTimeoutMs`（默认 120000）内无人作答则按 `rejected` 处理——人在回路
+    必须失败关闭，沉默绝不等于同意。非本插件创建的会话不受影响。
     `approvalPolicyError`。
 - `file_write`、`shell_run` 以及后台的 `shell_start`/`shell_kill` 都是**调用方**的动作，不是
   agent 的。它们走 harness 自己的文件系统与 shell 服务，所以这个 DSH 实例配置的沙箱和策略照样生效。
@@ -861,7 +868,8 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
       shellTimeoutMs: 120000
       agentToolTimeoutMs: 120000
     approval:
-      policy: inherit        # inherit | allow
+      policy: inherit        # inherit | allow | human
+      humanTimeoutMs: 120000 # human 策略：等这么久，超时按拒绝处理
 ```
 
 `session.scope` 是把 token 交给"不应接触你自己对话"的一方时用的收窄选项：设为 `owned` 后，所有涉及

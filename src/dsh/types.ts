@@ -1280,8 +1280,21 @@ export function serviceOf<T>(ctx: unknown, name: string): T | undefined {
  * require depending on the very packages this plugin avoids depending on.
  */
 export interface DshEventBus {
-  // biome-ignore lint/suspicious/noExplicitAny: see doc comment.
-  on(name: string, listener: (...args: any[]) => void): () => boolean
+  /**
+   * Subscribe to one harness event.
+   *
+   * The third argument is Cordis's listener option: a boolean is shorthand for
+   * `prepend`, and a prepended listener runs **before** the ones already registered.
+   * A waterfall's first non-`next()` return claims the event, so this is what lets an
+   * operator's explicit choice win over a composition, e.g. the human approval bridge
+   * over a UI answerer that would otherwise deny the request in a headless run.
+   */
+  on(
+    name: string,
+    // biome-ignore lint/suspicious/noExplicitAny: see doc comment.
+    listener: (...args: any[]) => void,
+    options?: boolean | { prepend?: boolean },
+  ): () => boolean
 }
 
 /** Narrow a Cordis context to its event surface. */

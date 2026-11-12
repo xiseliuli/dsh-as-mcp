@@ -1,6 +1,6 @@
 # Capability gaps: what DSH can do that `dsh-as-mcp` cannot reach
 
-**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **54 tools** today.
+**Question.** `dsh-as-mcp` exposes a running DeepSeek Harness as an MCP server with **56 tools** today.
 The author wants to know exactly what is missing, what is worth adding, and what should never be added.
 
 **Artifacts**
@@ -611,7 +611,7 @@ author chose specificity over generality.
 
 | Measure | Value |
 | --- | --- |
-| MCP tools registered on 0.1.5-rc.1 | 12 (54 as of plugin 0.59.0) |
+| MCP tools registered on 0.1.5-rc.1 | 12 (56 as of plugin 0.60.0) |
 | Host services in the 015 catalog | 71 (`grep '^    key: ' api-catalog.ts`) |
 | Host services in the 0.1.7-rc.2 catalog | 89 (20 added, 2 removed) |
 | Public methods across all 015 services | 401 |

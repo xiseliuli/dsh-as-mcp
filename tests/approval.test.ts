@@ -12,8 +12,8 @@ import type { DshSessionController } from '../src/dsh/types.js'
  */
 
 /** A config with the approval policy under test. */
-function configWithApproval(policy: 'inherit' | 'allow'): Config {
-  return { ...testConfig(), approval: { policy } }
+function configWithApproval(policy: 'inherit' | 'allow' | 'human'): Config {
+  return { ...testConfig(), approval: { ...testConfig().approval, policy } }
 }
 
 /** A driver whose controller resolves an agent and whose approval service records calls. */

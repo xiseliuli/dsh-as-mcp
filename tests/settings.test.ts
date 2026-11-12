@@ -95,6 +95,7 @@ describe('Config, as the harness reads it', () => {
     expect(marked).toEqual([
       'agentTools.allow',
       'agentTools.deny',
+      'approval.humanTimeoutMs',
       'approval.policy',
       'auth.token',
       'http.enabled',

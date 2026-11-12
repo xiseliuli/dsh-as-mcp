@@ -6,6 +6,13 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.60.0
+
+- **人在回路审批（opt-in）**：`approval.policy` 增加第三个取值 `human`——本插件创建的会话触发的审批不再由插件自行决定，而是留给人来答。两个新工具负责作答：`approval_list`（待决队列：`approvalId`、`sessionId`、`toolName`、harness 的 `reason`/`displayReason`、`createdAt`，以及到点会被答为 `rejected` 的 `expiresAt`；`includeSettled` 还返回最近决定及作答方）与 `approval_decide`（`allow` 本次放行、`reject` 拒绝；已不在待决的 id 返回 `decided: false` 而不是报错）。队列同时是 `dsh://approvals` 资源，请求到达与结算时都会推送，客户端可订阅而不必轮询。
+- **在协议允许的地方，这座桥也走 MCP elicitation**：有状态 **2025 版**客户端会在其长连接 GET 流上收到 MCP `elicitation/create` 请求（协议里的推送式请求通道），回答它与工具决定等效。**2026-07-28** 版把该通道换成了只存在于工具调用内部的 `input_required` 结果，因此现代客户端走资源 + 工具路径——如实记录，不假装支持。
+- **失败关闭、有界**：超时（`approval.humanTimeoutMs`，默认 120000 ms）、harness 取消请求、客户端消失，都会答 `rejected`/`cancelled`；不存在"沉默变同意"的路径。只有本插件拥有的会话能到达该 broker（answerer 在到达之前就拒绝认领外部请求），同时最多持有 32 个请求、超出者被拒（rejected），已决记录保留最近 50 条用于审计。`allow` 与 `inherit` 行为不变。
+- 文档与测试：两份 README 记录第三种策略、两个工具与失败关闭超时；`cordis.patch.yml` 补上策略与超时；`docs/CAPABILITY-GAPS.md` 更新为 56 工具。`tests/approvals.test.ts` 钉住 broker（超时/取消/dispose 全部失败关闭、第一个答案生效、待决上限、已决环形缓冲、无工具决定时 elicitation 结算）；`tests/mcp-endpoint.test.ts` 钉住两个工具与资源读取；`tests/settings.test.ts` 与 `tests/config.test.ts` 覆盖新策略值与 volatile 叶子。
+
 ## 0.59.0
 
 - 在 session 组新增 4 个观察面工具（`agent_list`、`subagent_tree`、`skill_list`、`skill_read`），工具面从 50 增至 54（该组从 28 增至 32）。它们开放了 DSH 面板里回答「现在在发生什么、适用哪些指令」的读取面：`agent_list` 报出 harness 当前持有的 live agent（会话 id、`idle`/`running`、以及是否为 `root`），与 `session_list` 不同——后者看磁盘上所有会话，前者只看内存里活着的；`subagent_tree` 报出某会话派生的会话（`id`、`createdAt`、`mode`、`label`），带 `includeDescendants` 时给出整棵子树的 `parentId` 与 `depth`；`skill_list` 返回 agent 可加载的指令库（`name`、`description`、`whenToUse`、`provider`、`source`、可调用性、`path`，以及 `complete`，避免把仍在加载的 provider 误当成空目录）；`skill_read` 返回单个技能的完整指令正文，让调用方遵循用户自己的项目约定而不是另起一套。

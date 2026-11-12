@@ -50,16 +50,17 @@
           # stream) and cost nothing while no client subscribes. The session-group
           # feeds need `session`; the job feeds need `shell`.
           #
-          # The session group: 32 tools — create/list/search/status/prompt/
+          # The session group: 34 tools — create/list/search/status/prompt/
           # transcript/tool-result/queue/cancel/fork/rename/set_model, the
           # worktree pair, archive/unarchive + pin/unpin, and the orchestration
-          # trio (slash commands + durable goal), the schedule quartet, the forge reads
-          # and the four observability tools (live agents, subagent tree, skills).
+          # trio (slash commands + durable goal), the schedule quartet, the forge reads,
+          # the four observability tools (live agents, subagent tree, skills) and the
+          # two approval-inbox tools.
           # The worktree tools
           # also need the worktrees service (the forge bundle in Desktop/Web,
           # probed as `dsh_info.harnessServices.worktrees`); archive/pin write the
           # same registry sets the DSH sidebar's actions write. Disabling the
-          # group removes all 32 at once; `dsh_info.toolAvailability` names the
+          # group removes all 34 at once; `dsh_info.toolAvailability` names the
           # ones a profile cannot serve.
           session: true
           # 7 tools: read/read_image/write/edit/list plus delete and move (files only;
@@ -113,4 +114,10 @@
           # 'inherit' leaves the harness approval policy alone. 'allow' installs
           # an answerer that approves every request made by sessions this plugin
           # drives — only use it when you understand what the agent may run.
+          # 'human' holds those requests for a connected MCP client instead
+          # (approval_list / approval_decide / dsh://approvals, plus an MCP
+          # elicitation on stateful 2025-era sessions); a timeout answers
+          # rejected, so silence is never consent.
           policy: inherit
+          # Only meaningful with policy: human. A timeout answers rejected.
+          humanTimeoutMs: 120000
