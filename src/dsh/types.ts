@@ -658,6 +658,117 @@ export interface DshAgentHandle {
 }
 declare const brand: unique symbol
 
+/** When a scheduled task fires — `ScheduleTiming` in the 0.2.2 catalog (the subset this endpoint uses). */
+export type DshScheduleTiming =
+  | { readonly kind: 'after'; readonly after_seconds: number }
+  | { readonly kind: 'every'; readonly every_seconds: number }
+  | { readonly kind: 'rrule'; readonly rrule: string }
+  | { readonly kind: 'cron'; readonly cron: { readonly expression: string; readonly time_zone: string } }
+
+/**
+ * Where a scheduled delivery goes — `ScheduleTargetRequest` in the 0.2.2 catalog.
+ *
+ * `session` delivers into an existing conversation; `new_once` creates one on the
+ * first delivery and reuses it; `new` creates a fresh conversation every time.
+ */
+export type DshScheduleTargetRequest =
+  | { readonly kind: 'session'; readonly sessionId: string }
+  | { readonly kind: 'new_once'; readonly create?: { readonly cwd?: string; readonly agentPreset?: string } }
+  | { readonly kind: 'new'; readonly create?: { readonly cwd?: string; readonly agentPreset?: string } }
+
+/** The resolved target of a stored task — `ScheduleTarget`. */
+export type DshScheduleTarget =
+  | { readonly kind: 'session'; readonly sessionId: string }
+  | { readonly kind: 'new_once'; readonly sessionId: string; readonly create: { readonly cwd?: string; readonly agentPreset?: string } }
+  | { readonly kind: 'new'; readonly create: { readonly cwd?: string; readonly agentPreset?: string } }
+
+/**
+ * One stored scheduled task — `ScheduleCatalogEntry` in the 0.2.2 catalog.
+ *
+ * Only the fields this endpoint reports are declared; the timing variant fields
+ * (`afterSeconds`, `everySeconds`, `rrule`, `expression`/`timeZone`) arrive on the
+ * same object and are projected through {@link DshScheduleEntry}.
+ */
+export interface DshScheduleEntry {
+  readonly id: string
+  readonly kind: 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron' | 'rrule'
+  readonly title: string
+  readonly prompt: string
+  readonly scheduledAt: string
+  readonly scheduledAtLocal?: string
+  readonly status: 'active' | 'paused' | 'ended'
+  readonly target: DshScheduleTarget
+  readonly involvedSessionIds?: readonly string[]
+  readonly createdAt?: string
+  readonly updatedAt?: string
+  readonly executionActive?: true
+  readonly lastDelivery?: {
+    readonly scheduledAt: string
+    readonly deliveredAt: string
+    readonly targetSessionId: string
+  }
+  readonly afterSeconds?: number
+  readonly everySeconds?: number
+  readonly rrule?: string
+  readonly expression?: string
+  readonly timeZone?: string
+}
+
+/** One page of tasks — `ScheduleListResult`. */
+export interface DshScheduleListResult {
+  readonly items: readonly DshScheduleEntry[]
+  readonly shown: number
+  readonly total: number
+  readonly limit: number
+  readonly offset: number
+}
+
+/** The result of an edit: the updated entry, a deletion, a miss, or a conflict. */
+export type DshScheduleEditResult =
+  | DshScheduleEntry
+  | { readonly id: string; readonly deleted: true }
+  | { readonly id: string; readonly code: 'schedule_not_found' }
+  | { readonly id: string; readonly code: 'schedule_conflict' }
+
+/**
+ * `ctx.schedule` — the Host's durable task store and delivery engine.
+ *
+ * Tasks belong to the **Host**, not to a session: `list`/`view`/`edit` reach every
+ * task by id and only `target` names a conversation. That is why this endpoint
+ * refuses the whole surface under `session.scope: "owned"` — an ownership check
+ * cannot be expressed on a host-global record.
+ */
+export interface DshScheduleService {
+  create(
+    request: {
+      readonly title: string
+      readonly prompt: string
+      readonly timing: DshScheduleTiming
+      readonly target?: DshScheduleTargetRequest
+    },
+    actorSessionId?: string,
+    signal?: AbortSignal,
+  ): Promise<DshScheduleEntry>
+  list(request?: { readonly active?: boolean; readonly limit?: number; readonly offset?: number }): Promise<DshScheduleListResult>
+  view(request: { readonly id: string }): Promise<DshScheduleEntry | { readonly id: string; readonly code: 'schedule_not_found' }>
+  edit(request: {
+    readonly id: string
+    readonly action: 'update' | 'delete'
+    readonly patch?: {
+      readonly title?: string
+      readonly prompt?: string
+      readonly timing?: DshScheduleTiming
+      readonly target?: DshScheduleTargetRequest
+      readonly active?: boolean
+    }
+    readonly expectedUpdatedAt?: string | null
+  }): Promise<DshScheduleEditResult>
+  history?(request: {
+    readonly id: string
+    readonly limit: number
+  }): Promise<unknown>
+}
+
 /** One slash command a session's agent can run — `CommandDescriptor` in the 0.2.2 catalog. */
 export interface DshCommandDescriptor {
   readonly name: string

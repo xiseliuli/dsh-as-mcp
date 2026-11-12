@@ -240,6 +240,10 @@ scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 | `session_command_list` | 列出该会话 agent 能运行的斜杠命令——每条带一句描述、可选的 `input` 提示与 `permitted` 标记——因此调用方能看到某个命令存在、而本端点故意不运行它（放行集是 `/compact`、`/plan`、`/goal`、`/export`；`/permission` 与 `/feedback` 刻意拒绝）。命令**不消耗模型轮次**（直接调用 handler），所以这是压缩长会话、导出日志、进入 plan 模式或设置目标最便宜的办法——与人在 DSH 输入框里敲命令完全一致。只读；用 `session_command` 运行其中一条。 |
 | `session_command` | 对会话的 agent 执行一条斜杠命令，不花模型轮次，就像人真的在 DSH 输入框里敲了它：`command` 可带可不带前导斜杠，参数写在同一字符串里（`"compact"`、`"/export"`、`"/goal <objective>"`、`"/plan off"`）。执行走 harness 自己的命令注册表，因此与真人敲同一行的执行完全一致，会话日志也会记录；回复带 harness 的 `commandId`、`ok`（handler 自己报告错误结果时为 `false`）、handler 的 `text`，以及它报告时记录的 `sourceEventSeq`。只放行用户面命令（`/compact`、`/plan`、`/goal`、`/export`）；`/permission`（会改变会话的 permission preset）与 `/feedback`（会写入你自己的评审记录）在任何 handler 运行之前就被拒绝，因此被拒调用**不会向会话日志写入任何东西**；本 profile 未注册的命令名会被拒绝并列出放行集。注册表没有接收的名字或参数返回错误并说明什么都没写进日志。先调 `session_command_list` 看该 agent 接受的确切名字与输入提示。 |
 | `session_goal` | 读取或修改会话的持久目标（durable goal）——即 harness 的轮次驱动会在多轮之间持续推进的长期目标，调用方因此可以委派多小时的任务，而不必一直挂着一轮。`action` 取 `get`（返回 `goal` 或 `null`），或 `create`（需要 `objective`）、`edit`（需要 `objective` 和/或 `maxGoalRounds`）、`pause`、`resume`、`complete`、`clear` 之一；除 `create` 外的动作都作用于当前存在的目标，其 ref 来自一次读取而不是调用方。传 `expectedRevision`（来自之前的读取）可拒绝"目标已在脚下被改过"的修改——相当于 DSH 界面的冲突处理。目标报出 `id`、`revision`、`objective`、`phase`（`active`/`paused`/`blocked`/`complete`）、`activation`（`armed`/`disarmed`）、`maxGoalRounds`、`roundsStarted`、被阻塞时的 `blockedReason` 与 `createdAt`/`updatedAt`；`clear` 返回 `goal: null`（并带 `cleared: true`），`complete` 返回已完成的目标。 |
+| `schedule_create` | 创建一个 **Host 级** 定时任务：harness 会在每次触发时把指令投递到某个会话，无论本端点或任何客户端是否在线。时必须且只能给出一种形式——`rrule`（一行 `DTSTART` 加一行 `RRULE`，即 DSH「自动化」页面写出的 RFC 5545 子集，例如 `"DTSTART;TZID=Asia/Singapore:20260901T080000\nRRULE:FREQ=DAILY;COUNT=3"`）、`afterSeconds`（从现在起 N 秒后执行一次）、或 `everySeconds`（固定间隔）。`target` 决定投递落点：`"session"` 更新一个已有会话（需要 `sessionId`）、`"new_once"` 首次投递时新建一个会话并复用、`"new"` 每次投递都新建会话；后两种可带 `cwd` 与 `agentPreset`。给了 `sessionId` 时默认 `"session"`，否则默认 `"new"`。返回存下的任务，含生成的 id、`scheduledAt`、`status` 与具体时间形态字段。任务属于 Host 记录而不是会话记录，因此当 `session.scope` 为 `"owned"` 时整个 schedule 面会被拒绝。 |
+| `schedule_list` | Host 定时任务的一页，活动任务按下次触发时间在前，暂停/已结束的在后。`active: true` 只留活动任务，`false` 只留暂停与已结束的；不传则返回全部。`limit` 为 1–200（默认 20），`offset` 用于跳过。每行含任务 `id`、`title`、`prompt`、时间形态字段、`scheduledAt`、`status`、`target`，以及触发过之后的最近一次投递。列出的是任何会话创建的任务；`session.scope` 为 `"owned"` 时拒绝。 |
+| `schedule_view` | 按 `scheduleId` 读一个 Host 定时任务，字段与 `schedule_list` 相同并附投递目标细节。已不存在的 id 返回 `{ "found": false, "id": ... }` 而不是报错，清理循环因此保持幂等。`session.scope` 为 `"owned"` 时拒绝。 |
+| `schedule_edit` | 修改或删除一个 Host 定时任务。`action: "update"` 至少需要一项改动：`title`、`prompt`、某种时间形态（`rrule`、`afterSeconds` 或 `everySeconds`）、`target`（`"session"` 需 `sessionId`，`"new"`/`"new_once"` 可带 `cwd`/`agentPreset`），或 `active`——`false` 暂停，`true` 恢复，旧规则已耗尽时恢复可能需要新的时间形态。`action: "delete"` 删除任务及其保存的投递记录，且不接受任何改动字段。`expectedUpdatedAt` 是丢失更新的守卫：若任务在该次读取后变过，调用返回 `conflict: true` 且不做任何修改。结果是数据而不是错误：`{ updated: true, task }`、`{ deleted: true }`、`{ found: false }` 或 `{ conflict: true }`。`session.scope` 为 `"owned"` 时拒绝。 |
 | `session_usage` | 按会话统计 token 用量（默认含其 subagent）：精确的四桶计数、按模型拆分、可选的按轮拆分，装了价格插件时还有钱。传 `sessionIds` 可一次结算多个已知会话，传 `cwd` 可汇总某个工作目录里跑过的所有会话。 |
 | `file_read` | 经 DSH 文件系统服务读 UTF-8 文件。受字节上限约束；`offset`/`nextOffset` 可翻页读取更大的文件（两者都是**字节**偏移，因此 EOF 处或之后的偏移是空的完整读取），`maxBytes` 用更小的窗口降低单次开销；`sha256: true` 返回整个文件的哈希，作为后续写入/编辑的比较并交换值。 |
 | `file_read_image` | 读取图片（png/jpeg/gif/webp/bmp，按字节嗅探）并以 MCP image block 返回，让你直接看截图或图表而不是靠猜。上限 8 MiB。 |
@@ -314,6 +318,29 @@ session_command_list { sessionId }                                    # 该 agen
 发布，因此跟进一个目标是轮询或订阅，而不是每轮都发 prompt。不带 `expectedRevision` 的修改作用于当时存在
 的目标；若可能有两个监督者竞争，请传回读取时拿到的 revision。
 
+### 定时自动化
+
+定时任务是本插件里唯一比进程活得更久的面：harness 负责存储并在每次触发时投递 prompt，因此即使没有
+任何 MCP 客户端在线也照常工作。任务是 **Host** 记录而不是会话记录——`schedule_list` 列出任何会话创建的
+任务，`target` 决定投递是更新同一个会话、首次投递时新建一个会话再复用、还是每次新建一个会话：
+
+```
+schedule_create { title: "每日依赖检查", prompt: "跑一遍依赖审计并汇报",
+                  rrule: "DTSTART;TZID=Asia/Singapore:20260901T080000\nRRULE:FREQ=DAILY",
+                  target: "new_once", cwd: "/repo" }
+schedule_create { title: "十分钟后看构建", prompt: "看看构建是否变绿",
+                  afterSeconds: 600, target: "session", sessionId }
+  -> schedule_list { active: true }                       # id、下次触发、状态
+  -> schedule_edit { scheduleId, action: "update", active: false }   # 暂停
+  -> schedule_edit { scheduleId, action: "update", title: "..." , everySeconds: 3600 }
+  -> schedule_edit { scheduleId, action: "delete" }       # 连任务与投递记录一起删除
+```
+
+因为 Host 记录没有所属会话，`session.scope` 为 `"owned"` 时整个面色会被**拒绝**：这种记录上无法表达
+归属过滤，而任务的投递目标可以指向实例上的任意会话。拒绝信息会说明原因并指向 `scope: "all"`。
+`expectedUpdatedAt` 携带 harness 自己的 revision，因此过期编辑返回 `conflict: true` 且不做修改，而不是
+覆盖用户刚在「自动化」页面里改过的东西。
+
 ## 工作树
 
 一个会话可以在一份自己的、来自同一仓库的 Git 检出里工作。这正是 DSH 界面「New worktree」选项做的事：
@@ -354,7 +381,7 @@ profile 能读 session projection 时，`session_status` 会报 `workingDirector
 
 MCP 服务无法主动调用客户端，所以「有什么变了」只能以资源通知的形式送出去。本端点把同一套变更 feed 发布到
 两种标准的推送通道上，而且每条通知都**不携带负载**：它只点名一个合成资源，客户端再去读那个资源拿 JSON。
-这件事没有新增任何工具——工具面仍是上面表格里的 38 个——推送也没有配置键：它始终开启，且在无人订阅时
+这件事没有新增任何工具——工具面是上面表格里的 42 个——推送也没有配置键：它始终开启，且在无人订阅时
 零成本。
 
 | 客户端时代 | 握手 | 服务端→客户端通道 | 如何请求推送 |

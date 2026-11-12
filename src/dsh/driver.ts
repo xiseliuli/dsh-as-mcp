@@ -56,6 +56,12 @@ import {
   DshGoalPhase,
   DshGoalService,
   DshGoalView,
+  DshScheduleEditResult,
+  DshScheduleEntry,
+  DshScheduleListResult,
+  DshScheduleService,
+  DshScheduleTargetRequest,
+  DshScheduleTiming,
 } from './types.js'
 
 /**
@@ -197,6 +203,15 @@ const MAX_SHELL_TAIL_BYTES = 16 * 1024
  * `/export` are user-plane actions on a session the caller can already prompt.
  */
 const PERMITTED_COMMANDS: ReadonlySet<string> = new Set(['compact', 'plan', 'goal', 'export'])
+
+/** Characters a scheduled task title may use — the harness's own cap. */
+const MAX_SCHEDULE_TITLE_CHARS = 120
+
+/** Tasks one `schedule_list` page returns when the caller does not say. */
+const DEFAULT_SCHEDULE_PAGE = 20
+
+/** Ceiling on one `schedule_list` page. */
+const MAX_SCHEDULE_PAGE = 200
 
 /** Bytes retained per background job for output the caller has not read yet. */
 const MAX_SHELL_BUFFER_BYTES = 128 * 1024
@@ -1278,6 +1293,9 @@ export class DshDriver {
       // Slash commands and durable goals: both are agent-scoped services, the same
       // bridge worktree creation and dsh_tool_call need.
       commands: typeof this.commandService()?.execute === 'function',
+      // Host-global, so the probe answers "is the store mounted", not "may this
+      // endpoint touch it" — the scope refusal is a call-time check.
+      schedule: typeof this.scheduleService()?.create === 'function',
       goals: typeof this.goalService()?.create === 'function',
       // Creating or restoring a worktree needs the session's live agent as its
       // scope, the same bridge `dsh_tool_call` uses.
@@ -1496,6 +1514,48 @@ export class DshDriver {
    */
   private commandService(): DshCommandService | undefined {
     return serviceOf<DshCommandService>(this.ctx, 'commands')
+  }
+
+  /**
+   * `ctx.schedule`, when the profile mounts the Host task store.
+   *
+   * Shipped Web compositions mount it (`dsh-web-app` composes `@deepseek-ai/dsh-schedule`),
+   * but a bare CLI profile may not, and every method here is used through this guard
+   * so a missing service degrades to a capability error instead of a crash.
+   */
+  private scheduleService(): DshScheduleService | undefined {
+    return serviceOf<DshScheduleService>(this.ctx, 'schedule')
+  }
+
+  private requireScheduleService(): DshScheduleService {
+    const service = this.scheduleService()
+    if (service === undefined) {
+      throw new DshCapabilityError(
+        'schedule',
+        'this DSH profile provides no schedule service, so recurring tasks cannot be managed. '
+          + 'The @deepseek-ai/dsh-web-app bundle provides it through @deepseek-ai/dsh-schedule.',
+      )
+    }
+    return service
+  }
+
+  /**
+   * Refuse the host-global task surface under an owned scope.
+   *
+   * A scheduled task is a Host record: it has no owner session, `edit` reaches it by
+   * bare id, and its target may be any conversation on this instance. `session.scope:
+   * "owned"` exists to keep a handed-out token inside the sessions this endpoint
+   * created, and that promise cannot be kept for a record with no owner field — so
+   * the whole surface is refused rather than partially filtered.
+   */
+  private assertScheduleSurfaceAllowed(action: string): void {
+    if (this.config.session.scope !== 'owned') return
+    throw new Error(
+      `${action} is unavailable while session.scope is "owned": scheduled tasks are Host records with no `
+        + 'owning session, so they cannot be filtered to the sessions this endpoint created, and their '
+        + 'delivery target may name any conversation. Set session.scope: "all" to manage schedules, or keep '
+        + 'managing them in the DSH UI.',
+    )
   }
 
   /**
@@ -2108,6 +2168,203 @@ export class DshDriver {
       default:
         throw new Error(`unsupported goal action: ${String(request.action)}`)
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Scheduled automation
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create one Host scheduled task.
+   *
+   * The timing is given as an RRULE string (the canonical form the DSH UI writes),
+   * or as one of the two simple shorthands the service also accepts (`afterSeconds`
+   * for a one-shot, `everySeconds` for a fixed interval). Exactly one form is used;
+   * asking for two would leave which one wins to the implementation.
+   *
+   * The target decides where each delivery lands: an existing conversation
+   * (`session`), a conversation created on the first delivery and reused
+   * (`new_once`), or a fresh conversation per delivery (`new`).
+   */
+  async createScheduledTask(request: {
+    title: string
+    prompt: string
+    rrule?: string
+    afterSeconds?: number
+    everySeconds?: number
+    target?: 'session' | 'new_once' | 'new'
+    sessionId?: string
+    cwd?: string
+    agentPreset?: string
+  }): Promise<{ task: DshScheduleEntry }> {
+    this.assertScheduleSurfaceAllowed('schedule_create')
+    const service = this.requireScheduleService()
+    const title = request.title.trim()
+    const prompt = request.prompt.trim()
+    if (title === '') throw new Error('schedule_create needs a non-empty title')
+    if (title.length > MAX_SCHEDULE_TITLE_CHARS) {
+      throw new Error(`schedule_create title is ${title.length} characters; the harness accepts at most ${MAX_SCHEDULE_TITLE_CHARS}`)
+    }
+    if (prompt === '') throw new Error('schedule_create needs a non-empty prompt (the instruction delivered each time)')
+    const timing = scheduleTimingOf(request)
+
+    const targetKind = request.target ?? (request.sessionId === undefined ? 'new' : 'session')
+    const create = {
+      ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+      ...(request.agentPreset === undefined ? {} : { agentPreset: request.agentPreset }),
+    }
+    let target: DshScheduleTargetRequest
+    if (targetKind === 'session') {
+      if (request.sessionId === undefined) {
+        throw new Error('schedule_create target "session" needs sessionId (the conversation each delivery updates)')
+      }
+      await this.assertSessionVisible(request.sessionId, 'schedule_create')
+      target = { kind: 'session', sessionId: request.sessionId }
+    } else {
+      if (request.sessionId !== undefined) {
+        throw new Error(
+          `schedule_create target "${targetKind}" creates its own conversation, so it must not name sessionId`,
+        )
+      }
+      target = { kind: targetKind, ...(Object.keys(create).length === 0 ? {} : { create }) }
+    }
+
+    const task = await service.create({ title, prompt, timing, target })
+    return { task }
+  }
+
+  /**
+   * One page of Host scheduled tasks, active first by next occurrence.
+   *
+   * `active` filters by state: true keeps only active tasks, false only paused and
+   * ended ones. Absent returns everything.
+   */
+  async listScheduledTasks(request: {
+    active?: boolean
+    limit?: number
+    offset?: number
+  } = {}): Promise<DshScheduleListResult> {
+    this.assertScheduleSurfaceAllowed('schedule_list')
+    const service = this.requireScheduleService()
+    return await service.list({
+      ...(request.active === undefined ? {} : { active: request.active }),
+      limit: Math.max(1, Math.min(request.limit ?? DEFAULT_SCHEDULE_PAGE, MAX_SCHEDULE_PAGE)),
+      offset: Math.max(0, request.offset ?? 0),
+    })
+  }
+
+  /** One task by id, or a `found: false` answer for an id that no longer exists. */
+  async viewScheduledTask(request: { scheduleId: string }): Promise<{
+    found: boolean
+    id: string
+    task?: DshScheduleEntry
+  }> {
+    this.assertScheduleSurfaceAllowed('schedule_view')
+    const service = this.requireScheduleService()
+    const found = await service.view({ id: request.scheduleId })
+    if ('code' in found) return { found: false, id: request.scheduleId }
+    return { found: true, id: request.scheduleId, task: found }
+  }
+
+  /**
+   * Update or delete one task.
+   *
+   * `expectedUpdatedAt` is the lost-update guard: an update or delete whose task
+   * changed after that read reports a conflict and changes nothing. `active: false`
+   * pauses and `active: true` resumes — a resume needs a future occurrence, which is
+   * why the harness may refuse it for an exhausted rule.
+   */
+  async editScheduledTask(request: {
+    scheduleId: string
+    action: 'update' | 'delete'
+    title?: string
+    prompt?: string
+    rrule?: string
+    afterSeconds?: number
+    everySeconds?: number
+    target?: 'session' | 'new_once' | 'new'
+    sessionId?: string
+    cwd?: string
+    agentPreset?: string
+    active?: boolean
+    expectedUpdatedAt?: string | null
+  }): Promise<{
+    updated?: true
+    deleted?: true
+    found: boolean
+    conflict?: true
+    id: string
+    task?: DshScheduleEntry
+  }> {
+    this.assertScheduleSurfaceAllowed('schedule_edit')
+    const service = this.requireScheduleService()
+
+    if (request.action === 'delete') {
+      if (request.title !== undefined || request.prompt !== undefined || request.rrule !== undefined
+        || request.afterSeconds !== undefined || request.everySeconds !== undefined
+        || request.target !== undefined || request.sessionId !== undefined
+        || request.cwd !== undefined || request.agentPreset !== undefined || request.active !== undefined) {
+        throw new Error('schedule_edit action "delete" accepts no change fields; delete removes the task and its saved deliveries')
+      }
+      const result = await service.edit({
+        id: request.scheduleId,
+        action: 'delete',
+        ...(request.expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt: request.expectedUpdatedAt }),
+      })
+      return scheduleEditOutcome(request.scheduleId, result)
+    }
+
+    const patch: Record<string, unknown> = {}
+    if (request.title !== undefined) {
+      const title = request.title.trim()
+      if (title === '') throw new Error('schedule_edit title must not be empty')
+      if (title.length > MAX_SCHEDULE_TITLE_CHARS) {
+        throw new Error(`schedule_edit title is ${title.length} characters; the harness accepts at most ${MAX_SCHEDULE_TITLE_CHARS}`)
+      }
+      patch.title = title
+    }
+    if (request.prompt !== undefined) {
+      const prompt = request.prompt.trim()
+      if (prompt === '') throw new Error('schedule_edit prompt must not be empty')
+      patch.prompt = prompt
+    }
+    if (request.rrule !== undefined || request.afterSeconds !== undefined || request.everySeconds !== undefined) {
+      patch.timing = scheduleTimingOf(request)
+    }
+    if (request.active !== undefined) patch.active = request.active
+    if (request.target !== undefined || request.sessionId !== undefined || request.cwd !== undefined || request.agentPreset !== undefined) {
+      const targetKind = request.target ?? (request.sessionId === undefined ? undefined : 'session')
+      if (targetKind === undefined) {
+        throw new Error('schedule_edit: cwd/agentPreset only apply to a "new"/"new_once" target; pass target too')
+      }
+      if (targetKind === 'session') {
+        if (request.sessionId === undefined) throw new Error('schedule_edit target "session" needs sessionId')
+        await this.assertSessionVisible(request.sessionId, 'schedule_edit')
+        patch.target = { kind: 'session', sessionId: request.sessionId }
+      } else {
+        if (request.sessionId !== undefined) {
+          throw new Error(`schedule_edit target "${targetKind}" creates its own conversation, so it must not name sessionId`)
+        }
+        const create = {
+          ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+          ...(request.agentPreset === undefined ? {} : { agentPreset: request.agentPreset }),
+        }
+        patch.target = { kind: targetKind, ...(Object.keys(create).length === 0 ? {} : { create }) }
+      }
+    }
+    if (Object.keys(patch).length === 0) {
+      throw new Error(
+        'schedule_edit action "update" needs at least one change: title, prompt, rrule/afterSeconds/everySeconds, '
+          + 'target/sessionId/cwd/agentPreset, or active',
+      )
+    }
+    const result = await service.edit({
+      id: request.scheduleId,
+      action: 'update',
+      patch,
+      ...(request.expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt: request.expectedUpdatedAt }),
+    })
+    return scheduleEditOutcome(request.scheduleId, result)
   }
 
   private async toWorkspaceInfo(
@@ -6085,6 +6342,69 @@ function tailText(text: string, limit: number): string {
 function normalizeCommandLine(input: string): string {
   const trimmed = input.trim()
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+}
+
+/**
+ * Build the service timing from at most one caller-supplied form.
+ *
+ * Accepting several at once would silently prefer one; admitting exactly one keeps
+ * the reply explainable. `afterSeconds` is the "once, in N seconds" case and
+ * `everySeconds` the fixed-interval case; neither is expressible as an RRULE the
+ * caller would enjoy writing by hand.
+ */
+function scheduleTimingOf(request: {
+  rrule?: string
+  afterSeconds?: number
+  everySeconds?: number
+}): DshScheduleTiming {
+  const given = [
+    request.rrule === undefined ? undefined : 'rrule',
+    request.afterSeconds === undefined ? undefined : 'afterSeconds',
+    request.everySeconds === undefined ? undefined : 'everySeconds',
+  ].filter((entry): entry is string => entry !== undefined)
+  if (given.length === 0) {
+    throw new Error(
+      'a schedule needs one timing form: rrule (a DTSTART line and an RRULE line), afterSeconds (once, N seconds '
+        + 'from now), or everySeconds (a fixed interval)',
+    )
+  }
+  if (given.length > 1) {
+    throw new Error(`a schedule takes exactly one timing form; received ${given.join(', ')}`)
+  }
+  if (request.rrule !== undefined) {
+    const rrule = request.rrule.trim()
+    if (!rrule.includes('RRULE:')) {
+      throw new Error(
+        'schedule rrule must contain an RRULE line, e.g. "DTSTART;TZID=Asia/Singapore:20260901T080000'
+          + '\nRRULE:FREQ=DAILY;COUNT=3"',
+      )
+    }
+    return { kind: 'rrule', rrule }
+  }
+  if (request.afterSeconds !== undefined) {
+    if (!Number.isFinite(request.afterSeconds) || request.afterSeconds < 1) {
+      throw new Error('afterSeconds must be a positive number of seconds')
+    }
+    return { kind: 'after', after_seconds: request.afterSeconds }
+  }
+  const everySeconds = request.everySeconds as number
+  if (!Number.isFinite(everySeconds) || everySeconds < 1) {
+    throw new Error('everySeconds must be a positive number of seconds')
+  }
+  return { kind: 'every', every_seconds: everySeconds }
+}
+
+/** Project one `ScheduleEditResult` onto the shape the tool reports. */
+function scheduleEditOutcome(
+  id: string,
+  result: DshScheduleEditResult,
+): { updated?: true; deleted?: true; found: boolean; conflict?: true; id: string; task?: DshScheduleEntry } {
+  if ('code' in result) {
+    if (result.code === 'schedule_conflict') return { found: true, conflict: true, id }
+    return { found: false, id }
+  }
+  if ('deleted' in result) return { found: false, deleted: true, id }
+  return { found: true, updated: true, id, task: result }
 }
 
 /** Project the harness's `GoalView` onto the fields this endpoint reports. */

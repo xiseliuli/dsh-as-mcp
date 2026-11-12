@@ -6,6 +6,13 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.56.0
+
+- 在 session 组末尾新增 4 个工具（`schedule_create`、`schedule_list`、`schedule_view`、`schedule_edit`），工具面从 38 增至 42（该组从 21 增至 25）。它们包装 Host 的 `ctx.schedule` 服务，任务由 harness 自己存储与投递：每次触发都把 prompt 送到目标会话，无论本端点或任何客户端是否在线。`schedule_create` 必须且只能给一种时间形态——`rrule`（一行 `DTSTART` 加一行 `RRULE`，与 DSH「自动化」页面写出的 RFC 5545 子集相同）、`afterSeconds`（从现在起 N 秒后一次）、或 `everySeconds`（固定间隔）——`target` 取 `"session"`（更新已有会话，需要 `sessionId`）、`"new_once"`（首次投递新建会话并复用）、`"new"`（每次投递新建会话），后两者可带 `cwd`/`agentPreset`。同时给两种时间形态会被拒绝而不是悄悄取其一；`target` 为新建会话却又给了 `sessionId` 也会因自相矛盾被拒绝。`schedule_list` 分页列出任务（活动任务按下次触发在前，`limit` 1–200）；`schedule_view` 对不存在的 id 返回 `found: false` 而不是报错；`schedule_edit` 负责更新/删除，`active: false` 暂停、`true` 恢复，删除时拒绝任何改动字段。
+- **`session.scope` 为 `"owned"` 时整个 schedule 面被拒绝。** 定时任务是 Host 记录、没有所属会话，无法在其上表达归属过滤，而它的投递目标可以指向实例上的任意会话；错误信息会说明原因并指向 `scope: "all"`。修改结果用数据表达而不是抛错——`{ updated: true, task }`、`{ deleted: true }`、`{ found: false }`、`{ conflict: true }`——轮询调用方不必解析文本；`expectedUpdatedAt` 携带 harness 自己的 revision：过期编辑返回 `conflict: true` 且不做修改，不会覆盖用户刚在「自动化」页面改过的东西。
+- `dsh_info.harnessServices` 新增 `schedule` 探针（共 30 个，原为 29 个），`dsh_info.notes` 增加一段说明 Host 级属性与 owned 拒绝。无新增配置键：推送、两种传输、工具组与设置面板均不变。
+- 文档与测试：两份 README 增加 4 行工具表与「定时自动化 / Scheduled automation」小节（含 create → list → 暂停/恢复 → delete 流程与 owned 警告），`docs/CAPABILITY-GAPS.md` 更新为 42 工具 / 30 探针，`cordis.patch.yml` 把 session 组注释改为 25 个工具。`tests/schedule.test.ts` 钉住驱动契约（唯一时间形态、target 规则、分页上限、owned 拒绝、冲突/未找到以数据表达）；`tests/mcp-endpoint.test.ts` 钉住参数透传；`tests/availability.test.ts` 覆盖新的依赖能力。
+
 ## 0.55.0
 
 - 新增 3 个工具（`session_command_list`、`session_command`、`session_goal`），工具面从 35 增至 38，仍全在 session 组（该组从 18 增至 21）。斜杠命令**不消耗模型轮次**（注册表解析命令行后直接调用 handler），所以 `session_command` 就是「替人在 DSH 输入框里敲命令」的便宜一半：压缩长会话、导出日志、进入 plan 模式、设置目标。`session_command_list` 报出该会话 agent 能看到的全部命令（描述与输入提示），并用 `permitted` 标出本端点会执行哪些，而不是把被拒绝的隐藏掉；`session_command` 接受带或不带前导斜杠的命令行、参数写在同一字符串里（`"compact"`、`"/export"`、`"/goal <objective>"`、`"/plan off"`），执行走 harness 自己的命令注册表，与真人敲同一行的执行完全一致（回复带 harness 的 `commandId`、`ok`、handler 的 `text`，以及它记录的 `sourceEventSeq`）。放行集是显式的 `/compact`、`/plan`、`/goal`、`/export`，而不是「注册表里有什么就运行什么」：`/permission` 会改变会话的权限 preset（远程调用方不能给自己提权），`/feedback` 会写入用户自己的评审记录，两者在**任何 handler 运行之前**就被拒绝——被拒调用不向会话日志写任何东西；未注册的名字会被拒绝并列出放行集。handler 报错时返回 `ok: false` 与文本，注册表未接收的名字/参数返回「什么都没写进日志」的错误。

@@ -62,6 +62,23 @@ export function stubDriver(overrides: Partial<McpDriver> = {}): McpDriver {
       text: `ran ${command}`,
     }),
     sessionGoal: async ({ sessionId }) => ({ sessionId, goal: null }),
+    createScheduledTask: async ({ title, prompt }) => ({
+      task: {
+        id: 'schedule-1',
+        kind: 'every',
+        title,
+        prompt,
+        scheduledAt: '2026-01-01T00:00:00.000Z',
+        status: 'active',
+        target: { kind: 'new', create: {} },
+        everySeconds: 3600,
+      },
+    }),
+    listScheduledTasks: async () => ({ items: [], shown: 0, total: 0, limit: 20, offset: 0 }),
+    viewScheduledTask: async ({ scheduleId }) => ({ found: false, id: scheduleId }),
+    editScheduledTask: async ({ scheduleId, action }) => (action === 'delete'
+      ? { found: false, deleted: true, id: scheduleId }
+      : { found: true, updated: true, id: scheduleId }),
     mutateSessionGoal: async ({ sessionId, action }) => ({
       sessionId,
       action,

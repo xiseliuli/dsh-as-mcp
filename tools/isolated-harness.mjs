@@ -62,6 +62,13 @@ function parseArgs(argv) {
       options['keep-home'] = true
       continue
     }
+    if (key === 'scope') {
+      const scope = argv[index + 1]
+      if (scope !== 'all' && scope !== 'owned') throw new Error('--scope must be "all" or "owned"')
+      options.scope = scope
+      index += 1
+      continue
+    }
     const value = argv[index + 1]
     if (value === undefined || value.startsWith('--')) throw new Error(`${arg} needs a value`)
     options[key] = value
@@ -145,6 +152,9 @@ async function start(options) {
     stdio: 'ignore',
   })
   execFileSync(RUNTIME_CLI, ['plugin', '--profile', PROFILE, 'add', tarball], { env, stdio: 'ignore' })
+  // `--scope owned` boots the containment mode so the schedule boundary can be
+  // verified against a real profile rather than only in unit tests.
+  const scopeLine = options.scope === undefined ? '' : `    session:\n      scope: ${options.scope}\n`
   writeFileSync(
     join(profileDir, 'cordis.patch.yml'),
     `# Live-verification overlay: a deterministic plugin port for the probe scripts.
@@ -156,7 +166,7 @@ async function start(options) {
       port: ${pluginPort}
       path: /mcp
       mountOnWebServer: false
-`,
+${scopeLine}`,
   )
 
   const log = join(home, 'harness.log')
@@ -187,6 +197,7 @@ async function start(options) {
     pid: child.pid,
     home,
     profile: PROFILE,
+    scope: options.scope ?? 'all',
     tarball,
     pluginPort,
     webPort,

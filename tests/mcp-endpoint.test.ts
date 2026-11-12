@@ -247,6 +247,70 @@ describe('MCP Streamable HTTP endpoint', () => {
     }
   })
 
+  it('routes the schedule arguments through to the driver', async () => {
+    const calls: Record<string, unknown>[] = []
+    const recording = await boot(stubDriver({
+      createScheduledTask: async (request) => {
+        calls.push({ tool: 'schedule_create', ...request })
+        return {
+          task: {
+            id: 'schedule-1', kind: 'every', title: request.title, prompt: request.prompt,
+            scheduledAt: '2026-01-01T00:00:00.000Z', status: 'active', target: { kind: 'new', create: {} },
+          },
+        }
+      },
+      listScheduledTasks: async (request = {}) => {
+        calls.push({ tool: 'schedule_list', ...request })
+        return { items: [], shown: 0, total: 0, limit: request.limit ?? 20, offset: request.offset ?? 0 }
+      },
+      viewScheduledTask: async (request) => {
+        calls.push({ tool: 'schedule_view', ...request })
+        return { found: false, id: request.scheduleId }
+      },
+      editScheduledTask: async (request) => {
+        calls.push({ tool: 'schedule_edit', ...request })
+        return { found: false, deleted: true, id: request.scheduleId }
+      },
+    }))
+    try {
+      const created = await callTool(recording.url, 'schedule_create', {
+        title: 'hourly sweep',
+        prompt: 'check the build',
+        everySeconds: 3600,
+        target: 'session',
+        sessionId: 'session-1',
+      })
+      expect(JSON.parse(created.text)).toMatchObject({ task: { id: 'schedule-1' } })
+      await callTool(recording.url, 'schedule_list', { active: false, limit: 5, offset: 10 })
+      await callTool(recording.url, 'schedule_view', { scheduleId: 'schedule-1' })
+      await callTool(recording.url, 'schedule_edit', {
+        scheduleId: 'schedule-1',
+        action: 'delete',
+        expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
+      })
+      expect(calls).toEqual([
+        {
+          tool: 'schedule_create',
+          title: 'hourly sweep',
+          prompt: 'check the build',
+          everySeconds: 3600,
+          target: 'session',
+          sessionId: 'session-1',
+        },
+        { tool: 'schedule_list', active: false, limit: 5, offset: 10 },
+        { tool: 'schedule_view', scheduleId: 'schedule-1' },
+        {
+          tool: 'schedule_edit',
+          scheduleId: 'schedule-1',
+          action: 'delete',
+          expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ])
+    } finally {
+      await recording.stop()
+    }
+  })
+
   it('reports a harness failure as a tool error, not a transport error', async () => {
     const failing = await boot(
       stubDriver({
@@ -385,6 +449,7 @@ describe('MCP Streamable HTTP endpoint', () => {
         'session_prompt', 'session_messages', 'session_tool_result', 'session_queue', 'session_cancel',
         'session_fork', 'session_rename', 'session_set_model', 'session_archive', 'session_unarchive',
         'session_pin', 'session_unpin', 'session_command_list', 'session_command', 'session_goal',
+        'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
       ],
       files: ['file_read', 'file_read_image', 'file_write', 'file_edit', 'file_list'],
       shell: ['shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list'],
@@ -400,7 +465,7 @@ describe('MCP Streamable HTTP endpoint', () => {
       const response = await rpc(full.url, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} })
       const body = (await readJsonRpc(response, 60)) as { result?: { tools?: { name: string }[] } }
       const all = (body.result?.tools ?? []).map((tool) => tool.name)
-      expect(all).toHaveLength(38)
+      expect(all).toHaveLength(42)
       expect(all).toContain('dsh_info')
       for (const names of Object.values(groups)) for (const name of names) expect(all).toContain(name)
     } finally {

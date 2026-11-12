@@ -16,6 +16,7 @@ const FULL = {
   agentResolve: true,
   commands: true,
   goals: true,
+  schedule: true,
   sessionViews: true,
   sessionArchive: true,
   sessionPin: true,
@@ -45,9 +46,9 @@ describe('describeToolAvailability', () => {
     const report = describeToolAvailability(allOn().tools, FULL, allOn())
     expect(report.unavailable).toEqual([])
     // dsh_info plus the 37 other registered tools (38 advertised in total).
-    expect(report.available).toBe(38)
-    expect(report.availableTools).toHaveLength(38)
-    expect(new Set(report.availableTools).size).toBe(38)
+    expect(report.available).toBe(42)
+    expect(report.availableTools).toHaveLength(42)
+    expect(new Set(report.availableTools).size).toBe(42)
     expect(report.availableTools[0]).toBe('dsh_info')
     expect(report.notes ?? []).toEqual([])
   })
@@ -59,11 +60,11 @@ describe('describeToolAvailability', () => {
       'shell_run', 'shell_start', 'shell_output', 'shell_kill', 'shell_list',
     ])
     expect(report.unavailable[0]?.reason).toMatch(/tools\.shell: false/)
-    expect(report.available).toBe(33)
+    expect(report.available).toBe(37)
     expect(report.availableTools).not.toContain('shell_run')
   })
 
-  it('counts the 21-tool session group, including the worktree, archive and orchestration additions', () => {
+  it('counts the 25-tool session group, including the worktree, archive, orchestration and schedule additions', () => {
     const config = allOn({ session: false })
     const report = describeToolAvailability(config.tools, FULL, config)
     const sessionTools = [
@@ -71,6 +72,7 @@ describe('describeToolAvailability', () => {
       'session_prompt', 'session_messages', 'session_tool_result', 'session_queue', 'session_cancel', 'session_fork',
       'session_rename', 'session_set_model', 'session_archive', 'session_unarchive', 'session_pin', 'session_unpin',
       'session_command_list', 'session_command', 'session_goal',
+      'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
     ]
     expect(report.unavailable.map((entry) => entry.tool)).toEqual(sessionTools)
     expect(report.available).toBe(17)
@@ -129,6 +131,8 @@ describe('describeToolAvailability', () => {
     expect(report.unavailable.map((entry) => entry.tool)).toEqual([
       'worktree_create', 'worktree_restore', 'session_command_list', 'session_command', 'session_goal',
     ])
+    // The schedule tools do not need an agent bridge (they are Host records), so a
+    // missing resolveAgent leaves them available.
     expect(report.unavailable[0]?.reason).toMatch(/sessionController\.resolveAgent\(\)/)
   })
 
@@ -153,7 +157,7 @@ describe('describeToolAvailability', () => {
     const report = describeToolAvailability(allOn().tools, { ...FULL, sessionViews: false }, allOn())
     // Neither tool is blocked: the views are additive diagnostics.
     expect(report.unavailable).toEqual([])
-    expect(report.available).toBe(38)
+    expect(report.available).toBe(42)
     expect(report.notes?.join('\n')).toMatch(/session_status and session_list cannot report workingDirectory/)
   })
 })

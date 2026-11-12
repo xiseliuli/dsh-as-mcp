@@ -255,6 +255,10 @@ schema-aware client can read the object directly instead of parsing JSON out of 
 | `session_command_list` | The slash commands this session's agent can run — each with a one-line description, an optional `input` hint and a `permitted` flag — so a caller can see that a command exists while this endpoint deliberately will not run it (the admitted set is `/compact`, `/plan`, `/goal`, `/export`; `/permission` and `/feedback` are refused on purpose). A command executes without a model turn — the handler is invoked directly — which makes this the cheap way to compact a long session, export its log, enter plan mode or set a goal, exactly as a human typing into the DSH composer would. Read-only; run one with `session_command`. |
 | `session_command` | Execute one slash command against a session's agent without spending a model turn, as if the human had typed it into the DSH composer: give the `command` with or without its leading slash, with its arguments in the same string (`"compact"`, `"/export"`, `"/goal <objective>"`, `"/plan off"`). The run goes through the harness's own command registry, so it is the same execution a human typing the line produces and the session log records it; the reply carries the harness's `commandId`, `ok` (`false` when the handler itself reported an error result), the handler's `text` and the `sourceEventSeq` it recorded when it reported one. Only the user-plane commands are admitted (`/compact`, `/plan`, `/goal`, `/export`); `/permission` (which would change the session permission preset) and `/feedback` (which would write the user's own review records) are refused before any handler runs, so a refused call writes nothing to the session log, and a name that is not registered on this profile is refused with the admitted set listed. A name or argument the registry did not admit is an error saying nothing was logged. Call `session_command_list` first to see the exact names and the input hint this agent accepts. |
 | `session_goal` | Read or mutate the session's durable goal — the long-running objective the harness's round driver keeps advancing across turns, which is how a caller delegates multi-hour work instead of holding one turn open. `action` is `get` (which returns the `goal` or `null`), or one of `create` (needs `objective`), `edit` (needs `objective` and/or `maxGoalRounds`), `pause`, `resume`, `complete`, `clear`; every action except `create` acts on the goal that exists now, so its ref comes from a read rather than from the caller. Pass `expectedRevision` (from a previous read) to refuse a mutation whose goal changed underneath you — the equivalent of the DSH UI's conflict handling. A goal reports `id`, `revision`, `objective`, `phase` (`active`/`paused`/`blocked`/`complete`), `activation` (`armed`/`disarmed`), `maxGoalRounds`, `roundsStarted`, `blockedReason` when blocked, and `createdAt`/`updatedAt`; `clear` returns `goal: null` (and `cleared: true`), while `complete` returns the completed goal. |
+| `schedule_create` | Create a **Host** scheduled task: an instruction the harness delivers to a conversation at each occurrence, whether or not this endpoint or any client is connected. Give exactly one timing form — `rrule` (one `DTSTART` line plus one `RRULE` line, the RFC 5545 subset the DSH Automation page writes, e.g. `"DTSTART;TZID=Asia/Singapore:20260901T080000\nRRULE:FREQ=DAILY;COUNT=3"`), `afterSeconds` for a one-shot N seconds from now, or `everySeconds` for a fixed interval. `target` decides where each delivery lands: `"session"` updates an existing conversation (needs `sessionId`), `"new_once"` creates one conversation on the first delivery and reuses it, `"new"` starts a fresh conversation every time; the two new-conversation targets accept `cwd` and `agentPreset`. The default target is `"session"` when `sessionId` is given and `"new"` otherwise. The reply is the stored task with its generated id, `scheduledAt`, `status` and timing variant fields. Tasks are Host records, not session records, so this surface is refused while `session.scope` is `"owned"`. |
+| `schedule_list` | One page of Host scheduled tasks, active ones first by next occurrence and paused/ended ones after. `active: true` keeps only active tasks, `false` only paused and ended ones; absent returns every task. `limit` is 1–200 (default 20) and `offset` skips rows. Each row carries the task `id`, `title`, `prompt`, its timing fields, `scheduledAt`, `status`, `target` and the last delivery once it has fired. Lists tasks any session created; refused while `session.scope` is `"owned"`. |
+| `schedule_view` | One Host scheduled task by `scheduleId`, with the same fields `schedule_list` reports plus its delivery target detail. An id that no longer exists answers `{ "found": false, "id": ... }` rather than an error, so a cleanup loop stays idempotent. Refused while `session.scope` is `"owned"`. |
+| `schedule_edit` | Change or remove one Host scheduled task. `action: "update"` needs at least one of `title`, `prompt`, a timing form (`rrule`, `afterSeconds` or `everySeconds`), a `target` (with `sessionId` for `"session"`, or `cwd`/`agentPreset` for `"new"`/`"new_once"`), or `active` — `false` pauses the task, `true` resumes it, and a resume may need a new timing when the old rule is exhausted. `action: "delete"` removes the task and its saved delivery records and accepts no change fields. `expectedUpdatedAt` is the lost-update guard: if the task changed after that read the call answers `conflict: true` and changes nothing. Outcomes are data, not errors: `{ updated: true, task }`, `{ deleted: true }`, `{ found: false }` or `{ conflict: true }`. Refused while `session.scope` is `"owned"`. |
 | `session_usage` | Token usage per session (its subagents included by default): exact bucket counts, a per-model breakdown, optional per-turn detail, and money when a price plugin is installed. Pass `sessionIds` to tally several known sessions in one receipt, or `cwd` to total every session that ran in one workspace directory. |
 | `file_read` | Read a UTF-8 file through DSH's filesystem service. Bounded by a byte limit; `offset`/`nextOffset` page through a larger file (both are **byte** offsets, so an offset at or past EOF is an empty complete read), `maxBytes` asks for a smaller window so reading a slice costs less, and `sha256: true` returns the whole file's hash as the compare-and-swap value for a later write/edit. |
 | `file_read_image` | Read an image (png/jpeg/gif/webp/bmp, detected from the bytes) and return it as an MCP image block, preceded by a metadata block (path, mimeType, bytes), so you can look at a screenshot or chart instead of guessing. Capped at 8 MiB. |
@@ -340,6 +344,32 @@ goal's phase and revision come from `session_goal { action: "get" }`, and the
 goal is a poll or a subscription rather than a prompt per turn. A mutation without `expectedRevision`
 acts on the goal that exists at that moment; pass the revision a read returned when two supervisors
 could race.
+
+### Scheduled automation
+
+A scheduled task is the one surface here that outlives the process: the harness stores it and delivers
+its prompt at each occurrence, so it keeps working when no MCP client is connected. Tasks are **Host**
+records rather than session records — `schedule_list` shows tasks any session created, and `target`
+decides whether a delivery updates one conversation, reuses a conversation created on first delivery, or
+starts a fresh one each time:
+
+```
+schedule_create { title: "Daily dependency check", prompt: "Run the dependency audit and report",
+                  rrule: "DTSTART;TZID=Asia/Singapore:20260901T080000\nRRULE:FREQ=DAILY",
+                  target: "new_once", cwd: "/repo" }
+schedule_create { title: "Check the build in ten minutes", prompt: "Check whether the build is green",
+                  afterSeconds: 600, target: "session", sessionId }
+  -> schedule_list { active: true }                       # id, next occurrence, status
+  -> schedule_edit { scheduleId, action: "update", active: false }   # pause
+  -> schedule_edit { scheduleId, action: "update", title: "..." , everySeconds: 3600 }
+  -> schedule_edit { scheduleId, action: "delete" }       # removes the task and its deliveries
+```
+
+Because a Host record has no owning session, this whole surface is **refused while `session.scope` is
+`"owned"`**: an ownership filter cannot be expressed on it, and a task's delivery target may name any
+conversation on the instance. The refusal says so and points at `scope: "all"`. `expectedUpdatedAt`
+carries the harness's own revision, so a stale edit answers `conflict: true` and changes nothing instead
+of overwriting what the user just changed in the Automation page.
 
 ## Worktrees
 

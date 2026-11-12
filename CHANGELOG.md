@@ -6,6 +6,41 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.56.0
+
+- Four new tools at the end of the `session` group — `schedule_create`, `schedule_list`,
+  `schedule_view` and `schedule_edit` — bring the surface from 38 to 42 (the group from 21 to 25).
+  They wrap the Host `ctx.schedule` service, so a task is stored and delivered by the harness itself:
+  its prompt fires at each occurrence whether or not this endpoint, or any client, is connected.
+  `schedule_create` takes exactly one timing form — `rrule` (one `DTSTART` line plus one `RRULE` line,
+  the same RFC 5545 subset the DSH Automation page writes), `afterSeconds` for a one-shot N seconds
+  from now, or `everySeconds` for a fixed interval — and a `target` of `"session"` (update an existing
+  conversation, needs `sessionId`), `"new_once"` (create one conversation on the first delivery and
+  reuse it) or `"new"` (a fresh conversation per delivery), with `cwd`/`agentPreset` on the two
+  new-conversation targets. A request that names two timing forms is refused rather than silently
+  preferring one, and a new-conversation target that also names a `sessionId` is refused as
+  self-contradicting. `schedule_list` pages tasks (active first by next occurrence, `limit` 1–200);
+  `schedule_view` answers `found: false` for a missing id instead of an error; `schedule_edit`
+  updates or deletes, pauses with `active: false` and resumes with `active: true`, and refuses change
+  fields on a delete.
+- **The whole schedule surface is refused while `session.scope` is `"owned"`.** A scheduled task is a
+  Host record with no owning session, so an ownership filter cannot be expressed on it, and its
+  delivery target may name any conversation on the instance; the error says exactly that and points at
+  `scope: "all"`. Mutation outcomes are data rather than errors — `{ updated: true, task }`,
+  `{ deleted: true }`, `{ found: false }`, `{ conflict: true }` — so a polling caller can act without
+  parsing text, and `expectedUpdatedAt` carries the harness's own revision: a stale edit answers
+  `conflict: true` and changes nothing instead of overwriting what the user just changed in the
+  Automation page.
+- `dsh_info.harnessServices` gained a `schedule` probe (30 probes, was 29) and `dsh_info.notes` a
+  paragraph on the Host-global nature and the owned-scope refusal. No new configuration keys: the
+  push surface, both transports, the tool groups and the settings panel are unchanged.
+- Docs and tests: both READMEs gain four tool rows and a "Scheduled automation" section (with the
+  create → list → pause/resume → delete flow and the owned-scope warning), `docs/CAPABILITY-GAPS.md`
+  moves to 42 tools / 30 probes, and `cordis.patch.yml` restates the session group as 25 tools.
+  `tests/schedule.test.ts` pins the driver contract (one timing form, target rules, page bounds, the
+  owned-scope refusal, conflict/miss as data); `tests/mcp-endpoint.test.ts` pins argument routing;
+  `tests/availability.test.ts` covers the new required capability.
+
 ## 0.55.0
 
 - Three new tools in the `session` group — `session_command_list`, `session_command` and

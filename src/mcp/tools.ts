@@ -77,6 +77,10 @@ export type McpDriver = Pick<
   | 'runSessionCommand'
   | 'sessionGoal'
   | 'mutateSessionGoal'
+  | 'createScheduledTask'
+  | 'listScheduledTasks'
+  | 'viewScheduledTask'
+  | 'editScheduledTask'
   | 'updateQueue'
   | 'readQueue'
   | 'probeSessionSearch'
@@ -405,6 +409,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           'session_create { worktree } and worktree_create/worktree_restore need a worktrees service (the forge bundle in DSH Desktop/Web); harnessServices.worktrees reports it. A workspaceId-created session that enters a worktree keeps its workspace group and works in the new checkout (a cwd-only session stays ungrouped); session_status.workingDirectory and session_list { includeWorktree } show where each session is working.',
           'session_archive/unarchive and session_pin/unpin write the same registry sets the DSH sidebar uses; session_list reports each row\'s archived and pinned flags. The harness has no session delete, and these tools do not add one.',
           'Slash commands execute without a model turn: session_command_list names what this session accepts and session_command runs one. Only the user-plane commands are admitted (/compact, /plan, /goal, /export); /permission and /feedback are refused before any handler runs, and a refused call writes nothing to the session log.',
+          'Scheduled tasks (schedule_*) are Host records, not session records: the harness delivers the prompt at each occurrence whether or not anyone is connected, and the reply carries the generated id plus the first occurrence. They are refused while session.scope is "owned", because a Host record has no owning session to filter on.',
           'session_goal reads and mutates the session\'s durable goal (the round driver advances it across turns). Mutations carry the harness\'s own goal revision, so pass expectedRevision from a read to refuse a goal that changed underneath you.',
           ...(feeds === undefined ? [] : ['Push feeds: modern clients open one subscriptions/listen stream and name resources — dsh://sessions, dsh://session/<id>/turn|events|assistant|status|projections, dsh://jobs, dsh://jobs/<id>. 2025-era clients get the same notifications on a stateful session\'s GET SSE stream after resources/subscribe. Reads return JSON; event and assistant feeds carry a monotonic seq so a client can drop repeats.']),
           'session_prompt waits for the turn to settle by default and returns the agent reply plus its tool calls.',
@@ -1451,6 +1456,157 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           ...(args.expectedRevision === undefined ? {} : { expectedRevision: args.expectedRevision }),
         }))
       }),
+    )
+
+    server.registerTool(
+      'schedule_create',
+      {
+        title: 'Create a scheduled DSH task',
+        description:
+          'Create a Host-level scheduled task: an instruction the harness delivers to a conversation at each '
+          + 'occurrence, whether or not this endpoint is running. Give exactly one timing form — `rrule` (one '
+          + 'DTSTART line plus one RRULE line, the same RFC 5545 subset the DSH Automation page writes), '
+          + '`afterSeconds` for a one-shot N seconds from now, or `everySeconds` for a fixed interval. `target` '
+          + 'decides where each delivery lands: "session" updates an existing conversation (needs `sessionId`), '
+          + '"new_once" creates one conversation on the first delivery and reuses it, "new" starts a fresh '
+          + 'conversation every time; the two new-conversation targets accept `cwd` and `agentPreset`. Tasks '
+          + 'belong to the Host, not to a session, so this surface is refused while session.scope is "owned" — '
+          + 'a Host record has no owning session to filter on. The reply is the stored task with its generated '
+          + 'id, first occurrence and status.',
+        inputSchema: z.object({
+          title: z
+            .string()
+            .min(1)
+            .max(120)
+            .describe('Short name for the task, at most 120 characters (action plus object, no ids).'),
+          prompt: z.string().min(1).describe('Instruction delivered to the target conversation each time.'),
+          rrule: z
+            .string()
+            .optional()
+            .describe('One DTSTART line and one RRULE line (RFC 5545 subset), e.g. "DTSTART;TZID=Asia/Singapore:20260901T080000\\nRRULE:FREQ=DAILY;COUNT=3".'),
+          afterSeconds: z
+            .number()
+            .positive()
+            .optional()
+            .describe('One-shot timing: deliver once, this many seconds from now.'),
+          everySeconds: z
+            .number()
+            .positive()
+            .optional()
+            .describe('Fixed-interval timing: deliver every this many seconds.'),
+          target: z
+            .enum(['session', 'new_once', 'new'])
+            .optional()
+            .describe('Where deliveries land. Defaults to "session" when sessionId is given, otherwise "new".'),
+          sessionId: z.string().optional().describe('Existing conversation to update (target "session").'),
+          cwd: z.string().optional().describe('Directory for a created conversation (target "new"/"new_once").'),
+          agentPreset: z.string().optional().describe('Agent preset for a created conversation.'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('schedule_create', log, async (args) => ok(await driver.createScheduledTask({
+        title: args.title,
+        prompt: args.prompt,
+        ...(args.rrule === undefined ? {} : { rrule: args.rrule }),
+        ...(args.afterSeconds === undefined ? {} : { afterSeconds: args.afterSeconds }),
+        ...(args.everySeconds === undefined ? {} : { everySeconds: args.everySeconds }),
+        ...(args.target === undefined ? {} : { target: args.target }),
+        ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
+        ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+        ...(args.agentPreset === undefined ? {} : { agentPreset: args.agentPreset }),
+      }))),
+    )
+
+    server.registerTool(
+      'schedule_list',
+      {
+        title: 'List scheduled DSH tasks',
+        description:
+          'One page of Host scheduled tasks, active ones first by next occurrence and paused/ended ones after. '
+          + '`active: true` keeps only active tasks, `false` only paused and ended ones; absent returns every '
+          + 'task. Each row carries the task id, title, prompt, its timing fields, `scheduledAt`, status, target '
+          + 'and the last delivery when it has fired. Tasks are Host records: this lists tasks any session '
+          + 'created, and it is refused while session.scope is "owned".',
+        inputSchema: z.object({
+          active: z.boolean().optional().describe('Filter by state: true active only, false paused/ended only.'),
+          limit: z.number().int().positive().optional().describe('Page size, 1-200 (default 20).'),
+          offset: z.number().int().nonnegative().optional().describe('Rows to skip.'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('schedule_list', log, async (args) => ok(await driver.listScheduledTasks({
+        ...(args.active === undefined ? {} : { active: args.active }),
+        ...(args.limit === undefined ? {} : { limit: args.limit }),
+        ...(args.offset === undefined ? {} : { offset: args.offset }),
+      }))),
+    )
+
+    server.registerTool(
+      'schedule_view',
+      {
+        title: 'Read one scheduled DSH task',
+        description:
+          'One Host scheduled task by id, with the same fields schedule_list reports plus its delivery target '
+          + 'detail. An id that no longer exists answers `{ "found": false, "id": ... }` rather than an error, '
+          + 'so a cleanup loop can be idempotent. Refused while session.scope is "owned".',
+        inputSchema: z.object({
+          scheduleId: z.string().min(1).describe('Task id from schedule_create or schedule_list.'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      guard('schedule_view', log, async (args) => ok(await driver.viewScheduledTask({
+        scheduleId: args.scheduleId,
+      }))),
+    )
+
+    server.registerTool(
+      'schedule_edit',
+      {
+        title: 'Update or delete a scheduled DSH task',
+        description:
+          'Change or remove one Host scheduled task. action "update" needs at least one of `title`, `prompt`, a '
+          + 'timing form (`rrule`, `afterSeconds` or `everySeconds`), a `target` (with `sessionId` for "session", '
+          + 'or `cwd`/`agentPreset` for "new"/"new_once"), or `active` — `false` pauses the task and `true` '
+          + 'resumes it (a resume needs a future occurrence, so supply a new timing if the old rule is '
+          + 'exhausted). action "delete" removes the task and its saved delivery records and accepts no change '
+          + 'fields. `expectedUpdatedAt` is the lost-update guard: if the task changed after that read, the call '
+          + 'answers `conflict: true` and changes nothing. Refused while session.scope is "owned".',
+        inputSchema: z.object({
+          scheduleId: z.string().min(1).describe('Task id from schedule_create or schedule_list.'),
+          action: z.enum(['update', 'delete']).describe('update changes fields; delete removes the task.'),
+          title: z.string().min(1).max(120).optional().describe('New title.'),
+          prompt: z.string().min(1).optional().describe('New instruction.'),
+          rrule: z.string().optional().describe('New recurrence (DTSTART + RRULE lines).'),
+          afterSeconds: z.number().positive().optional().describe('New one-shot timing, seconds from now.'),
+          everySeconds: z.number().positive().optional().describe('New fixed-interval timing, seconds.'),
+          target: z.enum(['session', 'new_once', 'new']).optional().describe('New delivery target kind.'),
+          sessionId: z.string().optional().describe('Existing conversation for target "session".'),
+          cwd: z.string().optional().describe('Directory for a created conversation.'),
+          agentPreset: z.string().optional().describe('Agent preset for a created conversation.'),
+          active: z.boolean().optional().describe('false pauses the task, true resumes it.'),
+          expectedUpdatedAt: z
+            .string()
+            .nullable()
+            .optional()
+            .describe('Refuse the change unless the task still carries this updatedAt (null matches a task never updated).'),
+        }),
+        annotations: { openWorldHint: false },
+      },
+      guard('schedule_edit', log, async (args) => ok(await driver.editScheduledTask({
+        scheduleId: args.scheduleId,
+        action: args.action,
+        ...(args.title === undefined ? {} : { title: args.title }),
+        ...(args.prompt === undefined ? {} : { prompt: args.prompt }),
+        ...(args.rrule === undefined ? {} : { rrule: args.rrule }),
+        ...(args.afterSeconds === undefined ? {} : { afterSeconds: args.afterSeconds }),
+        ...(args.everySeconds === undefined ? {} : { everySeconds: args.everySeconds }),
+        ...(args.target === undefined ? {} : { target: args.target }),
+        ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
+        ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+        ...(args.agentPreset === undefined ? {} : { agentPreset: args.agentPreset }),
+        ...(args.active === undefined ? {} : { active: args.active }),
+        ...(args.expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt: args.expectedUpdatedAt }),
+      }))),
     )
   }
 
