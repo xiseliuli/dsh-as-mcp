@@ -1065,6 +1065,10 @@ write made in either is visible in the other without a reload. The Plugins-page 
 only while the host serves this entry's form, exactly like the settings section; a host whose
 Plugins page declares no such seat simply shows no cell, and the settings entry is unaffected.
 
+Below the HTTP client configuration, the panel also offers a copyable Claude Code **stdio · channel** configuration
+(`npx -y dsh-as-mcp@<version> --channel`) and its `claude --dangerously-load-development-channels server:dsh`
+launch command; see *Claude Code channel* above.
+
 The panel covers every setting including the `agentTools.allow` and `agentTools.deny` lists,
 which are edited as comma-separated text. Both are ordinary `string[]` values, so an entry with a
 comma in it cannot be expressed here; use the configuration file for that.

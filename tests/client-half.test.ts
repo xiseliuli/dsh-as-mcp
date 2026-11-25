@@ -8,7 +8,7 @@ import { GROUPS, formatList, parseList, parseNumberDraft, readPath } from '../sr
 import { dialableEndpoint, endpointUrl } from '../src/client/snippet.js'
 import { normalizeConfig } from '../src/config.js'
 import { en, zh } from '../src/client/locales.js'
-import { clientSnippet, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from '../src/client/snippet.js'
+import { clientSnippet, maskSecret, sourceLabel, stdioChannelSnippet, TOKEN_PLACEHOLDER } from '../src/client/snippet.js'
 
 const run = promisify(execFile)
 const ROOT = join(__dirname, '..')
@@ -36,6 +36,7 @@ const SEEDED = [
 let bundle = ''
 let manifest: {
   name: string
+  version: string
   scripts: Record<string, string>
   exports: Record<string, unknown>
   dsh?: { client?: { platform?: string } }
@@ -408,5 +409,54 @@ describe('which endpoint URL the panel offers', () => {
       .toBe('http://127.0.0.1:8790/mcp')
     expect(dialableEndpoint({ ...base, listening: true, statusUrl: '42' }))
       .toBe('http://127.0.0.1:8790/mcp')
+  })
+})
+
+describe('the Claude Code stdio channel snippet', () => {
+  const DEFAULT_URL = 'http://127.0.0.1:8790/mcp'
+  const TOKEN = 'Zx9-real-token-value'
+  const parse = (text: string) => JSON.parse(text).mcpServers.dsh as Record<string, unknown>
+
+  it('writes no env for the default endpoint, and pins the version', () => {
+    expect(parse(stdioChannelSnippet({ url: DEFAULT_URL, version: '0.61.1' }))).toEqual({
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'dsh-as-mcp@0.61.1', '--channel'],
+    })
+  })
+
+  it('names only the URL for another loopback address, never a token', () => {
+    for (const url of ['http://127.0.0.1:9000/mcp', 'http://localhost:8790/mcp', 'http://[::1]:8790/mcp']) {
+      const entry = parse(stdioChannelSnippet({ url, version: '0.61.1', token: TOKEN }))
+      expect(entry.env).toEqual({ DSH_AS_MCP_URL: url })
+    }
+  })
+
+  it('carries the token for a non-loopback endpoint: real when copied, masked when shown', () => {
+    const url = 'http://192.168.1.20:8790/mcp'
+    const copied = stdioChannelSnippet({ url, version: '0.61.1', token: TOKEN })
+    const shown = stdioChannelSnippet({ url, version: '0.61.1', token: maskSecret(TOKEN) })
+    expect(parse(copied).env).toEqual({ DSH_AS_MCP_URL: url, DSH_AS_MCP_TOKEN: TOKEN })
+    expect(shown).not.toContain(TOKEN)
+    expect((parse(shown).env as Record<string, string>).DSH_AS_MCP_TOKEN).toBe(maskSecret(TOKEN))
+  })
+
+  it('uses the placeholder for a non-loopback endpoint whose token is unknown', () => {
+    const entry = parse(stdioChannelSnippet({ url: 'https://dsh.example.com/mcp', version: '0.61.1' }))
+    expect(entry.env).toEqual({ DSH_AS_MCP_URL: 'https://dsh.example.com/mcp', DSH_AS_MCP_TOKEN: TOKEN_PLACEHOLDER })
+  })
+
+  it('falls back to @latest when no version is known', () => {
+    for (const version of [undefined, '']) {
+      expect(parse(stdioChannelSnippet({ url: DEFAULT_URL, version })).args).toEqual(['-y', 'dsh-as-mcp@latest', '--channel'])
+    }
+  })
+
+  it('ships the group in the bundle with the build-time version and the launch command', () => {
+    expect(bundle).toContain('client.stdio.title')
+    expect(bundle).toContain('claude --dangerously-load-development-channels server:dsh')
+    expect(bundle).toContain(`"${manifest.version}"`)
+    expect(zh['client.stdio.title']).toContain('Claude Code')
+    expect(en['client.stdio.title']).toContain('Claude Code')
   })
 })

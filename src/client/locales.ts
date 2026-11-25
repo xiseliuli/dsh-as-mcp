@@ -117,6 +117,10 @@ export const zh: Record<string, string> = {
   'client.notListening': '未监听',
   'client.mounted': '已挂载到 Web 服务器',
   'client.errorLabel': '绑定失败：',
+  'client.stdio.title': 'Claude Code（stdio · channel 推送）',
+  'client.stdio.description': '这是 stdio 桥，工具与上面的 HTTP 版一致；带 --channel 时，会话 turn 结束会推送并唤醒 Claude Code。令牌默认从本机令牌文件读取，无需写进配置。',
+  'client.stdio.launchLabel': '然后这样启动 Claude Code：',
+  'client.stdio.note': '注意：research preview，启动时需确认；-p 模式不生效；需要 claude.ai 登录或 Console API key。',
 
   'state.loading': '正在读取配置…',
   'state.unavailable': '设置服务不可用，无法从面板修改配置。',
@@ -230,6 +234,10 @@ export const en: Record<string, string> = {
   'client.notListening': 'not listening',
   'client.mounted': 'mounted on the web server',
   'client.errorLabel': 'Bind failed: ',
+  'client.stdio.title': 'Claude Code (stdio · channel push)',
+  'client.stdio.description': 'This is the stdio bridge; its tools match the HTTP ones above. With --channel, the end of a session turn is pushed and wakes Claude Code. The token is read from the local token file by default, so it does not belong in the configuration.',
+  'client.stdio.launchLabel': 'Then start Claude Code with:',
+  'client.stdio.note': 'Note: research preview, confirmed at startup; does not work with -p; needs a claude.ai login or a Console API key.',
 
   'state.loading': 'Reading configuration…',
   'state.unavailable': 'The settings service is unavailable, so this panel cannot change the configuration.',

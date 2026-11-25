@@ -6,6 +6,10 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.61.1
+
+- **设置面板新增 Claude Code stdio/channel 配置复制块**：HTTP 客户端配置下方多一块 stdio 桥（`--channel`）的配置（`npx -y dsh-as-mcp@<版本> --channel`），以及可复制的 `claude --dangerously-load-development-channels server:dsh` 启动命令和 research preview 注意事项。默认端点不写 `env`；其他回环地址写 `DSH_AS_MCP_URL`；非回环地址再写 `DSH_AS_MCP_TOKEN`（显示掩码、复制真实值、未知时占位符）。版本号在客户端构建时从 `package.json` 注入，未新增路由或 status 字段；仅面板改动，桥与端点不变。
+
 ## 0.61.0
 
 - **stdio 桥的 Claude Code channel 模式**（`bin/mcp-stdio.mjs --channel`，或 `DSH_AS_MCP_CHANNEL=1`；范围 `--channel-scope=owned|all` / `DSH_AS_MCP_CHANNEL_SCOPE`，默认 `owned`）：桥声明 `experimental['claude/channel']` 与 instructions，并在被追踪的 DSH 会话 turn 结束时写一行 `notifications/claude/channel`（`content` 加全字符串的 `meta`：`session_id`、`title`、`turn`、`reason`、`failure_kind`）。工具调用仍原样转发；不带 `--channel` 时桥行为不变。

@@ -4,7 +4,21 @@ import type { Config } from '../config.js'
 import type { EndpointStatus } from '../status.js'
 import type { SettingsPathOp, SettingsScopeSnapshot } from './contract.js'
 import { GROUPS, formatList, parseNumberDraft, parseList, pathKey, readPath, type FieldSpec, type GroupSpec } from './fields.js'
-import { clientSnippet, dialableEndpoint, endpointUrl, maskSecret, sourceLabel, TOKEN_PLACEHOLDER } from './snippet.js'
+import {
+  CHANNEL_LAUNCH_COMMAND,
+  clientSnippet,
+  dialableEndpoint,
+  endpointUrl,
+  maskSecret,
+  sourceLabel,
+  stdioChannelSnippet,
+  TOKEN_PLACEHOLDER,
+} from './snippet.js'
+
+/** Injected by `scripts/build-client.mjs` from package.json; absent when the source runs unbundled. */
+declare const __DSH_AS_MCP_VERSION__: string | undefined
+
+const PLUGIN_VERSION = typeof __DSH_AS_MCP_VERSION__ === 'string' ? __DSH_AS_MCP_VERSION__ : undefined
 
 /** The bound settings namespace, as the section consumes it. */
 export interface SectionStore {
@@ -397,6 +411,59 @@ function ClientConfig({
   )
 }
 
+/** A copy-to-clipboard button that reports its own outcome. */
+function CopyButton({ t, text }: { t(key: string): string; text: string }) {
+  const [copied, setCopied] = useState<'idle' | 'ok' | 'failed'>('idle')
+  return (
+    <button
+      className="dshmcp_btn"
+      type="button"
+      onClick={() => {
+        void navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            setCopied('ok')
+          })
+          .catch(() => {
+            setCopied('failed')
+          })
+      }}
+    >
+      {copied === 'ok' ? t('client.copied') : copied === 'failed' ? t('client.copyFailed') : t('client.copy')}
+    </button>
+  )
+}
+
+/** A code block with its copy button; `shown` may differ from `copy` (a masked token). */
+function CopyBlock({ t, shown, copy }: { t(key: string): string; shown: string; copy: string }) {
+  return (
+    <>
+      <pre className="dshmcp_code">{shown}</pre>
+      <div className="dshmcp_control">
+        <CopyButton t={t} text={copy} />
+      </div>
+    </>
+  )
+}
+
+/** The Claude Code stdio bridge (channel mode): the configuration and the launch command. */
+function StdioChannelConfig({ t, url, token }: { t(key: string): string; url: string; token: string | undefined }) {
+  const known = token !== undefined && token !== ''
+  // Same rule as the HTTP snippet: shown masked, copied real, placeholder when unknown.
+  const copyText = stdioChannelSnippet({ url, version: PLUGIN_VERSION, token: known ? token : undefined })
+  const shownText = stdioChannelSnippet({ url, version: PLUGIN_VERSION, token: known ? maskSecret(token) : undefined })
+  return (
+    <section className="dshmcp_group">
+      <h3 className="dshmcp_groupTitle">{t('client.stdio.title')}</h3>
+      <p className="dshmcp_groupDesc">{t('client.stdio.description')}</p>
+      <CopyBlock t={t} shown={shownText} copy={copyText} />
+      <p className="dshmcp_note">{t('client.stdio.launchLabel')}</p>
+      <CopyBlock t={t} shown={CHANNEL_LAUNCH_COMMAND} copy={CHANNEL_LAUNCH_COMMAND} />
+      <p className="dshmcp_note">{t('client.stdio.note')}</p>
+    </section>
+  )
+}
+
 /**
  * The MCP section.
  *
@@ -548,6 +615,8 @@ export function McpSection({ t, store, tokenFile, heading }: SectionProps) {
           statusRead={statusRead}
         />
       )}
+
+      {url !== undefined && <StdioChannelConfig t={t} url={url} token={status?.token} />}
     </div>
   )
 }

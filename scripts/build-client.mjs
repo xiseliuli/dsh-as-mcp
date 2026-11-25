@@ -194,6 +194,8 @@ async function buildClient({ minify }) {
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
       'import.meta.env.MODE': JSON.stringify(process.env.NODE_ENV ?? 'production'),
       'import.meta.env': JSON.stringify({ MODE: process.env.NODE_ENV ?? 'production' }),
+      // The panel pins this version in the Claude Code stdio snippet; the status route does not carry one.
+      __DSH_AS_MCP_VERSION__: JSON.stringify(typeof manifest.version === 'string' ? manifest.version : ''),
     },
     plugins: [cssInlinePlugin(id)],
     banner: {

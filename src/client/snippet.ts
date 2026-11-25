@@ -35,6 +35,65 @@ export function clientSnippet(url: string, token: string): string {
   )
 }
 
+/** The endpoint the stdio bridge dials when `DSH_AS_MCP_URL` is unset. */
+export const BRIDGE_DEFAULT_URL = 'http://127.0.0.1:8790/mcp'
+
+/** The command that starts Claude Code with the bridge registered as a development channel. */
+export const CHANNEL_LAUNCH_COMMAND = 'claude --dangerously-load-development-channels server:dsh'
+
+/** Whether the URL's host is a loopback address — the only place the bridge sends a file-read token. */
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname
+    return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' || host === '::1'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Render the Claude Code configuration for the stdio bridge in `--channel` mode.
+ *
+ * The bridge reads the token from the local token file and only ever sends such a token to
+ * a loopback address, so a loopback endpoint needs no secret in the configuration, and the
+ * default endpoint needs no `env` at all. A non-loopback endpoint cannot use the file, so
+ * it carries the token explicitly — with the same show-masked, copy-real rule as
+ * {@link clientSnippet}.
+ *
+ * @param input.url - the endpoint URL the panel resolved (the same one the HTTP snippet uses).
+ * @param input.version - the plugin version to pin, or `undefined` to follow `latest`.
+ * @param input.token - the bearer value to embed when the endpoint is not loopback: the real
+ *   token, a mask, or `undefined` for the placeholder.
+ */
+export function stdioChannelSnippet(input: {
+  readonly url: string
+  readonly version?: string | undefined
+  readonly token?: string | undefined
+}): string {
+  const env: Record<string, string> = {}
+  if (input.url !== BRIDGE_DEFAULT_URL) {
+    env.DSH_AS_MCP_URL = input.url
+    if (!isLoopbackUrl(input.url)) {
+      env.DSH_AS_MCP_TOKEN = input.token !== undefined && input.token !== '' ? input.token : TOKEN_PLACEHOLDER
+    }
+  }
+  const version = input.version !== undefined && input.version !== '' ? input.version : 'latest'
+  return JSON.stringify(
+    {
+      mcpServers: {
+        dsh: {
+          type: 'stdio',
+          command: 'npx',
+          args: ['-y', `dsh-as-mcp@${version}`, '--channel'],
+          ...(Object.keys(env).length > 0 ? { env } : {}),
+        },
+      },
+    },
+    null,
+    2,
+  )
+}
+
 /**
  * The host warns below 16 characters, so that is the line where a prefix is safe
  * to show: four characters of a 16-character token are a quarter of it, and of a

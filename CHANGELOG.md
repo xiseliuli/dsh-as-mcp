@@ -6,6 +6,16 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.61.1
+
+- **Settings panel: Claude Code stdio/channel configuration.** Below the HTTP client configuration the
+  panel now has a second copyable block for the stdio bridge in `--channel` mode (`npx -y dsh-as-mcp@<version>
+  --channel`), plus a copyable `claude --dangerously-load-development-channels server:dsh` launch command
+  and the research-preview caveats. The default endpoint writes no `env`; another loopback address writes
+  `DSH_AS_MCP_URL`; a non-loopback one also writes `DSH_AS_MCP_TOKEN` (shown masked, copied real, placeholder
+  when unknown). The pinned version is injected at client build time from `package.json`, so no route or
+  status field changed. Panel-only; the bridge and endpoint are untouched.
+
 ## 0.61.0
 
 - **Claude Code channel mode for the stdio bridge** (`bin/mcp-stdio.mjs --channel`, or `DSH_AS_MCP_CHANNEL=1`;

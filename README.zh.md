@@ -936,6 +936,9 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-as-mcp/scripts/smoke.mjs \
 插件页的单元格与设置页一样，只在宿主确实提供这一项的配置表单时才注册；宿主插件页没有这个插槽时
 什么都不显示，设置入口不受影响。
 
+HTTP 客户端配置下方，面板还提供可复制的 Claude Code **stdio · channel** 配置（`npx -y dsh-as-mcp@<版本> --channel`）
+和启动命令 `claude --dangerously-load-development-channels server:dsh`，详见上文 Claude Code channel 一节。
+
 面板覆盖全部设置，包括 `agentTools.allow` 与 `agentTools.deny` 这两份名单（用逗号分隔的文本
 编辑）。它们本质是 `string[]`，所以**名字里带逗号**的工具无法在面板里表达，那种情况请改配置
 文件。
