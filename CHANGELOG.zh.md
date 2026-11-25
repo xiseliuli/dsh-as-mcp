@@ -6,6 +6,13 @@
 - 两份文件的**版本标题必须完全一致**（集合与顺序），由 `tools/check-docs.mjs` 强制检查——发布时漏写中文条目会让检查失败，中文读者不会悄悄落后一个版本。
 - 版本号遵循 SemVer；项目仍是 pre-1.0，所以 minor 是功能，patch 是修复或文档。
 
+## 0.61.0
+
+- **stdio 桥的 Claude Code channel 模式**（`bin/mcp-stdio.mjs --channel`，或 `DSH_AS_MCP_CHANNEL=1`；范围 `--channel-scope=owned|all` / `DSH_AS_MCP_CHANNEL_SCOPE`，默认 `owned`）：桥声明 `experimental['claude/channel']` 与 instructions，并在被追踪的 DSH 会话 turn 结束时写一行 `notifications/claude/channel`（`content` 加全字符串的 `meta`：`session_id`、`title`、`turn`、`reason`、`failure_kind`）。工具调用仍原样转发；不带 `--channel` 时桥行为不变。
+- **如何判断 turn 结束**：桥用自己的 `dsh-channel:<n>` 请求（回复不会写到 stdout）订阅 `dsh://sessions` 与每个被追踪会话的 `turn`/`status`，收到更新（或列表里会话退出 `running`）后读 `status`；`running === false` 且有 `lastTurn` 时，按 `sessionId:turn` 只通知一次。启动时已结束的 turn 只记录不通知；断线期间结束、且断线前见过其运行的 turn，重连后补推。转发 `session_prompt`/`session_command` 前先完成订阅。
+- **legacy 握手**：Claude Code 的 v2 运行时不会把 modern 协议的服务注册为 channel，所以 channel 模式下桥在上游把 `initialize.protocolVersion` 改写为 `2025-06-18`。
+- **容错**：DSH 不可达不再阻塞启动——本地应答 `initialize`，后台退避重试握手，连上前的请求立即返回 JSON-RPC 错误；会话 404（DSH 重启）时重新 initialize 并重新订阅（仅 channel 模式，默认的 404/405 处理不变）。research preview，不支持 `claude -p`。
+
 ## 0.60.0
 
 - **本端点自身变更类工具的人在回路（opt-in）**：`approval.guardMutations`（默认 `false`）让 `file_write`、`file_edit`、`file_delete`、`file_move`、`shell_run` **执行前先挂起**——请求发布到 `dsh://approvals`，并向有状态 **2025 版** MCP 客户端的 GET 流发 `elicitation/create`，由 `approval_decide`（`allow` 本次放行、`reject` 拒绝）或 elicitation 回答解除；`approval.humanTimeoutMs`（默认 120000）内无人作答则答 **rejected**——失败关闭，沉默绝不等于同意。`allow` 只放行一次，下一次仍会询问。

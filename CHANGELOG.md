@@ -6,6 +6,26 @@ plugin is pre-1.0, so a minor bump is a feature and a patch is a fix or docs.
 A Chinese summary of every release lives in [CHANGELOG.zh.md](./CHANGELOG.zh.md);
 this file stays the authoritative record.
 
+## 0.61.0
+
+- **Claude Code channel mode for the stdio bridge** (`bin/mcp-stdio.mjs --channel`, or `DSH_AS_MCP_CHANNEL=1`;
+  scope `--channel-scope=owned|all` / `DSH_AS_MCP_CHANNEL_SCOPE`, default `owned`). The bridge declares
+  `experimental['claude/channel']` plus instructions, and writes one `notifications/claude/channel` line
+  (`content` plus string `meta`: `session_id`, `title`, `turn`, `reason`, `failure_kind`) when a tracked DSH
+  session's turn ends. Tool calls are still forwarded verbatim; without `--channel` the bridge is unchanged.
+- **How it decides a turn ended.** The bridge makes its own `dsh-channel:<n>` requests (their replies never
+  reach stdout): it subscribes `dsh://sessions` and each tracked session's `turn`/`status`, and on an update
+  (or a session leaving `running` in the list) reads `status`; `running === false` with a `lastTurn` is
+  announced once per `sessionId:turn`. Turns already over at start-up are recorded, not announced; a turn that
+  ended while the stream was down, for a session seen running before, is announced after reconnecting.
+  Subscriptions are made before a `session_prompt`/`session_command` is forwarded.
+- **Legacy handshake.** Claude Code's v2 runtime does not register a modern-revision server as a channel, so
+  in channel mode the bridge rewrites `initialize.protocolVersion` to `2025-06-18` upstream.
+- **Resilience.** An unreachable DSH no longer blocks start-up: `initialize` is answered locally and the
+  handshake is retried with backoff; requests before it connects get an immediate JSON-RPC error. A 404 on the
+  session (DSH restarted) re-initializes and re-subscribes (channel mode only; the default 404/405 handling is
+  unchanged). Research preview; not supported in `claude -p`.
+
 ## 0.60.0
 
 - **Opt-in human-in-the-loop for this endpoint's own mutating tools.** `approval.guardMutations` (default

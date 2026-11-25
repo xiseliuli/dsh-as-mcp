@@ -21,6 +21,14 @@
  *   DSH_AS_MCP_TOKEN  bearer token; when unset, read from
  *                     <DSH_HOME>/dsh-as-mcp/token
  *
+ * Claude Code channel mode (`--channel`, or DSH_AS_MCP_CHANNEL=1): the bridge
+ * declares the `claude/channel` capability and writes one
+ * `notifications/claude/channel` line whenever a DSH session's turn ends. It
+ * negotiates the 2025-era revision upstream (the stateful leg), subscribes and
+ * reads through its own `dsh-channel:<n>` requests whose replies never reach
+ * stdout, and survives an unreachable or restarted DSH. See ./channel.mjs.
+ *   --channel-scope=owned|all   or DSH_AS_MCP_CHANNEL_SCOPE (default owned)
+ *
  * There are no dependencies on purpose: this file has to run from a bare
  * `npx dsh-as-mcp`, from a `link:` install, and from a tarball alike.
  */
@@ -29,6 +37,13 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
+
+import {
+  CHANNEL_INSTRUCTIONS,
+  INTERNAL_ID_PREFIX,
+  LEGACY_PROTOCOL_VERSION,
+  createTracker,
+} from './channel.mjs'
 
 const DEFAULT_URL = 'http://127.0.0.1:8790/mcp'
 
@@ -101,6 +116,12 @@ function isLoopbackUrl(value) {
   return false
 }
 
+/** Channel mode: off unless asked for, and then every other branch below stays dormant. */
+const channelEnabled = process.argv.includes('--channel') || process.env.DSH_AS_MCP_CHANNEL?.trim() === '1'
+const channelScopeFlag = process.argv.find((arg) => arg.startsWith('--channel-scope='))?.slice('--channel-scope='.length)
+const channelScopeRaw = (channelScopeFlag ?? process.env.DSH_AS_MCP_CHANNEL_SCOPE ?? 'owned').trim().toLowerCase()
+const channelScope = channelScopeRaw === 'all' ? 'all' : 'owned'
+
 /** MCP session id, when the server issues one. */
 let sessionId
 /** Protocol revision negotiated by `initialize`, echoed on later requests. */
@@ -120,6 +141,9 @@ let pushDisabled = false
 let pushSessionId
 /** Most recent SSE `id:` seen on the channel, replayed on reconnect. */
 let lastEventId
+/** Whether the notification stream is open right now (channel mode waits on it). */
+let pushConnected = false
+const pushWaiters = new Set()
 
 function log(message) {
   process.stderr.write(`[dsh-as-mcp] ${message}\n`)
@@ -154,6 +178,12 @@ async function readEventStream(response) {
 
 /** Write one server→client JSON-RPC message as a single stdout line. */
 function emitPushPayload(payload) {
+  if (channelEnabled && payload && typeof payload === 'object') {
+    // A reply to one of the bridge's own requests is the bridge's, not the client's.
+    if (typeof payload.id === 'string' && payload.id.startsWith(INTERNAL_ID_PREFIX)) return
+    // Observe only: the update is still forwarded to the client below.
+    if (payload.method === 'notifications/resources/updated') tracker.onResourceUpdated(payload.params?.uri)
+  }
   process.stdout.write(`${JSON.stringify(payload)}\n`)
 }
 
@@ -260,6 +290,21 @@ async function runPushChannel(signal) {
     let delivered = false
     try {
       const response = await fetch(endpoint, { method: 'GET', headers, signal })
+      if (channelEnabled && response.status === 404) {
+        await response.body?.cancel().catch(() => {})
+        // A 404 on GET alone does not prove the session is gone: ask with a POST first.
+        // A live session whose GET is unavailable is a stateless-style endpoint, so
+        // push stops for good instead of creating sessions in a loop.
+        if (await sessionStillValid()) {
+          pushDisabled = true
+          log('push disabled: the notification channel answered HTTP 404 but the session is valid; request/reply continue')
+          return
+        }
+        if (signal.aborted) return
+        log('push channel: session unknown to the endpoint (HTTP 404); re-initializing')
+        await recoverUpstream(channelSession)
+        return
+      }
       if (response.status === 404 || response.status === 405) {
         pushDisabled = true
         log(
@@ -275,6 +320,7 @@ async function runPushChannel(signal) {
       }
       loggedInterruption = false
       failures = 0
+      if (channelEnabled) setPushConnected(true)
       delivered = await readPushStream(response)
     } catch (error) {
       if (signal.aborted) return
@@ -285,6 +331,7 @@ async function runPushChannel(signal) {
       }
     }
 
+    if (channelEnabled) setPushConnected(false)
     if (signal.aborted) return
     // A stream that delivered messages starts over at the base delay; one that
     // keeps ending or failing without delivering backs off exponentially.
@@ -332,6 +379,22 @@ function stopPushChannel() {
   pushAbort = undefined
 }
 
+/** A non-2xx upstream answer; the message is the bridge's long-standing one. */
+class HttpStatusError extends Error {
+  constructor(message, status) {
+    super(message)
+    this.status = status
+  }
+}
+
+/** The endpoint answered 404 for the session this bridge was using. */
+class SessionLostError extends Error {
+  constructor(lostSessionId) {
+    super('the endpoint no longer knows this MCP session (HTTP 404)')
+    this.lostSessionId = lostSessionId
+  }
+}
+
 /** POST one JSON-RPC message and return the JSON-RPC payloads it produced. */
 async function forward(message) {
   const headers = {
@@ -348,6 +411,13 @@ async function forward(message) {
     body: JSON.stringify(message),
   })
 
+  // Channel mode: a 404 on a request that carried a session means the endpoint
+  // dropped it. Say so distinctly so the caller can re-initialize and retry.
+  if (channelEnabled && response.status === 404 && headers['mcp-session-id']) {
+    await response.body?.cancel().catch(() => {})
+    throw new SessionLostError(headers['mcp-session-id'])
+  }
+
   const issuedSession = response.headers.get('mcp-session-id')
   if (issuedSession) sessionId = issuedSession
 
@@ -355,7 +425,10 @@ async function forward(message) {
   if (response.status === 202 || response.status === 204) return []
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
-    throw new Error(`HTTP ${response.status} ${response.statusText}${detail ? ` — ${detail.trim()}` : ''}`)
+    throw new HttpStatusError(
+      `HTTP ${response.status} ${response.statusText}${detail ? ` — ${detail.trim()}` : ''}`,
+      response.status,
+    )
   }
 
   const contentType = response.headers.get('content-type') ?? ''
@@ -364,6 +437,375 @@ async function forward(message) {
   const body = await response.text()
   if (body.trim() === '') return []
   return [JSON.parse(body)]
+}
+
+// ---------------------------------------------------------------------------
+// Channel mode. Nothing below runs unless `channelEnabled`.
+// ---------------------------------------------------------------------------
+
+/** Tools whose calls make a session "dispatched by this entry". */
+const OWNING_TOOLS = new Set(['session_create', 'session_fork', 'session_prompt', 'session_command'])
+/** Of those, the ones that name an existing session in their arguments. */
+const PROMPTING_TOOLS = new Set(['session_prompt', 'session_command'])
+
+let internalSeq = 0
+/** The client's `initialize` params with the revision rewritten, replayed on every upstream handshake. */
+let channelInit
+/** An `initialize` has been answered (really or locally). */
+let initializeAnswered = false
+/** The upstream session is usable right now. */
+let upstreamReady = false
+/** The client sent `notifications/initialized`. */
+let clientInitialized = false
+let stdinClosed = false
+let reconnecting
+let recovering
+/** Back-to-back recoveries (a session dying right after it was made) back off. */
+let recoveryStreak = 0
+let lastRecoveryAt = 0
+const RECOVERY_STREAK_WINDOW_MS = 30_000
+/** The last handshake failure was a credentials rejection (HTTP 401/403). */
+let authFailure
+
+function writeLine(value) {
+  process.stdout.write(`${JSON.stringify(value)}\n`)
+}
+
+function setPushConnected(value) {
+  pushConnected = value
+  if (value) {
+    for (const wake of pushWaiters) wake()
+    pushWaiters.clear()
+  }
+}
+
+/** Resolve once the notification stream is open, or after `ms` regardless. */
+function waitForPush(ms = 5000) {
+  if (pushConnected || pushDisabled) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms)
+    function finish() {
+      clearTimeout(timer)
+      pushWaiters.delete(finish)
+      resolve()
+    }
+    pushWaiters.add(finish)
+  })
+}
+
+/** One bridge-internal request; the reply is consumed here and goes nowhere else. */
+async function internalRequest(method, params) {
+  if (!upstreamReady) throw new Error('upstream is not ready')
+  const id = `${INTERNAL_ID_PREFIX}${++internalSeq}`
+  let replies
+  try {
+    replies = await forward({ jsonrpc: '2.0', id, method, params })
+  } catch (error) {
+    if (error instanceof SessionLostError) recoverInBackground(error.lostSessionId)
+    throw error
+  }
+  const reply = replies.find((candidate) => candidate && candidate.id === id)
+  if (!reply) throw new Error(`no reply to ${method}`)
+  if (reply.error) throw new Error(reply.error.message ?? `${method} failed`)
+  return reply.result
+}
+
+if (channelEnabled) {
+  // A stray rejection must never take the bridge (and the client's MCP connection) down.
+  process.on('unhandledRejection', (reason) => {
+    log(`unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}`)
+  })
+}
+
+const tracker = createTracker({
+  scope: channelScope,
+  rpc: internalRequest,
+  emit: (params) => {
+    if (!clientInitialized) return
+    writeLine({ jsonrpc: '2.0', method: 'notifications/claude/channel', params })
+  },
+  log,
+  whenPushReady: () => waitForPush(5000),
+})
+
+function maybeStartTracker() {
+  if (!upstreamReady || !clientInitialized) return
+  tracker.start().catch((error) => {
+    log(`channel tracker failed to start: ${error instanceof Error ? error.message : String(error)}`)
+  })
+}
+
+function backoff(failures) {
+  return Math.min(PUSH_RETRY_BASE_MS * 2 ** Math.max(failures - 1, 0), PUSH_RETRY_MAX_MS)
+}
+
+/** A full upstream handshake with the stored client parameters; throws when it cannot complete. */
+async function handshake() {
+  sessionId = undefined
+  protocolVersion = undefined
+  lastEventId = undefined
+  const id = `${INTERNAL_ID_PREFIX}${++internalSeq}`
+  const replies = await forward({ jsonrpc: '2.0', id, method: 'initialize', params: channelInit })
+  const reply = replies.find((candidate) => candidate && candidate.id === id)
+  if (!reply?.result) throw new Error(reply?.error?.message ?? 'initialize returned no result')
+  protocolVersion = reply.result.protocolVersion
+  await forward({ jsonrpc: '2.0', method: 'notifications/initialized' })
+}
+
+/** Re-establish the upstream session in the background, retrying with backoff until it works. */
+function reconnectUpstream() {
+  if (reconnecting) return reconnecting
+  upstreamReady = false
+  reconnecting = (async () => {
+    let failures = 0
+    let logged = false
+    while (!stdinClosed) {
+      try {
+        await handshake()
+        break
+      } catch (error) {
+        failures += 1
+        if (!logged) {
+          noteUpstreamFailure(error)
+          logged = true
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, backoff(failures)).unref?.()
+        })
+      }
+    }
+    if (stdinClosed) return
+    upstreamReady = true
+    authFailure = undefined
+    log('upstream session established')
+    maybeStartPush()
+    maybeStartTracker()
+  })().finally(() => {
+    reconnecting = undefined
+  })
+  return reconnecting
+}
+
+/** Say why the upstream is unavailable, keeping a credentials rejection distinct from an outage. */
+function noteUpstreamFailure(error) {
+  const text = error instanceof Error ? error.message : String(error)
+  if (error instanceof HttpStatusError && (error.status === 401 || error.status === 403)) {
+    authFailure = `HTTP ${error.status}`
+    log(
+      `authentication failed (${authFailure}): the DSH endpoint rejected the bridge's bearer token; `
+      + 'check DSH_AS_MCP_TOKEN or the token file; retrying with backoff',
+    )
+    return
+  }
+  authFailure = undefined
+  log(`upstream not available: ${text}; retrying with backoff`)
+}
+
+/** Whether the current session still answers a POST (used to read a GET 404 correctly). */
+async function sessionStillValid() {
+  const id = `${INTERNAL_ID_PREFIX}${++internalSeq}`
+  try {
+    await forward({ jsonrpc: '2.0', id, method: 'ping' })
+    return true
+  } catch (error) {
+    if (error instanceof SessionLostError) return false
+    throw error
+  }
+}
+
+/**
+ * After a lost session: wait (bounded) for a fresh one. Throws when DSH is still away.
+ *
+ * Single flight: concurrent callers share one recovery. A session that dies soon
+ * after the previous recovery makes the next one wait, doubling up to 30 s.
+ */
+async function recoverUpstream(lostSessionId) {
+  if (upstreamReady && sessionId !== undefined && sessionId !== lostSessionId) return
+  upstreamReady = false
+  recovering ??= (async () => {
+    recoveryStreak = Date.now() - lastRecoveryAt < RECOVERY_STREAK_WINDOW_MS ? recoveryStreak + 1 : 0
+    if (recoveryStreak > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, backoff(recoveryStreak)).unref?.()
+      })
+    }
+    await reconnectUpstream()
+    lastRecoveryAt = Date.now()
+  })().finally(() => {
+    recovering = undefined
+  })
+  let timer
+  const limit = new Promise((resolve) => {
+    timer = setTimeout(resolve, 8000)
+    timer.unref?.()
+  })
+  await Promise.race([recovering, limit])
+  clearTimeout(timer)
+  if (!upstreamReady) throw new Error('the DSH endpoint is not reachable yet; the bridge is retrying in the background')
+}
+
+/** Fire-and-forget recovery: a failure is logged, and the background reconnect carries on. */
+function recoverInBackground(lostSessionId) {
+  recoverUpstream(lostSessionId).catch((error) => {
+    log(`recovery pending: ${error instanceof Error ? error.message : String(error)}`)
+  })
+}
+
+function notReadyError(message) {
+  return {
+    jsonrpc: '2.0',
+    id: message.id,
+    error: {
+      code: -32603,
+      message: authFailure === undefined
+        ? 'DSH is not reachable yet; the bridge is retrying in the background. Try again shortly.'
+        : `authentication failed (鉴权失败, ${authFailure}): DSH rejected the bridge's token; `
+          + 'check DSH_AS_MCP_TOKEN or the token file.',
+    },
+  }
+}
+
+/** Add the channel capability and instructions to an `initialize` result. */
+function withChannel(result) {
+  const upstream = typeof result.instructions === 'string' && result.instructions !== '' ? `${result.instructions}\n\n` : ''
+  return {
+    ...result,
+    capabilities: {
+      ...result.capabilities,
+      experimental: { ...result.capabilities?.experimental, 'claude/channel': {} },
+    },
+    instructions: `${upstream}${CHANNEL_INSTRUCTIONS}`,
+  }
+}
+
+function packageVersion() {
+  try {
+    const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+    return JSON.parse(raw).version ?? '0'
+  } catch {
+    return '0'
+  }
+}
+
+function localInitializeResult() {
+  return withChannel({
+    protocolVersion: LEGACY_PROTOCOL_VERSION,
+    capabilities: { tools: {}, resources: {} },
+    serverInfo: { name: 'dsh-as-mcp', version: packageVersion() },
+  })
+}
+
+async function channelInitialize(message) {
+  initializeAnswered = true
+  channelInit = { ...message.params, protocolVersion: LEGACY_PROTOCOL_VERSION }
+  try {
+    const replies = await forward({ ...message, params: channelInit })
+    const reply = replies.find((candidate) => candidate && candidate.id === message.id)
+    if (!reply) throw new Error('initialize returned no reply')
+    if (!reply.result) {
+      // A real JSON-RPC error from the endpoint: the client should see it as is.
+      for (const other of replies) writeLine(other)
+      return
+    }
+    protocolVersion = reply.result.protocolVersion
+    writeLine({ ...reply, result: withChannel(reply.result) })
+    for (const other of replies) if (other !== reply) writeLine(other)
+    upstreamReady = true
+    maybeStartPush()
+  } catch (error) {
+    noteUpstreamFailure(error)
+    log('answering initialize locally until the upstream is available')
+    writeLine({ jsonrpc: '2.0', id: message.id, result: localInitializeResult() })
+    void reconnectUpstream()
+  }
+}
+
+/** Pull session ids out of a `tools/call` reply (the JSON lives in a text block). */
+function sessionIdOfResult(reply) {
+  if (!reply?.result || reply.result.isError === true) return undefined
+  const structured = reply.result.structuredContent?.sessionId
+  if (typeof structured === 'string' && structured !== '') return structured
+  for (const block of reply.result.content ?? []) {
+    if (block?.type !== 'text' || typeof block.text !== 'string') continue
+    try {
+      const parsed = JSON.parse(block.text)
+      if (typeof parsed?.sessionId === 'string' && parsed.sessionId !== '') return parsed.sessionId
+    } catch {
+      // Not JSON; try the next block.
+    }
+  }
+  return undefined
+}
+
+async function channelForward(message) {
+  const call = message.method === 'tools/call' ? message.params : undefined
+  const toolName = typeof call?.name === 'string' ? call.name : undefined
+  const owning = toolName !== undefined && OWNING_TOOLS.has(toolName)
+  if (owning && PROMPTING_TOOLS.has(toolName)) {
+    const target = call.arguments?.sessionId
+    // Subscribe and baseline first, submit second: the settlement push is
+    // published once, so a subscription made after the prompt can miss it.
+    if (typeof target === 'string' && target !== '') await tracker.prepare(target)
+  }
+  let replies
+  try {
+    replies = await forward(message)
+  } catch (error) {
+    if (!(error instanceof SessionLostError)) throw error
+    await recoverUpstream(error.lostSessionId)
+    replies = await forward(message)
+  }
+  for (const reply of replies) {
+    if (reply && typeof reply === 'object' && reply.result?.protocolVersion) {
+      protocolVersion = reply.result.protocolVersion
+    }
+    writeLine(reply)
+  }
+  if (owning) {
+    const reply = replies.find((candidate) => candidate && candidate.id === message.id)
+    const dispatched = sessionIdOfResult(reply)
+      ?? (typeof call.arguments?.sessionId === 'string' ? call.arguments.sessionId : undefined)
+    if (dispatched !== undefined && reply?.result && reply.result.isError !== true) tracker.markOwned(dispatched)
+  }
+}
+
+async function handleChannelLine(message) {
+  const isObject = message !== null && typeof message === 'object'
+  const method = isObject ? message.method : undefined
+  const hasId = isObject && message.id !== undefined
+  try {
+    if (method === 'initialize') {
+      await channelInitialize(message)
+      return
+    }
+    if (method === 'notifications/initialized') {
+      // Set first: a failed forward must not leave the channel silent forever.
+      clientInitialized = true
+      if (upstreamReady) {
+        const used = sessionId
+        try {
+          await forward(message)
+        } catch (error) {
+          log(`could not forward notifications/initialized: ${error instanceof Error ? error.message : String(error)}`)
+          // The recovery handshake sends its own initialized and then starts the tracker.
+          recoverInBackground(error instanceof SessionLostError ? error.lostSessionId : used)
+          return
+        }
+      }
+      maybeStartTracker()
+      return
+    }
+    if (initializeAnswered && !upstreamReady) {
+      // Never leave the client waiting on an upstream that is not there.
+      if (hasId) writeLine(method === 'ping' ? { jsonrpc: '2.0', id: message.id, result: {} } : notReadyError(message))
+      return
+    }
+    await channelForward(message)
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error)
+    log(`request failed: ${text}`)
+    if (hasId) writeLine({ jsonrpc: '2.0', id: message.id, error: { code: -32603, message: text } })
+  }
 }
 
 /** Handle one input line, emitting zero or more output lines. */
@@ -376,6 +818,11 @@ async function handleLine(line) {
     message = JSON.parse(trimmed)
   } catch {
     log(`ignored a non-JSON input line: ${trimmed.slice(0, 200)}`)
+    return
+  }
+
+  if (channelEnabled) {
+    await handleChannelLine(message)
     return
   }
 
@@ -414,7 +861,12 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     + 'Environment:\n'
     + '  DSH_AS_MCP_URL    endpoint URL\n'
     + '  DSH_AS_MCP_TOKEN  bearer token\n'
-    + '  DSH_HOME          harness home used to locate the persisted token\n',
+    + '  DSH_HOME          harness home used to locate the persisted token\n\n'
+    + 'Claude Code channel mode (research preview):\n'
+    + '  --channel                    declare claude/channel and push one notification per ended\n'
+    + '                               DSH session turn (or set DSH_AS_MCP_CHANNEL=1)\n'
+    + '  --channel-scope=owned|all    owned (default): only sessions dispatched through this bridge;\n'
+    + '                               all: every session except sub-agents (or DSH_AS_MCP_CHANNEL_SCOPE)\n',
   )
   process.exit(0)
 }
@@ -445,9 +897,19 @@ for await (const line of lines) {
   pending.add(task)
 }
 
-await Promise.allSettled([...pending])
+if (channelEnabled) {
+  // A request parked on recovery must not hold the exit: give it a moment, then go.
+  stdinClosed = true
+  await Promise.race([
+    Promise.allSettled([...pending]),
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ])
+} else {
+  await Promise.allSettled([...pending])
+}
 
 // stdin is gone: the client is done, so stop reconnecting the push channel.
+stdinClosed = true
 stopPushChannel()
 
 process.exit(0)

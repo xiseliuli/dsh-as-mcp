@@ -204,6 +204,38 @@ machine-local credential. "Loopback" means an exact match — `localhost`, `::1`
 `127.x.x.x` address — so a name such as `127.0.0.1.example.com` is treated as the remote host it
 is. A scheme is optional: `127.0.0.1:8790/mcp` is accepted and understood.
 
+**Claude Code channel (research preview)** — the same bridge can wake Claude Code when a DSH session's
+turn ends. Pass `--channel` (or set `DSH_AS_MCP_CHANNEL=1`); the bridge declares the `claude/channel`
+capability and writes one `notifications/claude/channel` line per ended turn. Tool calls are forwarded
+unchanged, so the tool set is identical to the HTTP one. In `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "dsh": {
+      "command": "node",
+      "args": ["<path>/bin/mcp-stdio.mjs", "--channel"]
+    }
+  }
+}
+```
+
+Then start Claude Code with `claude --dangerously-load-development-channels server:dsh`.
+
+- The token is read from `$DSH_HOME/dsh-as-mcp/token` by default; `DSH_AS_MCP_TOKEN` overrides it.
+- `--channel-scope=owned` (default; or `DSH_AS_MCP_CHANNEL_SCOPE`) notifies only for sessions dispatched
+  through this bridge (`session_create`, `session_fork`, `session_prompt`, `session_command`); `all` notifies
+  for every session except sub-agent sessions.
+- Claude Code only registers a channel over the **legacy** (2025-era) handshake, so the bridge rewrites the
+  client's `initialize` revision to `2025-06-18` upstream and talks to the endpoint's stateful leg. A turn
+  already over when tracking starts is not announced; each turn is announced once. If Claude Code still does
+  not list it as a channel, start it with `MCP_PROTOCOL_NEGOTIATION=legacy` (process-wide) as a fallback.
+- If DSH is down, the bridge still answers `initialize` locally and retries in the background; requests made
+  before it connects fail fast instead of hanging. A restarted DSH (404 on the old session) is re-initialized
+  and re-subscribed automatically.
+- Channels are a research preview and are not supported in `-p` (print) mode. Without `--channel` the bridge
+  behaves exactly as before.
+
 Start with **`dsh_info`**. It reports the endpoint, the plugin version and uptime, where its token comes
 from, which tool groups are enabled, and — importantly — which harness services the current profile actually
 provides, whether token usage can be read and whether a price source exists, so a client can tell "this

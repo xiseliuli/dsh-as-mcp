@@ -193,6 +193,36 @@ dsh --profile <名称> --dump-config | grep -A 30 '# == dsh-as-mcp'
 `127.x.x.x` 地址，因此 `127.0.0.1.example.com` 这类域名会被当作它实际所属的远程主机处理。
 scheme 可以省略：`127.0.0.1:8790/mcp` 也能识别。
 
+**Claude Code channel（research preview）** —— 同一个桥接脚本可以在某个 DSH 会话的 turn 结束时唤醒
+Claude Code。加上 `--channel`（或设 `DSH_AS_MCP_CHANNEL=1`），桥会声明 `claude/channel` 能力，并为每个
+结束的 turn 写一行 `notifications/claude/channel`。工具调用原样转发，工具集与 HTTP 版完全一致。
+在 `~/.claude.json` 中：
+
+```json
+{
+  "mcpServers": {
+    "dsh": {
+      "command": "node",
+      "args": ["<path>/bin/mcp-stdio.mjs", "--channel"]
+    }
+  }
+}
+```
+
+然后用 `claude --dangerously-load-development-channels server:dsh` 启动 Claude Code。
+
+- token 默认从 `$DSH_HOME/dsh-as-mcp/token` 读取；设置 `DSH_AS_MCP_TOKEN` 环境变量可覆盖。
+- `--channel-scope=owned`（默认；也可用 `DSH_AS_MCP_CHANNEL_SCOPE`）只为经本桥派发的会话
+  （`session_create`、`session_fork`、`session_prompt`、`session_command`）通知；`all` 为除子 agent 会话外的
+  所有会话通知。
+- Claude Code 只有走 **legacy**（2025 版）握手才会把它注册为 channel，所以桥在转发时把客户端
+  `initialize` 里的协议版本改写为 `2025-06-18`，使用端点的有状态那一支。开始追踪时已经结束的 turn 不会
+  被补发；每个 turn 只通知一次。如果 Claude Code 仍未把它列为 channel，可以加环境变量
+  `MCP_PROTOCOL_NEGOTIATION=legacy`（对整个进程生效）再启动作为兜底。
+- DSH 没启动时，桥仍会在本地应答 `initialize` 并在后台重试；连上之前的请求会立即报错而不是挂起。
+  DSH 重启（旧会话返回 404）后会自动重新 initialize 并重新订阅。
+- channel 目前是 research preview，不支持 `-p`（print）模式。不带 `--channel` 时桥的行为与之前完全一致。
+
 **先调 `dsh_info`**。它会返回端点、插件版本与运行时长、token 的来源、哪些工具组开着，以及——这点很
 关键——当前 profile 实际提供了哪些 harness 服务、token 用量能不能读、有没有价格来源；这样客户端能区分
 「这个 profile 没有 shell」和「这条命令执行失败了」。`includeModels: true` 会向每个 provider 路由询问
